@@ -58,10 +58,22 @@ function sleep(ms: number): Promise<void> {
 }
 
 function asUint(value: unknown): bigint | undefined {
-  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return BigInt(value);
+  // JSON.parse has already rounded an unsafe numeric literal. Refuse it
+  // rather than release or renew a different fencing token. Decimal strings
+  // remain accepted for a future lossless Fiducia wire revision.
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
   if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
   if (typeof value === "bigint" && value >= 0n) return value;
   return undefined;
+}
+
+function encodeWireInteger(value: bigint): number {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(
+      `fiducia: fencing token ${value} cannot be represented exactly by the current numeric JSON wire format`,
+    );
+  }
+  return Number(value);
 }
 
 export class FiduciaLease implements Lease {
@@ -90,7 +102,7 @@ export class FiduciaLease implements Lease {
     const response = await this.#fetch(this.#base + path, {
       method: "POST",
       headers: this.#headers,
-      body: JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? Number(v) : v)),
+      body: JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? encodeWireInteger(v) : v)),
       redirect: "manual",
     });
     const text = await response.text();

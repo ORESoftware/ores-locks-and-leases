@@ -77,3 +77,22 @@ export function tagStep(err: unknown, step: LockStep): unknown {
   if (err instanceof LockError && err.step === undefined) err.step = step;
   return err;
 }
+
+/**
+ * Keep a safety-critical cleanup failure primary while retaining the guarded
+ * operation's earlier failure. A failed release/unlock leaves ownership or
+ * session state unknown, so callers must not see only a work error and assume
+ * an immediate whole-operation retry is safe.
+ */
+export function cleanupFailure(key: LockKey, cleanup: unknown, inner: unknown): LockError {
+  const normalized = cleanup instanceof LockError ? cleanup : LockError.transport(key, cleanup);
+  const innerMessage = inner instanceof Error ? inner.toString() : String(inner);
+  return new LockError(
+    normalized.kind,
+    normalized.key,
+    `${normalized.message}; guarded operation also failed: ${innerMessage}`,
+    normalized.step === undefined
+      ? { cause: { cleanup, inner } }
+      : { step: normalized.step, cause: { cleanup, inner } },
+  );
+}

@@ -1,6 +1,6 @@
 name: ores_locks_and_leases
 description: Composed distributed locking for the ORESoftware fleet - a fiducia-cloud lease around a Postgres advisory lock, each layer switchable, with fencing tokens threaded through to the guarded work.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/ORESoftware/ores-locks-and-leases
 publish_to: none
 

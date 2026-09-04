@@ -18,6 +18,8 @@ import 'plan.dart';
 /// adapter polls at `opts.retryInterval` until the grant arrives or
 /// `opts.waitTimeout` elapses.
 final class FiduciaLease implements Lease {
+  static final BigInt _maxSafeJsonInteger = BigInt.from(9007199254740991);
+
   final Uri _base;
   final Map<String, String> _headers;
   final http.Client _client;
@@ -93,10 +95,18 @@ final class FiduciaLease implements Lease {
   Future<Map<String, Object?>> _post(
       String path, Map<String, Object?> body) async {
     if (_refusal != null) throw StateError(_refusal);
+    final wireBody = body.map((key, value) {
+      if (value is! BigInt) return MapEntry(key, value);
+      if (value.isNegative || value > _maxSafeJsonInteger) {
+        throw RangeError(
+            'fiducia: fencing token $value cannot be represented exactly by the current numeric JSON wire format');
+      }
+      return MapEntry(key, value.toInt());
+    });
     final response = await _client.post(
       _base.replace(path: '${_base.path}$path'),
       headers: _headers,
-      body: jsonEncode(body, toEncodable: (v) => v is BigInt ? v.toInt() : v),
+      body: jsonEncode(wireBody),
     );
     if (response.statusCode >= 300) {
       throw http.ClientException(
@@ -110,7 +120,13 @@ final class FiduciaLease implements Lease {
   }
 
   static BigInt? _uint(Object? value) {
-    if (value is int && value >= 0) return BigInt.from(value);
+    // Flutter web's JSON decoder rounds numeric literals above 2^53-1.
+    // Apply the same bound on every Dart target so native and web callers
+    // fail closed identically. Decimal strings remain lossless for a future
+    // Fiducia wire revision.
+    if (value is int && value >= 0 && value <= 9007199254740991) {
+      return BigInt.from(value);
+    }
     if (value is String && RegExp(r'^\d+$').hasMatch(value)) {
       return BigInt.parse(value);
     }

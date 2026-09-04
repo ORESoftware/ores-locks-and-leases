@@ -43,6 +43,12 @@ both, either, or neither (`neither` is a pass-through for tests and
 single-writer development), and `wait` to choose blocking or fail-fast
 acquisition.
 
+Lease renewal is deliberately explicit rather than hidden in a background
+task. Work expected to approach the configured TTL must call the adapter's
+`renew` operation before expiry and stop producing guarded effects if renewal
+fails. Fencing tokens remain mandatory on guarded writes; release detects a
+lease that lapsed before completion and reports `lost_lease`.
+
 ### Rust
 
 ```rust
@@ -117,6 +123,23 @@ routines with its org prefix so orgs sharing a database cannot collide.
 `invalid_plan` — one structured error in every slice, always naming the step
 that failed. `transport` is never treated as "not held". Details, and why the
 layers are ordered the way they are, in [`docs/design.md`](docs/design.md).
+
+Cleanup failures take precedence over an earlier guarded-work failure. A
+failed lease release leaves ownership unknown; a failed session unlock leaves
+the physical connection unsafe to reuse. The returned cleanup error retains
+the work failure in its diagnostics so neither signal is lost, but callers
+cannot accidentally retry based on the less important inner error alone.
+
+### Fencing-token JSON safety
+
+Fiducia currently exposes `u64` fencing tokens as JSON numbers. Go decodes
+them with `json.Number`, never `float64`. JavaScript/TypeScript and Dart/Flutter
+reject numeric tokens above `2^53 - 1` and refuse to renew or release them,
+because their JSON runtimes cannot guarantee exact integers beyond that bound.
+Both slices already accept decimal-string responses so Fiducia can migrate to
+a lossless string wire form without changing the in-memory `bigint`/`BigInt`
+API. Failing closed is intentional: sending a rounded fencing token would act
+on the wrong lease.
 
 ## Contracts and conformance
 

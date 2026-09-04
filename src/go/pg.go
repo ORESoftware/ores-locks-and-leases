@@ -3,6 +3,7 @@ package oreslocks
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 )
 
@@ -189,14 +190,19 @@ func runSession(ctx context.Context, key LockKey, wait bool, db *sql.DB, guarded
 	// outlives the request.
 	var unlocked bool
 	err = conn.QueryRowContext(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", key.Advisory()).Scan(&unlocked)
+	var cleanup error
 	switch {
-	case inner != nil:
-		return inner
 	case err != nil:
-		return dbErr(key, StepPgAdvisoryUnlock, err)
+		cleanup = dbErr(key, StepPgAdvisoryUnlock, err)
 	case !unlocked:
-		return newError(KindDatabase, key, StepPgAdvisoryUnlock, fmt.Sprintf("pg_advisory_unlock reported the session did not hold `%s`", key), nil)
-	default:
-		return nil
+		cleanup = newError(KindDatabase, key, StepPgAdvisoryUnlock, fmt.Sprintf("pg_advisory_unlock reported the session did not hold `%s`", key), nil)
 	}
+	if cleanup != nil {
+		// Returning a connection with uncertain session-lock state to the pool
+		// can leak the lock into an unrelated request. driver.ErrBadConn tells
+		// database/sql to destroy this physical session instead.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return cleanupFailure(cleanup, inner)
+	}
+	return inner
 }

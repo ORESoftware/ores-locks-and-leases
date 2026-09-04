@@ -5,7 +5,13 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-scratch=$(mktemp -d)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/ores-locks-generated.XXXXXX")
+cleanup() {
+  if [ -d "$scratch" ]; then
+    find "$scratch" -depth -delete
+  fi
+}
+trap cleanup EXIT HUP INT TERM
 vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
 
 log() { printf '[generated-lib-core] %s\n' "$*"; }

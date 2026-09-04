@@ -86,7 +86,7 @@
         "waitTimeoutMs": {
           "type": "integer",
           "x-ores-width": 64,
-          "description": "Total time to keep waiting before giving up, in milliseconds. Ignored when wait is false."
+          "description": "Time to poll the fiducia authority before giving up, in milliseconds. PostgreSQL blocking waits use that session's lock_timeout/statement_timeout; ignored when wait is false."
         },
         "retryIntervalMs": {
           "type": "integer",

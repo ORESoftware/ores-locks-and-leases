@@ -6,7 +6,7 @@ agent-pontifex	agent-pontifex	agent-pontifex-lib-core	agent-pontifex-interfaces	
 fanwaave	fanwaave	fanwaave-lib-core	fanwaave-interfaces	fanwaave
 athlet-o	athleto	athleto-lib-core	athleto-interfaces	athlet-o
 claritas-viz	claritas	claritas-lib-core	claritas-interfaces	claritas-viz
-ClaimGraph	claimgraph	claimgraph-lib-core	claimgraph-interfaces	claimgraph
+ClaimGraph	claimgraph	claimgraph-lib-core	claimgraph-interfaces	claimgraph/repos
 chapter-publishing	cp	cp-lib-core	chptr-interfaces	chapter-publishing
 ecma-d	ecmad	ecmad-lib-core	ecmad-interfaces	ecma-d
 embedded-alerts	eal	eal-lib-core	eal-interfaces	embedded-alerts

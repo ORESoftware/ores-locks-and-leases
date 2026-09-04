@@ -100,6 +100,16 @@ impl LockError {
         Self::new(LockErrorKind::InvalidPlan, key, message)
     }
 
+    /// Preserve the safety-critical cleanup failure while retaining the
+    /// inner failure in diagnostics. A failed release/unlock leaves ownership
+    /// or session state unknown, so callers must see it instead of blindly
+    /// retrying the guarded operation based only on its earlier failure.
+    pub(crate) fn after_inner_failure(mut self, inner: &Self) -> Self {
+        self.message.push_str("; guarded operation also failed: ");
+        self.message.push_str(&inner.to_string());
+        self
+    }
+
     /// True when retrying the whole routine is reasonable: the layer was busy
     /// or the budget ran out, and nothing was left half-done.
     pub fn is_retryable(&self) -> bool {

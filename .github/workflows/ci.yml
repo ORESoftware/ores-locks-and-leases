@@ -120,6 +120,18 @@ jobs:
         with: { persist-credentials: false, show-progress: false }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "22" }
+      - name: Validate rollout tooling safety gates
+        run: |
+          bash -n templates/lib-core/fanout.sh
+          python3 -c 'compile(open("templates/lib-core/gen_org_locks.py", encoding="utf-8").read(), "templates/lib-core/gen_org_locks.py", "exec")'
+          if templates/lib-core/fanout.sh --no-push; then
+            echo "fanout unexpectedly accepted a missing Linear issue" >&2
+            exit 1
+          fi
+          if python3 templates/lib-core/gen_org_locks.py --repo . --org ORESoftware --prefix ores --interfaces ores-interfaces --commit --branch feat/no-linear-id; then
+            echo "generator unexpectedly accepted a branch without a Linear issue" >&2
+            exit 1
+          fi
       - name: TypeSpec and JSON Schema authorities agree
         run: npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json
 

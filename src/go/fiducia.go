@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -124,7 +126,9 @@ func (f *FiduciaLease) post(ctx context.Context, path string, body map[string]an
 		} `json:"result"`
 	}
 	if len(payload) > 0 {
-		if err := json.Unmarshal(payload, &parsed); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(payload))
+		decoder.UseNumber()
+		if err := decoder.Decode(&parsed); err != nil {
 			return nil, fmt.Errorf("fiducia: malformed response: %w", err)
 		}
 	}
@@ -142,16 +146,25 @@ func outBool(out map[string]any, name string) bool {
 func outUint(out map[string]any, name string) (uint64, bool) {
 	switch v := out[name].(type) {
 	case float64:
-		if v < 0 {
+		// A float can only be accepted when it is known to be an exact JSON
+		// integer. Network responses use json.Number; this case supports test
+		// doubles and callers constructing an output map directly.
+		if v < 0 || v > 9_007_199_254_740_991 || math.Trunc(v) != v {
 			return 0, false
 		}
 		return uint64(v), true
 	case json.Number:
-		n, err := v.Int64()
-		if err != nil || n < 0 {
+		n, err := strconv.ParseUint(string(v), 10, 64)
+		if err != nil {
 			return 0, false
 		}
-		return uint64(n), true
+		return n, true
+	case string:
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
 	}
 	return 0, false
 }
