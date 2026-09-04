@@ -38,9 +38,9 @@ import tempfile
 
 SHARED_PACKAGE_ORG = "oresoftware"
 SHARED_NAME = "ores-locks-and-leases"
-SHARED_REQ = "^0.1.0"
+SHARED_REQ = "=0.1.1"
 SHARED_GIT = "https://github.com/ORESoftware/ores-locks-and-leases.git"
-SHARED_TAG = "v0.1.0"
+SHARED_TAG = "v0.1.1"
 VENDOR = "../.vendor/.zed/oresoftware/ores-locks-and-leases/src"
 
 # The catalog every org starts with. Orgs add their own rows to
@@ -841,13 +841,13 @@ pub fn placeholders_are_filled_in_order_test() {{
 
 go 1.22
 
-require github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.0
+require github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1
 '''
     # Pin the immutable nested-module release. This keeps generated consumers
     # reproducible even while a freshly published version is still propagating
     # through proxy.golang.org and sum.golang.org caches.
-    files["locks/golang/go.sum"] = '''github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.0 h1:ukOGh6w3yz4vgQry8+ADiGWxha66zATdrAmpOfWBKhA=
-github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.0/go.mod h1:L5hcHZjI6AjJa0swONnyu5lMQwNp74krvEyoKSUN66g=
+    files["locks/golang/go.sum"] = '''github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1 h1:J9deNEFJnPIsV6e9XJFP4U6OlrqwaMIlbMhyYiDAggE=
+github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1/go.mod h1:L5hcHZjI6AjJa0swONnyu5lMQwNp74krvEyoKSUN66g=
 '''
     files["locks/golang/locks.go"] = f'''// Package {snake}locks wraps ORESoftware/ores-locks-and-leases with the {org}
 // key prefix and lock catalog. Generated from ../catalog.json by
