@@ -1,7 +1,7 @@
 [package]
 org = "ORESoftware"
 name = "ores-locks-and-leases"
-version = "0.1.0"
+version = "0.1.1"
 kind = "library"
 description = "Composed distributed locking for the fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer switchable, with fencing tokens threaded through to the guarded work — Rust, Go, TypeScript, Dart and Gleam slices held to one conformance corpus"
 license = "MIT"
