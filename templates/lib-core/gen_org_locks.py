@@ -800,10 +800,13 @@ pub fn catalog_is_well_formed() -> Bool {{
   }})
 }}
 '''
-    files[f"locks/gleam/test/{snake}_locks_test.gleam"] = f'''import gleeunit
-import gleeunit/should
-import ores_locks_and_leases as locks
-import {snake}_locks as org_locks
+    gleam_test_imports = "\n".join(sorted([
+        "import gleeunit",
+        "import gleeunit/should",
+        "import ores_locks_and_leases as locks",
+        f"import {snake}_locks as org_locks",
+    ]))
+    files[f"locks/gleam/test/{snake}_locks_test.gleam"] = f'''{gleam_test_imports}
 
 pub fn main() {{
   gleeunit.main()
