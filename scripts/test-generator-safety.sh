@@ -55,6 +55,12 @@ python3 "$repo_root/templates/lib-core/gen_org_locks.py" \
 generated_commit=$(git -C "$fixture" rev-parse DEN-2050/ores-locks-and-leases)
 test "$(git -C "$fixture" rev-parse "$generated_commit^")" = "$base_commit"
 git -C "$fixture" show "$generated_commit:.zpkg.toml" | grep -q 'BASE_REF_MANIFEST'
+# Gleam's formatter sorts imports lexically. A generated module that sorts
+# before gleeunit (as fixture_locks does) catches the fleet-name-dependent
+# formatting failure that shorter preflight package names used to miss.
+git -C "$fixture" show "$generated_commit:locks/gleam/test/fixture_locks_test.gleam" \
+  | head -n 4 \
+  | sort -c
 if git -C "$fixture" show "$generated_commit:.zpkg.toml" | grep -q 'PARKED_BRANCH_MANIFEST'; then
   echo "generated branch inherited the parked checkout instead of --base-ref" >&2
   exit 1
