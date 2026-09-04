@@ -486,7 +486,7 @@ mod tests {{
             "types": "./dist/index.d.ts",
             "files": ["dist"],
             "scripts": {
-                "build:shared": f"npm --prefix {VENDOR}/ts ci --no-audit --no-fund && npm --prefix {VENDOR}/ts run build",
+                "build:shared": f"npm --prefix {VENDOR}/ts ci --no-audit --no-fund && node {VENDOR}/ts/node_modules/typescript/bin/tsc -p {VENDOR}/ts/tsconfig.json",
                 "build": "npm run build:shared && tsc -p tsconfig.json",
                 "test": "npm run build && node --test test/*.test.mjs",
             },
