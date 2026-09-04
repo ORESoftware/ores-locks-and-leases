@@ -65,6 +65,8 @@ git -C "$fixture" show "$generated_commit:locks/gleam/test/fixture_locks_test.gl
 # Cargo.toml declares a workspace but does not list locks/rust as a member.
 git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \
   | grep -q '^\[workspace\]$'
+git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \
+  | grep -q '^resolver = "3"$'
 if git -C "$fixture" show "$generated_commit:.zpkg.toml" | grep -q 'PARKED_BRANCH_MANIFEST'; then
   echo "generated branch inherited the parked checkout instead of --base-ref" >&2
   exit 1
