@@ -995,8 +995,12 @@ def commit_without_touching_worktree(repo: pathlib.Path, files: dict[str, str], 
             git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}", env=env)
         tree = git(repo, "write-tree", env=env).strip()
         if tree == git(repo, "rev-parse", f"{head}^{{tree}}").strip():
-            print(f"[gen] {repo.name}: nothing to commit (already up to date)")
+            print(f"[gen] {repo.name}: nothing to commit (HEAD already carries the package)")
             return head
+        existing = git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}^{{tree}}", check=False).strip()
+        if existing == tree:
+            print(f"[gen] {repo.name}: {branch} already carries exactly this package; leaving it alone")
+            return git(repo, "rev-parse", f"refs/heads/{branch}").strip()
         commit = subprocess.run(["git", "-C", str(repo), "commit-tree", tree, "-p", head, "-m", message], capture_output=True, text=True, check=True).stdout.strip()
         git(repo, "branch", "-f", branch, commit)
         print(f"[gen] {repo.name}: {branch} -> {commit[:12]} ({len(files)} files)")
