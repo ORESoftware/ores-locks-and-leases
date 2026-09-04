@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ORESoftware/ores-locks-and-leases/contracts/json-schema/contract.schema.json",
+  "$comment": "ores-locks-and-leases — JSON Schema authority. Independent peer of contracts/typespec/main.tsp (ORESoftware/ores-contracts): neither is generated from the other; `npx ores-contracts check` must find them equivalent.",
+  "x-ores-namespace": "Ores.LocksAndLeases",
+  "$defs": {
+    "LockKey": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "A caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`."
+    },
+    "AdvisoryKey": {
+      "type": "integer",
+      "x-ores-width": 64,
+      "description": "The Postgres advisory-lock integer derived from a LockKey: FNV-1a 64 over the UTF-8 bytes, reinterpreted as a two's-complement bigint. Vectors: conformance/cases/advisory-key.json."
+    },
+    "FencingToken": {
+      "type": "integer",
+      "x-ores-width": 64,
+      "description": "A monotonically increasing token minted by the lease authority on every grant. Writes guarded by the lease carry it so a stale holder cannot clobber a newer one."
+    },
+    "LockLayers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which coordination layers a routine engages. Both false is a deliberate pass-through (tests, single-writer dev).",
+      "properties": {
+        "fiducia": {
+          "type": "boolean",
+          "description": "Engage the fiducia-cloud lease (outermost layer, cross-host, TTL-bounded, fenced)."
+        },
+        "pgAdvisory": {
+          "type": "boolean",
+          "description": "Engage a Postgres advisory lock (inner layer, single-database, released with the transaction or session)."
+        }
+      },
+      "required": ["fiducia", "pgAdvisory"]
+    },
+    "PgScope": {
+      "type": "string",
+      "enum": ["transaction", "session"],
+      "description": "How the Postgres advisory lock is scoped. transaction: pg_advisory_xact_lock inside a transaction the routine opens; released at commit/rollback; the caller's work runs inside it. session: pg_advisory_lock / pg_advisory_unlock on one dedicated connection; no transaction is opened."
+    },
+    "LockStep": {
+      "type": "string",
+      "enum": [
+        "fiducia.acquire",
+        "fiducia.try_acquire",
+        "fiducia.release",
+        "pg.begin",
+        "pg.advisory_xact_lock",
+        "pg.try_advisory_xact_lock",
+        "pg.commit",
+        "pg.rollback",
+        "pg.advisory_lock",
+        "pg.try_advisory_lock",
+        "pg.advisory_unlock",
+        "work"
+      ],
+      "description": "The ordered actions a routine performs for a given LockLayers / PgScope / wait tuple. Matrix: conformance/cases/lock-plan.json."
+    },
+    "LockPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A pure function of the inputs; every implementation must produce the same steps.",
+      "properties": {
+        "layers": { "$ref": "#/$defs/LockLayers" },
+        "pgScope": { "$ref": "#/$defs/PgScope" },
+        "wait": {
+          "type": "boolean",
+          "description": "true: block up to the wait budget; false: fail fast with `contention` when any layer is held."
+        },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/LockStep" } }
+      },
+      "required": ["layers", "pgScope", "wait", "steps"]
+    },
+    "AcquireOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Acquisition tuning shared by every layer.",
+      "properties": {
+        "ttlMs": {
+          "type": "integer",
+          "x-ores-width": 64,
+          "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released."
+        },
+        "waitTimeoutMs": {
+          "type": "integer",
+          "x-ores-width": 64,
+          "description": "Total time to keep waiting before giving up, in milliseconds. Ignored when wait is false."
+        },
+        "retryIntervalMs": {
+          "type": "integer",
+          "x-ores-width": 64,
+          "description": "Poll interval while waiting on the fiducia layer, in milliseconds."
+        },
+        "holder": {
+          "type": "string",
+          "description": "Caller identity for the fiducia layer; also the release key. Absent: an unguessable generated id."
+        }
+      },
+      "required": ["ttlMs", "waitTimeoutMs", "retryIntervalMs"]
+    },
+    "LeaseGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A held fiducia grant, as returned by the lease authority.",
+      "properties": {
+        "key": { "$ref": "#/$defs/LockKey" },
+        "holder": { "type": "string" },
+        "fencingToken": { "$ref": "#/$defs/FencingToken" },
+        "leaseExpiresMs": {
+          "type": "integer",
+          "x-ores-width": 64,
+          "description": "Absolute expiry in Unix milliseconds when the authority reports it."
+        },
+        "ttlMs": { "type": "integer", "x-ores-width": 64 }
+      },
+      "required": ["key", "holder", "fencingToken", "ttlMs"]
+    },
+    "LockErrorKind": {
+      "type": "string",
+      "enum": [
+        "contention",
+        "timeout",
+        "lost_lease",
+        "transport",
+        "database",
+        "work",
+        "invalid_plan"
+      ],
+      "description": "Why an acquisition or guarded run failed. contention: a layer is held by someone else and wait was false. timeout: the wait budget elapsed. lost_lease: the fiducia lease could not be renewed or was reaped — fenced authority is lost and the guarded work must not continue. transport: transport/HTTP failure talking to the lease authority; ownership is unknown. database: the database refused the advisory-lock statement, the transaction, or the connection. work: the caller's work returned an error; outer layers were still released/rolled back. invalid_plan: the inputs cannot be planned."
+    },
+    "LockError": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The structured failure every implementation surfaces.",
+      "properties": {
+        "kind": { "$ref": "#/$defs/LockErrorKind" },
+        "key": { "$ref": "#/$defs/LockKey" },
+        "step": { "$ref": "#/$defs/LockStep", "description": "Which step failed, when known." },
+        "message": { "type": "string" }
+      },
+      "required": ["kind", "key", "message"]
+    }
+  }
+}

@@ -1,0 +1,191 @@
+{
+  "$comment": "Lock plan matrix: the ordered steps every implementation must take for a (layers, pgScope, wait) tuple. Fiducia is always the outermost layer (acquired first, released last); the Postgres advisory lock is inside it; the caller's work is innermost. On failure after pg.begin the implementation rolls back (pg.rollback replaces pg.commit) and still releases the fiducia lease; a failed inner acquisition releases every outer layer already held.",
+  "cases": [
+    {
+      "name": "neither",
+      "layers": {
+        "fiducia": false,
+        "pgAdvisory": false
+      },
+      "pgScope": "transaction",
+      "wait": true,
+      "expect": {
+        "steps": [
+          "work"
+        ]
+      }
+    },
+    {
+      "name": "fiducia-only-wait",
+      "layers": {
+        "fiducia": true,
+        "pgAdvisory": false
+      },
+      "pgScope": "transaction",
+      "wait": true,
+      "expect": {
+        "steps": [
+          "fiducia.acquire",
+          "work",
+          "fiducia.release"
+        ]
+      }
+    },
+    {
+      "name": "fiducia-only-try",
+      "layers": {
+        "fiducia": true,
+        "pgAdvisory": false
+      },
+      "pgScope": "transaction",
+      "wait": false,
+      "expect": {
+        "steps": [
+          "fiducia.try_acquire",
+          "work",
+          "fiducia.release"
+        ]
+      }
+    },
+    {
+      "name": "pg-xact-only-wait",
+      "layers": {
+        "fiducia": false,
+        "pgAdvisory": true
+      },
+      "pgScope": "transaction",
+      "wait": true,
+      "expect": {
+        "steps": [
+          "pg.begin",
+          "pg.advisory_xact_lock",
+          "work",
+          "pg.commit"
+        ]
+      }
+    },
+    {
+      "name": "pg-xact-only-try",
+      "layers": {
+        "fiducia": false,
+        "pgAdvisory": true
+      },
+      "pgScope": "transaction",
+      "wait": false,
+      "expect": {
+        "steps": [
+          "pg.begin",
+          "pg.try_advisory_xact_lock",
+          "work",
+          "pg.commit"
+        ]
+      }
+    },
+    {
+      "name": "pg-session-only-wait",
+      "layers": {
+        "fiducia": false,
+        "pgAdvisory": true
+      },
+      "pgScope": "session",
+      "wait": true,
+      "expect": {
+        "steps": [
+          "pg.advisory_lock",
+          "work",
+          "pg.advisory_unlock"
+        ]
+      }
+    },
+    {
+      "name": "pg-session-only-try",
+      "layers": {
+        "fiducia": false,
+        "pgAdvisory": true
+      },
+      "pgScope": "session",
+      "wait": false,
+      "expect": {
+        "steps": [
+          "pg.try_advisory_lock",
+          "work",
+          "pg.advisory_unlock"
+        ]
+      }
+    },
+    {
+      "name": "both-xact-wait",
+      "layers": {
+        "fiducia": true,
+        "pgAdvisory": true
+      },
+      "pgScope": "transaction",
+      "wait": true,
+      "expect": {
+        "steps": [
+          "fiducia.acquire",
+          "pg.begin",
+          "pg.advisory_xact_lock",
+          "work",
+          "pg.commit",
+          "fiducia.release"
+        ]
+      }
+    },
+    {
+      "name": "both-xact-try",
+      "layers": {
+        "fiducia": true,
+        "pgAdvisory": true
+      },
+      "pgScope": "transaction",
+      "wait": false,
+      "expect": {
+        "steps": [
+          "fiducia.try_acquire",
+          "pg.begin",
+          "pg.try_advisory_xact_lock",
+          "work",
+          "pg.commit",
+          "fiducia.release"
+        ]
+      }
+    },
+    {
+      "name": "both-session-wait",
+      "layers": {
+        "fiducia": true,
+        "pgAdvisory": true
+      },
+      "pgScope": "session",
+      "wait": true,
+      "expect": {
+        "steps": [
+          "fiducia.acquire",
+          "pg.advisory_lock",
+          "work",
+          "pg.advisory_unlock",
+          "fiducia.release"
+        ]
+      }
+    },
+    {
+      "name": "both-session-try",
+      "layers": {
+        "fiducia": true,
+        "pgAdvisory": true
+      },
+      "pgScope": "session",
+      "wait": false,
+      "expect": {
+        "steps": [
+          "fiducia.try_acquire",
+          "pg.try_advisory_lock",
+          "work",
+          "pg.advisory_unlock",
+          "fiducia.release"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+name = "ores_locks_and_leases"
+version = "0.1.0"
+description = "Composed distributed locking for the ORESoftware fleet: a fiducia-cloud lease around a Postgres advisory lock, each layer switchable, with fencing tokens threaded through to the guarded work."
+licences = ["MIT"]
+repository = { type = "github", user = "ORESoftware", repo = "ores-locks-and-leases", path = "src/gleam" }
+target = "erlang"
+
+gleam = ">= 1.6.0"
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+gleam_erlang = ">= 0.30.0 and < 2.0.0"
+gleam_json = ">= 2.0.0 and < 4.0.0"
+gleam_http = ">= 3.7.0 and < 5.0.0"
+gleam_httpc = ">= 3.0.0 and < 6.0.0"
+pog = ">= 3.0.0 and < 5.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
+simplifile = ">= 2.0.0 and < 3.0.0"

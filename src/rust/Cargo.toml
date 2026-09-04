@@ -1,0 +1,40 @@
+[package]
+name = "ores-locks-and-leases"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Composed distributed locking for the ORESoftware fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer individually switchable, with fencing tokens threaded through to the guarded work."
+repository = "https://github.com/ORESoftware/ores-locks-and-leases"
+keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing"]
+categories = ["concurrency", "database"]
+
+# The Rust slice of a polyglot zed-package. Go, TypeScript and Gleam slices
+# sit beside it under `src/`, held to the same `conformance/cases/*.json`.
+[lib]
+path = "lib.rs"
+
+[features]
+default = []
+# Postgres advisory locks through SeaORM (the fleet's application ORM; direct
+# sqlx / tokio-postgres are forbidden by the migration contract).
+pg = ["dep:sea-orm"]
+# The fiducia-cloud lease adapter over the official async Rust client.
+fiducia = ["dep:fiducia-client", "dep:tokio"]
+# Everything.
+full = ["pg", "fiducia"]
+
+[dependencies]
+sea-orm = { version = "1", default-features = false, features = [
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+], optional = true }
+fiducia-client = { git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
+tokio = { version = "1", features = ["time"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"

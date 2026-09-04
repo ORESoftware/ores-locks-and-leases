@@ -1,0 +1,52 @@
+{
+  "$comment": "Key derivation vectors. advisory_key = FNV-1a 64-bit over the UTF-8 bytes of key, reinterpreted as a two's-complement signed 64-bit integer (Postgres bigint). Integers are strings so JSON parsers with 53-bit doubles cannot silently round them.",
+  "algorithm": {
+    "name": "fnv1a-64",
+    "offset_basis": "14695981039346656037",
+    "prime": "1099511628211",
+    "encoding": "utf-8",
+    "sign": "two's-complement-i64"
+  },
+  "cases": [
+    {
+      "key": "",
+      "fnv1a64_unsigned": "14695981039346656037",
+      "advisory_key": "-3750763034362895579"
+    },
+    {
+      "key": "a",
+      "fnv1a64_unsigned": "12638187200555641996",
+      "advisory_key": "-5808556873153909620"
+    },
+    {
+      "key": "orders/checkout",
+      "fnv1a64_unsigned": "1827953472736452509",
+      "advisory_key": "1827953472736452509"
+    },
+    {
+      "key": "zed-pkg/registry/publish:zed-lib-core",
+      "fnv1a64_unsigned": "6692761383948316844",
+      "advisory_key": "6692761383948316844"
+    },
+    {
+      "key": "shared-auth/scim/provision:tenant-42",
+      "fnv1a64_unsigned": "17480064479033197425",
+      "advisory_key": "-966679594676354191"
+    },
+    {
+      "key": "ключ/замок",
+      "fnv1a64_unsigned": "14465916089512413667",
+      "advisory_key": "-3980827984197137949"
+    },
+    {
+      "key": "🔒/emoji",
+      "fnv1a64_unsigned": "15992967447675918387",
+      "advisory_key": "-2453776626033633229"
+    },
+    {
+      "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fnv1a64_unsigned": "7989751381043797061",
+      "advisory_key": "7989751381043797061"
+    }
+  ]
+}

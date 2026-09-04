@@ -1,0 +1,95 @@
+[package]
+org = "ORESoftware"
+name = "ores-locks-and-leases"
+version = "0.1.0"
+kind = "library"
+description = "Composed distributed locking for the fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer switchable, with fencing tokens threaded through to the guarded work — Rust, Go, TypeScript, Dart and Gleam slices held to one conformance corpus"
+license = "MIT"
+keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing", "fiducia", "polyglot"]
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/ORESoftware/ores-locks-and-leases"
+
+# The contract types are authored twice (TypeSpec + JSON Schema) and checked
+# for parity by ores-contracts; the fiducia wire protocol is the one the
+# fiducia-clients speak. Neither is a runtime dependency of the slices.
+[dependencies]
+"ORESoftware/ores-contracts" = "^0.1.0"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\""
+exclude = [
+  ".env",
+  ".env.*",
+  ".direnv/**",
+  ".vendor/.zed/**",
+  ".zed/**",
+  ".zed-pack/**",
+  "target/**",
+  "**/target/**",
+  "**/node_modules/**",
+  "**/dist/**",
+  "**/.dart_tool/**",
+  "**/build/**",
+  "generated/**",
+  "tmp/**",
+  "**/*.log",
+  ".DS_Store",
+]
+
+[install]
+dir = ".vendor/.zed"
+
+# Whole-repository slice: every implementation plus the corpus they are all
+# verified against.
+[targets.repository]
+dir = "."
+
+[targets.rust]
+dir = "src/rust"
+adapter = "rust"
+
+[targets.rust.native]
+registry = "crates-io"
+package = "ores-locks-and-leases"
+
+[targets.golang]
+dir = "src/go"
+adapter = "none"
+
+[targets.typescript]
+dir = "src/ts"
+name = "ores-locks-and-leases-typescript"
+adapter = "node"
+
+[targets.typescript.native]
+registry = "npm"
+package = "@oresoftware/locks-and-leases"
+tag_format = "ts/v{version}"
+
+[targets.dart]
+dir = "src/dart"
+adapter = "dart"
+
+[targets.dart.native]
+registry = "pub.dev"
+package = "ores_locks_and_leases"
+tag_format = "dart/v{version}"
+
+[targets.gleam]
+dir = "src/gleam"
+adapter = "none"
+
+# The corpus on its own: an implementation in a language this package does
+# not ship yet still has something to be correct against.
+[targets.conformance]
+dir = "conformance"
+name = "ores-locks-and-leases-conformance"
+adapter = "none"
+
+[scripts]
+test = "sh scripts/test-all.sh"
+contracts = "npx ores-contracts check --config contracts/contracts.config.json"
