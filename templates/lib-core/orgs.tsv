@@ -1,4 +1,4 @@
-#org	prefix	lib_core_repo	interfaces_repo	local_dir
+#org	prefix	lib_core_repo	interfaces_package	local_dir
 sonus-auris	sonus-auris	sonus-auris-lib-core	sonus-auris-interfaces	sonus-auris
 daedalus-fab	daedalus	daedalus-lib-core	daedalus-interfaces	daedalus-fab
 cliptown	cliptown	cliptown-lib-core	cliptown-interfaces	cliptown
@@ -7,6 +7,6 @@ fanwaave	fanwaave	fanwaave-lib-core	fanwaave-interfaces	fanwaave
 athlet-o	athleto	athleto-lib-core	athleto-interfaces	athlet-o
 claritas-viz	claritas	claritas-lib-core	claritas-interfaces	claritas-viz
 ClaimGraph	claimgraph	claimgraph-lib-core	claimgraph-interfaces	claimgraph
-chapter-publishing	cp	cp-lib-core	cp-interfaces	chapter-publishing
+chapter-publishing	cp	cp-lib-core	chptr-interfaces	chapter-publishing
 ecma-d	ecmad	ecmad-lib-core	ecmad-interfaces	ecma-d
 embedded-alerts	eal	eal-lib-core	eal-interfaces	embedded-alerts
