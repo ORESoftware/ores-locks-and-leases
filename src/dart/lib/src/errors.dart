@@ -72,11 +72,13 @@ final class LockError implements Exception {
         message = cause.toString();
 
   /// Retrying the whole routine is reasonable: busy or out of budget, nothing half-done.
-  bool get retryable => kind == LockErrorKind.contention || kind == LockErrorKind.timeout;
+  bool get retryable =>
+      kind == LockErrorKind.contention || kind == LockErrorKind.timeout;
 
   @override
-  String toString() =>
-      step == null ? '${kind.wire} for `$key`: $message' : '${kind.wire} at ${step!.wire} for `$key`: $message';
+  String toString() => step == null
+      ? '${kind.wire} for `$key`: $message'
+      : '${kind.wire} at ${step!.wire} for `$key`: $message';
 }
 
 /// Fill in the step on a [LockError] that has none; other errors pass through.

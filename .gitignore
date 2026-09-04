@@ -4,9 +4,6 @@
 **/dist/
 **/.dart_tool/
 **/build/
-**/pubspec.lock
-/src/ts/package-lock.json
-/src/gleam/manifest.toml
 /generated/
 /.vendor/
 /.zed/

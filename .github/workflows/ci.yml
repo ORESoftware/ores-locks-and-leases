@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  checks: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -29,21 +30,33 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { persist-credentials: false, show-progress: false }
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
-        with: { components: "rustfmt,clippy" }
+        with: { toolchain: "1.85.1", components: "rustfmt,clippy" }
       - name: Format
         working-directory: src/rust
         run: cargo fmt --all -- --check
       - name: Core compiles with no features and no dependencies
         working-directory: src/rust
-        run: cargo check --no-default-features
+        run: cargo check --locked --no-default-features
       - name: Clippy (all features)
         working-directory: src/rust
-        run: cargo clippy --all-targets --features full -- -D warnings
+        run: cargo clippy --locked --all-targets --features full -- -D warnings
       - name: Test (all features, live Postgres)
         working-directory: src/rust
         env:
           ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
-        run: cargo test --all-targets --features full
+        run: cargo test --locked --all-targets --features full
+
+  rustsec:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false, show-progress: false }
+      - name: Audit the locked Rust dependency graph
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src/rust
 
   go:
     runs-on: ubuntu-24.04
@@ -69,7 +82,7 @@ jobs:
         with: { node-version: "22" }
       - working-directory: src/ts
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm test
 
   dart:
@@ -81,7 +94,8 @@ jobs:
       - uses: dart-lang/setup-dart@e51d8e571e22473a2ddebf0ef8a2123f0ab2c02c # v1.7.1
       - working-directory: src/dart
         run: |
-          dart pub get
+          dart pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
           dart analyze --fatal-infos
           dart test
 
@@ -107,4 +121,4 @@ jobs:
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
         with: { node-version: "22" }
       - name: TypeSpec and JSON Schema authorities agree
-        run: npx --yes github:ORESoftware/ores-contracts check --config contracts/contracts.config.json
+        run: npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json

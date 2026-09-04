@@ -14,7 +14,8 @@ final class LockKey {
   factory LockKey(String key) {
     final bytes = utf8.encode(key).length;
     if (bytes > maxLockKeyBytes) {
-      throw ArgumentError.value(key, 'key', 'lock key is $bytes bytes; the contract allows at most $maxLockKeyBytes');
+      throw ArgumentError.value(key, 'key',
+          'lock key is $bytes bytes; the contract allows at most $maxLockKeyBytes');
     }
     return LockKey._(key);
   }

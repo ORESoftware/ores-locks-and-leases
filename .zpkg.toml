@@ -92,4 +92,4 @@ adapter = "none"
 
 [scripts]
 test = "sh scripts/test-all.sh"
-contracts = "npx ores-contracts check --config contracts/contracts.config.json"
+contracts = "npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json"

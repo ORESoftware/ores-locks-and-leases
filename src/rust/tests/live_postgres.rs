@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use ores_locks_and_leases::pg::DedicatedConnection;
 use ores_locks_and_leases::{
-    AcquireOptions, LockErrorKind, LockKey, LockLayers, NoLease, with_session_lock,
-    with_xact_lock,
+    AcquireOptions, LockErrorKind, LockKey, LockLayers, NoLease, with_session_lock, with_xact_lock,
 };
 use sea_orm::{ConnectOptions, Database};
 
@@ -87,7 +86,9 @@ async fn session_lock_round_trips_on_a_dedicated_connection() {
         eprintln!("skipping: ORES_LOCKS_TEST_DATABASE_URL is not set");
         return;
     };
-    let conn = DedicatedConnection::connect(ConnectOptions::new(url)).await.unwrap();
+    let conn = DedicatedConnection::connect(ConnectOptions::new(url))
+        .await
+        .unwrap();
     let key = LockKey::new("ores-locks/test/session").unwrap();
     let value = with_session_lock(
         &key,

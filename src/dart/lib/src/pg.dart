@@ -21,20 +21,26 @@ final class SessionGuarded extends Guarded {
   const SessionGuarded({required super.key, super.grant, this.connection});
 }
 
-TypedValue _param(LockKey key) => TypedValue(Type.bigInteger, key.advisory.toInt());
+TypedValue _param(LockKey key) =>
+    TypedValue(Type.bigInteger, key.advisory.toInt());
 
-Future<bool> _queryBool(Session session, LockKey key, String sql, LockStep step) async {
+Future<bool> _queryBool(
+    Session session, LockKey key, String sql, LockStep step) async {
   final Result rows;
   try {
-    rows = await session.execute(Sql.named(sql), parameters: {'k': _param(key)});
+    rows =
+        await session.execute(Sql.named(sql), parameters: {'k': _param(key)});
   } catch (cause) {
     throw LockError.database(key, step, cause);
   }
-  if (rows.isEmpty) throw LockError.database(key, step, '`$sql` returned no row');
+  if (rows.isEmpty) {
+    throw LockError.database(key, step, '`$sql` returned no row');
+  }
   return rows.first[0] == true;
 }
 
-Future<void> _exec(Session session, LockKey key, String sql, LockStep step) async {
+Future<void> _exec(
+    Session session, LockKey key, String sql, LockStep step) async {
   try {
     await session.execute(Sql.named(sql), parameters: {'k': _param(key)});
   } catch (cause) {
@@ -43,17 +49,24 @@ Future<void> _exec(Session session, LockKey key, String sql, LockStep step) asyn
 }
 
 /// `SELECT pg_advisory_xact_lock(@k)` on [tx]; released at commit/rollback.
-Future<void> xactLock(TxSession tx, LockKey key) => _exec(tx, key, 'SELECT pg_advisory_xact_lock(@k)', LockStep.pgAdvisoryXactLock);
+Future<void> xactLock(TxSession tx, LockKey key) => _exec(
+    tx, key, 'SELECT pg_advisory_xact_lock(@k)', LockStep.pgAdvisoryXactLock);
 
 /// `SELECT pg_try_advisory_xact_lock(@k)`; a held key is `contention`.
 Future<void> tryXactLock(TxSession tx, LockKey key) async {
-  final acquired = await _queryBool(tx, key, 'SELECT pg_try_advisory_xact_lock(@k)', LockStep.pgTryAdvisoryXactLock);
-  if (!acquired) throw LockError.contention(key, LockStep.pgTryAdvisoryXactLock);
+  final acquired = await _queryBool(tx, key,
+      'SELECT pg_try_advisory_xact_lock(@k)', LockStep.pgTryAdvisoryXactLock);
+  if (!acquired) {
+    throw LockError.contention(key, LockStep.pgTryAdvisoryXactLock);
+  }
 }
 
 Lease? _pickLease(LockKey key, LockLayers layers, Lease? lease) {
   if (!layers.fiducia) return null;
-  if (lease == null) throw LockError.invalidPlan(key, 'layers.fiducia is enabled but no lease authority was supplied');
+  if (lease == null) {
+    throw LockError.invalidPlan(
+        key, 'layers.fiducia is enabled but no lease authority was supplied');
+  }
   return lease;
 }
 
@@ -78,11 +91,18 @@ Future<T> withXactLock<T>(
   required Future<T> Function(XactGuarded guarded) work,
 }) async {
   final theLease = _pickLease(key, layers, lease);
-  if (layers.pgAdvisory && db == null) throw LockError.invalidPlan(key, 'layers.pgAdvisory is enabled but no pool was supplied');
-  final grant = theLease == null ? null : await acquireLease(key, wait: wait, opts: opts, lease: theLease);
+  if (layers.pgAdvisory && db == null) {
+    throw LockError.invalidPlan(
+        key, 'layers.pgAdvisory is enabled but no pool was supplied');
+  }
+  final grant = theLease == null
+      ? null
+      : await acquireLease(key, wait: wait, opts: opts, lease: theLease);
 
   final inner = await settled(() async {
-    if (!layers.pgAdvisory) return runWork(key, XactGuarded(key: key, grant: grant), work);
+    if (!layers.pgAdvisory) {
+      return runWork(key, XactGuarded(key: key, grant: grant), work);
+    }
     try {
       return await db!.runTx((tx) async {
         if (wait) {
@@ -124,24 +144,43 @@ Future<T> withSessionLock<T>(
   required Future<T> Function(SessionGuarded guarded) work,
 }) async {
   final theLease = _pickLease(key, layers, lease);
-  if (layers.pgAdvisory && db == null) throw LockError.invalidPlan(key, 'layers.pgAdvisory is enabled with session scope but no pool was supplied');
-  final grant = theLease == null ? null : await acquireLease(key, wait: wait, opts: opts, lease: theLease);
+  if (layers.pgAdvisory && db == null) {
+    throw LockError.invalidPlan(key,
+        'layers.pgAdvisory is enabled with session scope but no pool was supplied');
+  }
+  final grant = theLease == null
+      ? null
+      : await acquireLease(key, wait: wait, opts: opts, lease: theLease);
 
   final inner = await settled(() async {
-    if (!layers.pgAdvisory) return runWork(key, SessionGuarded(key: key, grant: grant), work);
+    if (!layers.pgAdvisory) {
+      return runWork(key, SessionGuarded(key: key, grant: grant), work);
+    }
     return db!.withConnection((connection) async {
       if (wait) {
-        await _exec(connection, key, 'SELECT pg_advisory_lock(@k)', LockStep.pgAdvisoryLock);
+        await _exec(connection, key, 'SELECT pg_advisory_lock(@k)',
+            LockStep.pgAdvisoryLock);
       } else {
-        final acquired = await _queryBool(connection, key, 'SELECT pg_try_advisory_lock(@k)', LockStep.pgTryAdvisoryLock);
-        if (!acquired) throw LockError.contention(key, LockStep.pgTryAdvisoryLock);
+        final acquired = await _queryBool(connection, key,
+            'SELECT pg_try_advisory_lock(@k)', LockStep.pgTryAdvisoryLock);
+        if (!acquired) {
+          throw LockError.contention(key, LockStep.pgTryAdvisoryLock);
+        }
       }
-      final result = await settled(() => runWork(key, SessionGuarded(key: key, grant: grant, connection: connection), work));
-      final unlocked = await settled(() => _queryBool(connection, key, 'SELECT pg_advisory_unlock(@k)', LockStep.pgAdvisoryUnlock));
+      final result = await settled(() => runWork(
+          key,
+          SessionGuarded(key: key, grant: grant, connection: connection),
+          work));
+      final unlocked = await settled(() => _queryBool(connection, key,
+          'SELECT pg_advisory_unlock(@k)', LockStep.pgAdvisoryUnlock));
       if (!result.ok) Error.throwWithStackTrace(result.error!, result.trace!);
-      if (!unlocked.ok) Error.throwWithStackTrace(unlocked.error!, unlocked.trace!);
+      if (!unlocked.ok) {
+        Error.throwWithStackTrace(unlocked.error!, unlocked.trace!);
+      }
       if (unlocked.value != true) {
-        throw LockError(LockErrorKind.database, key, 'pg_advisory_unlock reported the session did not hold `$key`', step: LockStep.pgAdvisoryUnlock);
+        throw LockError(LockErrorKind.database, key,
+            'pg_advisory_unlock reported the session did not hold `$key`',
+            step: LockStep.pgAdvisoryUnlock);
       }
       return result.value as T;
     });

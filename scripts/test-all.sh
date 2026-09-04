@@ -14,7 +14,10 @@ run() {
 }
 
 if command -v cargo >/dev/null 2>&1; then
-  run rust sh -c "cd '$root/src/rust' && cargo test --all-targets --features full"
+  run rust sh -c "cd '$root/src/rust' && cargo fmt --all -- --check && cargo check --locked --no-default-features && cargo clippy --locked --all-targets --features full -- -D warnings && cargo test --locked --all-targets --features full"
+  if cargo audit --version >/dev/null 2>&1; then
+    run rustsec sh -c "cd '$root/src/rust' && cargo audit --file Cargo.lock"
+  else echo "== rustsec: skipped (no cargo-audit)"; fi
 else echo "== rust: skipped (no cargo)"; fi
 
 if command -v go >/dev/null 2>&1; then
@@ -22,11 +25,12 @@ if command -v go >/dev/null 2>&1; then
 else echo "== go: skipped (no go)"; fi
 
 if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-  run typescript sh -c "cd '$root/src/ts' && npm install --no-audit --no-fund && npm test"
+  run typescript sh -c "cd '$root/src/ts' && npm ci --no-audit --no-fund && npm test"
+  run contracts npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config "$root/contracts/contracts.config.json"
 else echo "== typescript: skipped (no node/npm)"; fi
 
 if command -v dart >/dev/null 2>&1; then
-  run dart sh -c "cd '$root/src/dart' && dart pub get && dart analyze --fatal-infos && dart test"
+  run dart sh -c "cd '$root/src/dart' && dart pub get --enforce-lockfile && dart format --output=none --set-exit-if-changed lib test && dart analyze --fatal-infos && dart test"
 else echo "== dart: skipped (no dart)"; fi
 
 if command -v gleam >/dev/null 2>&1; then
