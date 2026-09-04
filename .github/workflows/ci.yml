@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { persist-credentials: false, show-progress: false }
       - uses: erlef/setup-beam@5304e04ea2b355f03681464e683d92e3b2f18451 # v1.18.2
-        with: { otp-version: "27", gleam-version: "1.6.3", rebar3-version: "3" }
+        with: { otp-version: "27", gleam-version: "1.16.0", rebar3-version: "3" }
       - working-directory: src/gleam
         run: |
           gleam format --check src test

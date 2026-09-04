@@ -34,7 +34,7 @@ if command -v dart >/dev/null 2>&1; then
 else echo "== dart: skipped (no dart)"; fi
 
 if command -v gleam >/dev/null 2>&1; then
-  run gleam sh -c "cd '$root/src/gleam' && gleam test"
+  run gleam sh -c "cd '$root/src/gleam' && gleam format --check src test && gleam test"
 else echo "== gleam: skipped (no gleam)"; fi
 
 exit $status

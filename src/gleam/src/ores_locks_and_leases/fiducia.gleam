@@ -77,7 +77,10 @@ pub fn lease(config: Config) -> core.Lease {
 
 /// An unguessable holder identity.
 pub fn generated_holder() -> String {
-  "ores-locks-" <> int.to_string(int.random(1_000_000_000_000)) <> "-" <> int.to_string(int.random(1_000_000_000_000))
+  "ores-locks-"
+  <> int.to_string(int.random(1_000_000_000_000))
+  <> "-"
+  <> int.to_string(int.random(1_000_000_000_000))
 }
 
 /// Why a credential must not be sent to `base_url`, if it must not.
@@ -124,16 +127,25 @@ fn post(
   path: String,
   body: json.Json,
 ) -> Result(decode.Dynamic, String) {
-  let has_credential = option.is_some(config.internal) || option.is_some(config.api_key)
-  use _ <- result.try(case
-    cleartext_refusal(config.base_url, has_credential, config.allow_cleartext_internal)
-  {
-    Some(refusal) -> Error(refusal)
-    None -> Ok(Nil)
-  })
+  let has_credential =
+    option.is_some(config.internal) || option.is_some(config.api_key)
+  use _ <- result.try(
+    case
+      cleartext_refusal(
+        config.base_url,
+        has_credential,
+        config.allow_cleartext_internal,
+      )
+    {
+      Some(refusal) -> Error(refusal)
+      None -> Ok(Nil)
+    },
+  )
   use req <- result.try(
     request.to(config.base_url <> path)
-    |> result.map_error(fn(_) { "fiducia: invalid base url " <> config.base_url }),
+    |> result.map_error(fn(_) {
+      "fiducia: invalid base url " <> config.base_url
+    }),
   )
   let req =
     req
@@ -148,12 +160,15 @@ fn post(
     None -> req
   }
   let req = case config.api_key {
-    Some(api_key) -> request.set_header(req, "authorization", "Bearer " <> api_key)
+    Some(api_key) ->
+      request.set_header(req, "authorization", "Bearer " <> api_key)
     None -> req
   }
   use resp <- result.try(
     httpc.send(req)
-    |> result.map_error(fn(error) { "fiducia: transport: " <> string.inspect(error) }),
+    |> result.map_error(fn(error) {
+      "fiducia: transport: " <> string.inspect(error)
+    }),
   )
   case resp.status >= 300 {
     True ->
@@ -164,7 +179,9 @@ fn post(
         decode.success(output)
       }
       json.parse(resp.body, decoder)
-      |> result.map_error(fn(error) { "fiducia: malformed response: " <> string.inspect(error) })
+      |> result.map_error(fn(error) {
+        "fiducia: malformed response: " <> string.inspect(error)
+      })
     }
   }
 }
@@ -227,7 +244,10 @@ fn poll_acquire(
         ttl_ms: opts.ttl_ms,
       ))
     True, None ->
-      Error(core.transport_error(key, "fiducia: acquired without a fencing token"))
+      Error(core.transport_error(
+        key,
+        "fiducia: acquired without a fencing token",
+      ))
     False, _ ->
       case wait {
         False -> Error(core.contention(key, core.FiduciaTryAcquire))
