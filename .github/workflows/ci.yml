@@ -151,5 +151,15 @@ jobs:
       - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with: { otp-version: "27", gleam-version: "1.16.0", rebar3-version: "3" }
+      - name: Install pinned Zed CLI
+        env:
+          ZED_SHA256: f87576bc289e43ed647902527e7be70566445d2f1fd11249f067ab35547d4b8a
+          ZED_URL: https://github.com/zed-pkg/zed-cli/releases/download/v0.3.0/zed-x86_64-unknown-linux-gnu.tar.gz
+        run: |
+          mkdir -p "$RUNNER_TEMP/zed-v0.3.0"
+          curl --fail --location --silent --show-error "$ZED_URL" --output "$RUNNER_TEMP/zed-v0.3.0.tar.gz"
+          echo "$ZED_SHA256  $RUNNER_TEMP/zed-v0.3.0.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/zed-v0.3.0.tar.gz" -C "$RUNNER_TEMP/zed-v0.3.0"
+          echo "$RUNNER_TEMP/zed-v0.3.0" >> "$GITHUB_PATH"
       - name: Generate and test the lib-core package in every runtime
         run: scripts/test-generated-lib-core.sh
