@@ -1008,8 +1008,8 @@ def git(repo: pathlib.Path, *args: str, env: dict | None = None, check: bool = T
     return result.stdout
 
 
-def head_file(repo: pathlib.Path, path: str) -> str | None:
-    result = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{path}"], capture_output=True, text=True)
+def ref_file(repo: pathlib.Path, ref: str, path: str) -> str | None:
+    result = subprocess.run(["git", "-C", str(repo), "show", f"{ref}:{path}"], capture_output=True, text=True)
     return result.stdout if result.returncode == 0 else None
 
 
@@ -1063,13 +1063,13 @@ def main() -> int:
 
     repo = pathlib.Path(args.repo).expanduser().resolve()
     interfaces_name = args.interfaces or f"{args.prefix}-interfaces"
-    catalog_text = head_file(repo, "locks/catalog.json") if args.commit else (
+    catalog_text = ref_file(repo, args.base_ref, "locks/catalog.json") if args.commit else (
         (repo / "locks/catalog.json").read_text() if (repo / "locks/catalog.json").exists() else None
     )
     catalog = json.loads(catalog_text)["entries"] if catalog_text else DEFAULT_CATALOG
 
     files = render(args.org, args.prefix, catalog, interfaces_name)
-    root_manifest = head_file(repo, ".zpkg.toml") if args.commit else ((repo / ".zpkg.toml").read_text() if (repo / ".zpkg.toml").exists() else None)
+    root_manifest = ref_file(repo, args.base_ref, ".zpkg.toml") if args.commit else ((repo / ".zpkg.toml").read_text() if (repo / ".zpkg.toml").exists() else None)
     files[".zpkg.toml"] = patch_root_manifest(root_manifest, args.org, args.prefix, interfaces_name)
 
     if args.stdout:
