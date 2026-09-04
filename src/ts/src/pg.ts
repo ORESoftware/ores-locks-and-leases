@@ -5,7 +5,7 @@
  * existing pool and no second driver is pulled in.
  */
 
-import { LockError, tagStep } from "./errors.js";
+import { LockError, cleanupFailure, tagStep } from "./errors.js";
 import { advisoryKey, type LockKey } from "./key.js";
 import {
   acquireLease,
@@ -195,14 +195,19 @@ async function runSession<T>(key: LockKey, wait: boolean, pool: PgPool, grant: L
 
     const inner = await settled(runWork(key, { key, grant, client }, work));
     const unlocked = await settled(client.query("SELECT pg_advisory_unlock($1)", [advisoryKey(key).toString()]));
-    if (!inner.ok) throw inner.error;
     if (!unlocked.ok) {
       poisoned = true;
-      throw LockError.database(key, "pg.advisory_unlock", unlocked.error);
+      const cleanup = LockError.database(key, "pg.advisory_unlock", unlocked.error);
+      if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error);
+      throw cleanup;
     }
     if (!firstBool(unlocked.value.rows)) {
-      throw new LockError("database", key, `pg_advisory_unlock reported the session did not hold \`${key}\``, { step: "pg.advisory_unlock" });
+      poisoned = true;
+      const cleanup = new LockError("database", key, `pg_advisory_unlock reported the session did not hold \`${key}\``, { step: "pg.advisory_unlock" });
+      if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error);
+      throw cleanup;
     }
+    if (!inner.ok) throw inner.error;
     return inner.value;
   } catch (err) {
     throw tagStep(err, "pg.advisory_lock");

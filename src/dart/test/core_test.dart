@@ -13,9 +13,13 @@ List<dynamic> cases(String name) =>
 final class FakeLease implements Lease {
   bool held;
   final bool lapseOnRelease;
+  final bool failRelease;
   BigInt next = BigInt.zero;
   final log = <LockStep>[];
-  FakeLease({this.held = false, this.lapseOnRelease = false});
+  FakeLease(
+      {this.held = false,
+      this.lapseOnRelease = false,
+      this.failRelease = false});
 
   @override
   Future<LeaseGrant> acquire(LockKey key, AcquireOptions opts,
@@ -43,6 +47,10 @@ final class FakeLease implements Lease {
   @override
   Future<bool> release(LeaseGrant grant) async {
     log.add(LockStep.fiduciaRelease);
+    if (failRelease) {
+      throw LockError.transport(
+          grant.key, 'release transport failed; ownership is unknown');
+    }
     held = false;
     return !lapseOnRelease;
   }
@@ -144,6 +152,43 @@ void main() {
       );
       expect(called, isFalse);
     });
+
+    test('fails closed on fencing tokens outside exact JSON-number range',
+        () async {
+      final responseLease = FiduciaLease.bearer(
+        'https://fiducia.example',
+        apiKey: 'test-key',
+        client: MockClient((_) async => http.Response(
+            '{"result":{"output":{"acquired":true,"fencing_token":9007199254740993}}}',
+            200)),
+      );
+      await expectLater(
+          responseLease.acquire(key, const AcquireOptions(), wait: false),
+          throwsA(isA<LockError>()
+              .having((e) => e.kind, 'kind', LockErrorKind.transport)));
+
+      var called = false;
+      final requestLease = FiduciaLease.bearer(
+        'https://fiducia.example',
+        apiKey: 'test-key',
+        client: MockClient((_) async {
+          called = true;
+          return http.Response('{}', 200);
+        }),
+      );
+      await expectLater(
+        requestLease.release(LeaseGrant(
+            key: key,
+            holder: 'holder',
+            fencingToken: BigInt.parse('9007199254740993'),
+            ttlMs: 1000)),
+        throwsA(isA<LockError>()
+            .having((e) => e.kind, 'kind', LockErrorKind.transport)
+            .having((e) => e.message, 'message',
+                contains('cannot be represented exactly'))),
+      );
+      expect(called, isFalse);
+    });
   });
 
   group('withLease', () {
@@ -217,6 +262,39 @@ void main() {
           throwsA(isA<LockError>()
               .having((e) => e.kind, 'kind', LockErrorKind.lostLease)
               .having((e) => e.step, 'step', LockStep.fiduciaRelease)));
+    });
+
+    test('cleanup failure wins over work failure and retains both diagnostics',
+        () async {
+      final lease = FakeLease(failRelease: true);
+      await expectLater(
+        withLease(key,
+            engage: true,
+            wait: true,
+            lease: lease,
+            work: (_) async => throw StateError('work exploded')),
+        throwsA(isA<LockError>()
+            .having((e) => e.kind, 'kind', LockErrorKind.transport)
+            .having((e) => e.step, 'step', LockStep.fiduciaRelease)
+            .having((e) => e.message, 'message', contains('work exploded'))),
+      );
+      expect(lease.held, isTrue,
+          reason: 'transport failure leaves ownership unknown');
+    });
+
+    test('confirmed lapse wins over work failure', () async {
+      final lease = FakeLease(lapseOnRelease: true);
+      await expectLater(
+        withLease(key,
+            engage: true,
+            wait: true,
+            lease: lease,
+            work: (_) async => throw StateError('work exploded')),
+        throwsA(isA<LockError>()
+            .having((e) => e.kind, 'kind', LockErrorKind.lostLease)
+            .having((e) => e.step, 'step', LockStep.fiduciaRelease)
+            .having((e) => e.message, 'message', contains('work exploded'))),
+      );
     });
   });
 }

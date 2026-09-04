@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +95,7 @@ type fakeLease struct {
 	held           bool
 	next           uint64
 	lapseOnRelease bool
+	failRelease    bool
 	log            []Step
 }
 
@@ -121,10 +123,13 @@ func (f *fakeLease) Renew(_ context.Context, g LeaseGrant, ttl time.Duration) (L
 	return g, nil
 }
 
-func (f *fakeLease) Release(_ context.Context, _ LeaseGrant) (bool, error) {
+func (f *fakeLease) Release(_ context.Context, grant LeaseGrant) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log = append(f.log, StepFiduciaRelease)
+	if f.failRelease {
+		return false, transportErr(grant.Key, errors.New("release transport failed; ownership is unknown"))
+	}
 	f.held = false
 	return !f.lapseOnRelease, nil
 }
@@ -190,6 +195,20 @@ func TestWithLeaseFailures(t *testing.T) {
 	if !errors.As(err, &le) || le.Kind != KindLostLease || le.Step != StepFiduciaRelease {
 		t.Fatalf("want lost_lease at release, got %v", err)
 	}
+
+	// Cleanup failure wins over work failure, retaining the work diagnostic.
+	lease = &fakeLease{failRelease: true}
+	err = WithLease(context.Background(), "t/x", true, true, DefaultAcquireOptions(), lease, func(context.Context, Guarded) error { return errors.New("work exploded") })
+	if !errors.As(err, &le) || le.Kind != KindTransport || le.Step != StepFiduciaRelease || !strings.Contains(le.Message, "work exploded") || !lease.held {
+		t.Fatalf("want transport cleanup error with work context, got %v held=%v", err, lease.held)
+	}
+
+	// A confirmed lapse also wins over work failure: fenced authority is gone.
+	lease = &fakeLease{lapseOnRelease: true}
+	err = WithLease(context.Background(), "t/x", true, true, DefaultAcquireOptions(), lease, func(context.Context, Guarded) error { return errors.New("work exploded") })
+	if !errors.As(err, &le) || le.Kind != KindLostLease || le.Step != StepFiduciaRelease || !strings.Contains(le.Message, "work exploded") {
+		t.Fatalf("want lost_lease cleanup error with work context, got %v", err)
+	}
 }
 
 // --- fake database/sql driver ----------------------------------------------
@@ -210,7 +229,7 @@ func (d *recDriver) Open(string) (driver.Conn, error) { return &recConn{d: d}, n
 type recConn struct{ d *recDriver }
 
 func (c *recConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("unused") }
-func (c *recConn) Close() error                        { return nil }
+func (c *recConn) Close() error                        { c.d.record("CLOSE"); return nil }
 func (c *recConn) Begin() (driver.Tx, error)           { c.d.record("BEGIN"); return recTx{d: c.d}, nil }
 func (c *recConn) ExecContext(_ context.Context, q string, _ []driver.NamedValue) (driver.Result, error) {
 	c.d.record(q)
@@ -378,6 +397,25 @@ func TestWithSessionLockUnlockMismatchIsDatabaseError(t *testing.T) {
 	}
 }
 
+func TestSessionUnlockFailureWinsOverWorkFailure(t *testing.T) {
+	db, recorder := openRec(t, true, false)
+	defer db.Close()
+	err := WithSessionLock(context.Background(), "t/session-cleanup", LayersPgOnly, true, DefaultAcquireOptions(), nil, db, func(context.Context, SessionGuarded) error {
+		return errors.New("work exploded")
+	})
+	var lockErr *Error
+	if !errors.As(err, &lockErr) || lockErr.Kind != KindDatabase || lockErr.Step != StepPgAdvisoryUnlock || !strings.Contains(lockErr.Message, "work exploded") {
+		t.Fatalf("want unlock cleanup error with work context, got %v", err)
+	}
+	closed := false
+	for _, step := range recorder.log {
+		closed = closed || step == "CLOSE"
+	}
+	if !closed {
+		t.Fatalf("uncertain session was returned to the pool instead of discarded: %v", recorder.log)
+	}
+}
+
 func TestInvalidPlans(t *testing.T) {
 	var le *Error
 	err := WithXactLock(context.Background(), "t/x", LayersPgOnly, true, DefaultAcquireOptions(), nil, nil, func(context.Context, XactGuarded) error { return nil })
@@ -488,6 +526,24 @@ func TestFiduciaLeaseProtocol(t *testing.T) {
 	ok, err = lease.Release(context.Background(), g)
 	if err != nil || ok {
 		t.Fatalf("second release must be a no-op: %v %v", ok, err)
+	}
+}
+
+func TestFiduciaHTTPAdapterPreservesFullUint64Tokens(t *testing.T) {
+	const token = uint64(9_007_199_254_740_993)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"result":{"output":{"acquired":true,"fencing_token":9007199254740993,"lease_expires_ms":1700000000000}}}`)
+	}))
+	defer server.Close()
+
+	lease := NewFiduciaBearer(server.URL, "test-key")
+	grant, err := lease.Acquire(context.Background(), "t/full-u64", DefaultAcquireOptions(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.FencingToken != token {
+		t.Fatalf("fencing token %d, want %d", grant.FencingToken, token)
 	}
 }
 

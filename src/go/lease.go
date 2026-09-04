@@ -122,15 +122,16 @@ func acquireLease(ctx context.Context, key LockKey, wait bool, opts AcquireOptio
 // costs everyone a full TTL.
 func settle(ctx context.Context, key LockKey, lease Lease, grant LeaseGrant, inner error) error {
 	released, err := lease.Release(context.WithoutCancel(ctx), grant)
+	var cleanup error
 	switch {
-	case inner != nil:
-		return inner
 	case err != nil:
-		return tagStep(err, StepFiduciaRelease)
+		cleanup = tagStep(err, StepFiduciaRelease)
 	case !released:
-		return newError(KindLostLease, key, StepFiduciaRelease,
+		cleanup = newError(KindLostLease, key, StepFiduciaRelease,
 			fmt.Sprintf("release of `%s` (holder %s, fencing token %d) matched no grant: the lease lapsed while the work ran", key, grant.Holder, grant.FencingToken), nil)
-	default:
-		return nil
 	}
+	if cleanup != nil {
+		return cleanupFailure(cleanup, inner)
+	}
+	return inner
 }

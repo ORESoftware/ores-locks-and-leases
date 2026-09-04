@@ -343,6 +343,19 @@ pub fn tag_step(error: LockError, step: Step) -> LockError {
   }
 }
 
+/// Keep a safety-critical cleanup failure primary while retaining the guarded
+/// operation's earlier failure. A failed release/unlock leaves ownership or
+/// session state unknown, so callers must not see only a work error and assume
+/// an immediate whole-operation retry is safe.
+pub fn cleanup_failure(cleanup: LockError, inner: LockError) -> LockError {
+  LockError(
+    ..cleanup,
+    message: cleanup.message
+      <> "; guarded operation also failed: "
+      <> error_to_string(inner),
+  )
+}
+
 // --- lease ------------------------------------------------------------------
 
 /// Acquisition tuning shared by every layer. The contract's `AcquireOptions`.
@@ -449,23 +462,30 @@ pub fn settle(
 ) -> Result(t, LockError) {
   let released = lease.release(grant)
   case inner, released {
-    Error(error), _ -> Error(error)
+    Error(inner), Error(cleanup) ->
+      Error(cleanup_failure(tag_step(cleanup, FiduciaRelease), inner))
+    Error(inner), Ok(False) ->
+      Error(cleanup_failure(release_lost(key, grant), inner))
+    Error(inner), Ok(True) -> Error(inner)
     Ok(_), Error(error) -> Error(tag_step(error, FiduciaRelease))
-    Ok(_), Ok(False) ->
-      Error(LockError(
-        LostLease,
-        key,
-        Some(FiduciaRelease),
-        "release of `"
-          <> key_to_string(key)
-          <> "` (holder "
-          <> grant.holder
-          <> ", fencing token "
-          <> int.to_string(grant.fencing_token)
-          <> ") matched no grant: the lease lapsed while the work ran",
-      ))
+    Ok(_), Ok(False) -> Error(release_lost(key, grant))
     Ok(value), Ok(True) -> Ok(value)
   }
+}
+
+fn release_lost(key: LockKey, grant: LeaseGrant) -> LockError {
+  LockError(
+    LostLease,
+    key,
+    Some(FiduciaRelease),
+    "release of `"
+      <> key_to_string(key)
+      <> "` (holder "
+      <> grant.holder
+      <> ", fencing token "
+      <> int.to_string(grant.fencing_token)
+      <> ") matched no grant: the lease lapsed while the work ran",
+  )
 }
 
 /// A holder id for adapters when the caller supplied none.

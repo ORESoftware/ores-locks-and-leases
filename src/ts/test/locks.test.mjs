@@ -51,7 +51,7 @@ test("lock keys are length-bounded in bytes", () => {
 
 // --- fakes ------------------------------------------------------------------
 
-function fakeLease({ held = false, lapseOnRelease = false } = {}) {
+function fakeLease({ held = false, lapseOnRelease = false, failRelease = false } = {}) {
   const lease = {
     held,
     next: 0n,
@@ -68,6 +68,7 @@ function fakeLease({ held = false, lapseOnRelease = false } = {}) {
     },
     async release() {
       lease.log.push("fiducia.release");
+      if (failRelease) throw LockError.transport(key, new Error("release transport failed; ownership is unknown"));
       lease.held = false;
       return !lapseOnRelease;
     },
@@ -76,7 +77,7 @@ function fakeLease({ held = false, lapseOnRelease = false } = {}) {
 }
 
 /** A node-postgres-shaped pool that records statements; try-locks answer `acquired`. */
-function fakePool({ acquired = true, unlocked = true } = {}) {
+function fakePool({ acquired = true, unlocked = true, failUnlock = false } = {}) {
   const pool = {
     log: [],
     released: [],
@@ -86,7 +87,10 @@ function fakePool({ acquired = true, unlocked = true } = {}) {
         async query(text) {
           pool.log.push(text);
           if (text.startsWith("SELECT pg_try_advisory")) return { rows: [{ pg_try: acquired }] };
-          if (text.startsWith("SELECT pg_advisory_unlock")) return { rows: [{ pg_advisory_unlock: unlocked }] };
+          if (text.startsWith("SELECT pg_advisory_unlock")) {
+            if (failUnlock) throw new Error("unlock transport failed");
+            return { rows: [{ pg_advisory_unlock: unlocked }] };
+          }
           return { rows: [] };
         },
         release(err) {
@@ -141,6 +145,27 @@ test("withLease: contention without wait, timeout with wait, lost_lease on lapse
   await assert.rejects(withLease(key, true, true, DEFAULT_ACQUIRE_OPTIONS, busy, async () => 1), (e) => e.kind === "timeout");
   const lapsing = fakeLease({ lapseOnRelease: true });
   await assert.rejects(withLease(key, true, true, DEFAULT_ACQUIRE_OPTIONS, lapsing, async () => 1), (e) => e.kind === "lost_lease" && e.step === "fiducia.release");
+});
+
+test("withLease: cleanup failure wins over work failure and retains both diagnostics", async () => {
+  const lease = fakeLease({ failRelease: true });
+  await assert.rejects(
+    withLease(key, true, true, DEFAULT_ACQUIRE_OPTIONS, lease, async () => {
+      throw new Error("work exploded");
+    }),
+    (e) => e instanceof LockError && e.kind === "transport" && e.step === "fiducia.release" && e.message.includes("work exploded"),
+  );
+  assert.equal(lease.held, true, "transport failure leaves ownership unknown");
+});
+
+test("withLease: confirmed lapse wins over work failure", async () => {
+  const lease = fakeLease({ lapseOnRelease: true });
+  await assert.rejects(
+    withLease(key, true, true, DEFAULT_ACQUIRE_OPTIONS, lease, async () => {
+      throw new Error("work exploded");
+    }),
+    (e) => e instanceof LockError && e.kind === "lost_lease" && e.step === "fiducia.release" && e.message.includes("work exploded"),
+  );
 });
 
 // --- withXactLock -----------------------------------------------------------
@@ -210,6 +235,18 @@ test("withSessionLock: unlock mismatch is a database error at pg.advisory_unlock
     withSessionLock(key, LAYERS_PG_ONLY, true, DEFAULT_ACQUIRE_OPTIONS, undefined, pool, async () => 1),
     (e) => e.kind === "database" && e.step === "pg.advisory_unlock",
   );
+  assert.deepEqual(pool.released, [true], "an uncertain session must be destroyed, not pooled");
+});
+
+test("withSessionLock: unlock failure wins over work failure and poisons the client", async () => {
+  const pool = fakePool({ failUnlock: true });
+  await assert.rejects(
+    withSessionLock(key, LAYERS_PG_ONLY, true, DEFAULT_ACQUIRE_OPTIONS, undefined, pool, async () => {
+      throw new Error("work exploded");
+    }),
+    (e) => e instanceof LockError && e.kind === "database" && e.step === "pg.advisory_unlock" && e.message.includes("work exploded"),
+  );
+  assert.deepEqual(pool.released, [true]);
 });
 
 // --- fiducia over a fake fetch ---------------------------------------------
@@ -269,4 +306,33 @@ test("FiduciaLease refuses credentials over cleartext to non-local hosts", async
   assert.equal(cleartextRefusal("https://fiducia.example.com", true, false), undefined);
   const lease = new FiduciaLease({ baseUrl: "http://fiducia.example.com", apiKey: "k", fetch: async () => assert.fail("must not send") });
   await assert.rejects(lease.acquire(key, DEFAULT_ACQUIRE_OPTIONS, false), (e) => e.kind === "transport");
+});
+
+test("FiduciaLease fails closed on fencing tokens outside exact JSON-number range", async () => {
+  let calls = 0;
+  const responseLease = new FiduciaLease({
+    baseUrl: "https://fiducia.example",
+    apiKey: "k",
+    fetch: async () => ({
+      status: 200,
+      async text() {
+        return '{"result":{"output":{"acquired":true,"fencing_token":9007199254740993}}}';
+      },
+    }),
+  });
+  await assert.rejects(responseLease.acquire(key, DEFAULT_ACQUIRE_OPTIONS, false), (e) => e.kind === "transport");
+
+  const requestLease = new FiduciaLease({
+    baseUrl: "https://fiducia.example",
+    apiKey: "k",
+    fetch: async () => {
+      calls += 1;
+      return { status: 200, text: async () => "{}" };
+    },
+  });
+  await assert.rejects(
+    requestLease.release({ key, holder: "holder", fencingToken: 9_007_199_254_740_993n, ttlMs: 1000 }),
+    (e) => e.kind === "transport" && e.message.includes("cannot be represented exactly"),
+  );
+  assert.equal(calls, 0, "an inexact fencing token must never reach the network");
 });

@@ -173,15 +173,20 @@ Future<T> withSessionLock<T>(
           work));
       final unlocked = await settled(() => _queryBool(connection, key,
           'SELECT pg_advisory_unlock(@k)', LockStep.pgAdvisoryUnlock));
-      if (!result.ok) Error.throwWithStackTrace(result.error!, result.trace!);
       if (!unlocked.ok) {
+        if (!result.ok) {
+          throw cleanupFailure(key, unlocked.error!, result.error!);
+        }
         Error.throwWithStackTrace(unlocked.error!, unlocked.trace!);
       }
       if (unlocked.value != true) {
-        throw LockError(LockErrorKind.database, key,
+        final cleanup = LockError(LockErrorKind.database, key,
             'pg_advisory_unlock reported the session did not hold `$key`',
             step: LockStep.pgAdvisoryUnlock);
+        if (!result.ok) throw cleanupFailure(key, cleanup, result.error!);
+        throw cleanup;
       }
+      if (!result.ok) Error.throwWithStackTrace(result.error!, result.trace!);
       return result.value as T;
     });
   });

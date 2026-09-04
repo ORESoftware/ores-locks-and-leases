@@ -292,16 +292,22 @@ fn run_session(
       core.PgAdvisoryUnlock,
     )
   case inner, unlocked {
-    Error(error), _ -> Error(error)
+    Error(inner), Error(cleanup) -> Error(core.cleanup_failure(cleanup, inner))
+    Error(inner), Ok(False) ->
+      Error(core.cleanup_failure(unlock_mismatch(key), inner))
+    Error(inner), Ok(True) -> Error(inner)
     Ok(_), Error(error) -> Error(error)
-    Ok(_), Ok(False) ->
-      Error(core.database_error(
-        key,
-        core.PgAdvisoryUnlock,
-        "pg_advisory_unlock reported the session did not hold the lock",
-      ))
+    Ok(_), Ok(False) -> Error(unlock_mismatch(key))
     Ok(value), Ok(True) -> Ok(value)
   }
+}
+
+fn unlock_mismatch(key: core.LockKey) -> core.LockError {
+  core.database_error(
+    key,
+    core.PgAdvisoryUnlock,
+    "pg_advisory_unlock reported the session did not hold the lock",
+  )
 }
 
 fn pick_lease(
