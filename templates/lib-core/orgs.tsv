@@ -2,7 +2,7 @@
 sonus-auris	sonus-auris	sonus-auris-lib-core	sonus-auris-interfaces	sonus-auris
 daedalus-fab	daedalus	daedalus-lib-core	daedalus-interfaces	daedalus-fab
 cliptown	cliptown	cliptown-lib-core	cliptown-interfaces	cliptown
-agent-pontifex	ap	ap-lib-core	ap-interfaces	agent-pontifex
+agent-pontifex	agent-pontifex	agent-pontifex-lib-core	agent-pontifex-interfaces	agent-pontifex
 fanwaave	fanwaave	fanwaave-lib-core	fanwaave-interfaces	fanwaave
 athlet-o	athleto	athleto-lib-core	athleto-interfaces	athlet-o
 claritas-viz	claritas	claritas-lib-core	claritas-interfaces	claritas-viz
