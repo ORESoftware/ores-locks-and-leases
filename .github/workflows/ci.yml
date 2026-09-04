@@ -132,6 +132,7 @@ jobs:
             echo "generator unexpectedly accepted a branch without a Linear issue" >&2
             exit 1
           fi
+          sh scripts/test-generator-safety.sh
       - name: TypeSpec and JSON Schema authorities agree
         run: npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json
 
