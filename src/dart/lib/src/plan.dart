@@ -15,7 +15,10 @@ final class LockLayers {
   static const both = LockLayers(fiducia: true, pgAdvisory: true);
 
   @override
-  bool operator ==(Object other) => other is LockLayers && other.fiducia == fiducia && other.pgAdvisory == pgAdvisory;
+  bool operator ==(Object other) =>
+      other is LockLayers &&
+      other.fiducia == fiducia &&
+      other.pgAdvisory == pgAdvisory;
 
   @override
   int get hashCode => Object.hash(fiducia, pgAdvisory);
@@ -34,7 +37,8 @@ enum PgScope {
   final String wire;
   const PgScope(this.wire);
 
-  static PgScope parse(String value) => values.firstWhere((s) => s.wire == value);
+  static PgScope parse(String value) =>
+      values.firstWhere((s) => s.wire == value);
 }
 
 /// One action in a plan. [wire] is the contract's `LockStep` value.
@@ -55,7 +59,8 @@ enum LockStep {
   final String wire;
   const LockStep(this.wire);
 
-  static LockStep parse(String value) => values.firstWhere((s) => s.wire == value);
+  static LockStep parse(String value) =>
+      values.firstWhere((s) => s.wire == value);
 }
 
 /// The ordered actions for one `(layers, scope, wait)` tuple.
@@ -65,16 +70,22 @@ final class LockPlan {
   final bool wait;
   final List<LockStep> steps;
 
-  const LockPlan({required this.layers, required this.pgScope, required this.wait, required this.steps});
+  const LockPlan(
+      {required this.layers,
+      required this.pgScope,
+      required this.wait,
+      required this.steps});
 }
 
 /// Compute the plan. Pure; identical across every language slice. [wait]
 /// blocks each layer up to its budget; `!wait` uses the non-blocking form of
 /// each acquisition and fails fast with `contention`.
 LockPlan plan(LockLayers layers, PgScope pgScope, bool wait) {
-  LockStep pick(LockStep blocking, LockStep nonBlocking) => wait ? blocking : nonBlocking;
+  LockStep pick(LockStep blocking, LockStep nonBlocking) =>
+      wait ? blocking : nonBlocking;
   final steps = <LockStep>[
-    if (layers.fiducia) pick(LockStep.fiduciaAcquire, LockStep.fiduciaTryAcquire),
+    if (layers.fiducia)
+      pick(LockStep.fiduciaAcquire, LockStep.fiduciaTryAcquire),
     if (!layers.pgAdvisory)
       LockStep.work
     else if (pgScope == PgScope.session) ...[
@@ -89,5 +100,9 @@ LockPlan plan(LockLayers layers, PgScope pgScope, bool wait) {
     ],
     if (layers.fiducia) LockStep.fiduciaRelease,
   ];
-  return LockPlan(layers: layers, pgScope: pgScope, wait: wait, steps: List.unmodifiable(steps));
+  return LockPlan(
+      layers: layers,
+      pgScope: pgScope,
+      wait: wait,
+      steps: List.unmodifiable(steps));
 }

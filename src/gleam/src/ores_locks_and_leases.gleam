@@ -71,7 +71,10 @@ fn fold_bytes(bytes: BitArray, hash: Int) -> Int {
     <<byte:int, rest:bits>> ->
       fold_bytes(
         rest,
-        int.bitwise_and(int.bitwise_exclusive_or(hash, byte) * fnv_prime, mask64),
+        int.bitwise_and(
+          int.bitwise_exclusive_or(hash, byte) * fnv_prime,
+          mask64,
+        ),
       )
     _ -> hash
   }

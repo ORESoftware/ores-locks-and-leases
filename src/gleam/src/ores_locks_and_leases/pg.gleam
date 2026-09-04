@@ -69,7 +69,8 @@ fn query_bool(
   |> result.try(fn(returned) {
     case returned.rows {
       [value, ..] -> Ok(value)
-      [] -> Error(core.database_error(key, step, "`" <> sql <> "` returned no row"))
+      [] ->
+        Error(core.database_error(key, step, "`" <> sql <> "` returned no row"))
     }
   })
 }
@@ -327,7 +328,8 @@ fn acquire(
 ) -> Result(Option(core.LeaseGrant), core.LockError) {
   case lease {
     None -> Ok(None)
-    Some(lease) -> core.acquire_lease(key, wait, opts, lease) |> result.map(Some)
+    Some(lease) ->
+      core.acquire_lease(key, wait, opts, lease) |> result.map(Some)
   }
 }
 

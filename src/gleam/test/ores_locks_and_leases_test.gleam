@@ -50,7 +50,10 @@ pub fn lock_plan_matrix_test() {
     use layers <- decode.field("layers", layers_decoder)
     use scope <- decode.field("pgScope", decode.string)
     use wait <- decode.field("wait", decode.bool)
-    use steps <- decode.subfield(["expect", "steps"], decode.list(decode.string))
+    use steps <- decode.subfield(
+      ["expect", "steps"],
+      decode.list(decode.string),
+    )
     decode.success(#(name, layers, scope, wait, steps))
   }
   let decoder = {
@@ -62,8 +65,7 @@ pub fn lock_plan_matrix_test() {
   list.each(cases, fn(c) {
     let #(_name, layers, scope, wait, expected) = c
     let assert Ok(scope) = locks.pg_scope_from_string(scope)
-    let assert Ok(expected) =
-      list.try_map(expected, locks.step_from_string)
+    let assert Ok(expected) = list.try_map(expected, locks.step_from_string)
     locks.plan(layers, scope, wait).steps |> should.equal(expected)
   })
 }
@@ -87,7 +89,8 @@ fn fake_lease(fake: Fake) -> locks.Lease {
   locks.Lease(
     acquire: fn(key, opts, wait) {
       case fake.held, wait {
-        True, True -> Error(locks.timeout(key, locks.FiduciaAcquire, opts.wait_timeout_ms))
+        True, True ->
+          Error(locks.timeout(key, locks.FiduciaAcquire, opts.wait_timeout_ms))
         True, False -> Error(locks.contention(key, locks.FiduciaTryAcquire))
         False, _ ->
           Ok(locks.LeaseGrant(
@@ -167,11 +170,25 @@ pub fn with_lease_work_failure_is_work_test() {
 pub fn with_lease_contention_timeout_and_lost_lease_test() {
   let busy = Some(fake_lease(Fake(True, False)))
   let assert Error(contended) =
-    locks.with_lease(key(), True, False, locks.default_acquire_options(), busy, fn(_) { Ok(Nil) })
+    locks.with_lease(
+      key(),
+      True,
+      False,
+      locks.default_acquire_options(),
+      busy,
+      fn(_) { Ok(Nil) },
+    )
   contended.kind |> should.equal(locks.Contention)
   locks.retryable(contended) |> should.be_true
   let assert Error(timed_out) =
-    locks.with_lease(key(), True, True, locks.default_acquire_options(), busy, fn(_) { Ok(Nil) })
+    locks.with_lease(
+      key(),
+      True,
+      True,
+      locks.default_acquire_options(),
+      busy,
+      fn(_) { Ok(Nil) },
+    )
   timed_out.kind |> should.equal(locks.Timeout)
   let assert Error(lost) =
     locks.with_lease(
