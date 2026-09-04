@@ -1,8 +1,7 @@
 [package]
-org = "ORESoftware"
+org = "oresoftware"
 name = "ores-locks-and-leases"
 version = "0.1.0"
-kind = "library"
 description = "Composed distributed locking for the fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer switchable, with fencing tokens threaded through to the guarded work — Rust, Go, TypeScript, Dart and Gleam slices held to one conformance corpus"
 license = "MIT"
 keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing", "fiducia", "polyglot"]
@@ -15,7 +14,7 @@ url = "https://github.com/ORESoftware/ores-locks-and-leases"
 # for parity by ores-contracts; the fiducia wire protocol is the one the
 # fiducia-clients speak. Neither is a runtime dependency of the slices.
 [dependencies]
-"ORESoftware/ores-contracts" = "^0.1.0"
+"oresoftware/ores-contracts" = "^0.1.0"
 
 [publish]
 include_readme = true
@@ -92,4 +91,3 @@ adapter = "none"
 
 [scripts]
 test = "sh scripts/test-all.sh"
-contracts = "npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json"

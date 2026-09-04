@@ -6,7 +6,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d)
-vendor_parent="$scratch/.vendor/.zed/ORESoftware"
+vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
 
 log() { printf '[generated-lib-core] %s\n' "$*"; }
 
@@ -19,6 +19,17 @@ python3 "$repo_root/templates/lib-core/gen_org_locks.py" \
 
 mkdir -p "$vendor_parent"
 ln -s "$repo_root" "$vendor_parent/ores-locks-and-leases"
+
+log "Zed manifests"
+(
+  cd "$repo_root"
+  zed validate
+)
+(
+  cd "$scratch"
+  zed validate
+  zed validate --manifest locks/.zpkg.toml
+)
 
 log "Rust"
 cargo test --manifest-path "$scratch/locks/rust/Cargo.toml" --all-targets --features full

@@ -36,12 +36,12 @@ import subprocess
 import sys
 import tempfile
 
-SHARED_ORG = "ORESoftware"
+SHARED_PACKAGE_ORG = "oresoftware"
 SHARED_NAME = "ores-locks-and-leases"
 SHARED_REQ = "^0.1.0"
 SHARED_GIT = "https://github.com/ORESoftware/ores-locks-and-leases.git"
 SHARED_TAG = "v0.1.0"
-VENDOR = "../../.vendor/.zed/ORESoftware/ores-locks-and-leases/src"
+VENDOR = "../.vendor/.zed/oresoftware/ores-locks-and-leases/src"
 
 # The catalog every org starts with. Orgs add their own rows to
 # locks/catalog.json; the generator re-emits every runtime from it.
@@ -103,6 +103,7 @@ def ident(prefix: str, style: str) -> str:
 
 
 def render(org: str, prefix: str, catalog: list[dict], interfaces_name: str) -> dict[str, str]:
+    package_org = org.lower()
     snake = ident(prefix, "snake")
     pascal = ident(prefix, "pascal")
     kebab = ident(prefix, "kebab")
@@ -120,7 +121,7 @@ def render(org: str, prefix: str, catalog: list[dict], interfaces_name: str) -> 
     ) + "\n"
 
     files["locks/.zpkg.toml"] = f'''[package]
-org = "{org}"
+org = "{package_org}"
 name = "{kebab}-locks"
 version = "0.1.0"
 description = "{org} lock routines: ORESoftware/ores-locks-and-leases (fiducia lease around a Postgres advisory lock) wrapped with the {org} key prefix and lock catalog"
@@ -134,12 +135,12 @@ url = "https://github.com/{org}/{prefix}-lib-core"
 # The shared routines, and the org's interfaces so catalog entries can
 # reference shared types (tenant ids, job names) instead of bare strings.
 [dependencies]
-"{SHARED_ORG}/{SHARED_NAME}" = "{SHARED_REQ}"
-"{org}/{interfaces_name}" = "^0.1.0"
-"{SHARED_ORG}/ores-contracts" = "^0.1.0"
+"{SHARED_PACKAGE_ORG}/{SHARED_NAME}" = "{SHARED_REQ}"
+"{package_org}/{interfaces_name}" = "^0.1.0"
+"{SHARED_PACKAGE_ORG}/ores-contracts" = "^0.1.0"
 
 [install]
-dir = "../.vendor/.zed"
+dir = ".vendor/.zed"
 
 [targets.rust]
 dir = "rust"
@@ -162,7 +163,7 @@ dir = "golang"
 adapter = "none"
 
 [scripts]
-contracts = "npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json"
+test = "npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json"
 '''
 
     entry_rows = "\n".join(
@@ -206,8 +207,8 @@ by `npx ores-contracts check --config contracts/contracts.config.json`.
 
 ## Resolving the shared package
 
-`.zpkg.toml` declares the dependency; `zed install` vendors it under
-`../.vendor/.zed/ORESoftware/ores-locks-and-leases`. The Rust crate pins the
+`.zpkg.toml` declares the dependency; run `zed install` from `locks/` to vendor
+it under `locks/.vendor/.zed/oresoftware/ores-locks-and-leases`. The Rust crate pins the
 shared crate by git tag and Go by module path, so they resolve without the
 vendor step; TypeScript, Dart and Gleam point at the vendored slice.
 '''
@@ -937,20 +938,16 @@ func TestPlaceholdersAreFilledInOrder(t *testing.T) {{
     return files
 
 
-DEP_LINES = {
-    f'"{SHARED_ORG}/{SHARED_NAME}"': f'"{SHARED_ORG}/{SHARED_NAME}" = "{SHARED_REQ}"',
-}
-
-
 def patch_root_manifest(text: str | None, org: str, prefix: str, interfaces_name: str) -> str:
     """Add the shared-package and interfaces dependencies to the root .zpkg.toml, once."""
+    package_org = org.lower()
     wanted = {
-        f'"{SHARED_ORG}/{SHARED_NAME}"': f'"{SHARED_ORG}/{SHARED_NAME}" = "{SHARED_REQ}"',
-        f'"{org}/{interfaces_name}"': f'"{org}/{interfaces_name}" = "^0.1.0"',
+        f'"{SHARED_PACKAGE_ORG}/{SHARED_NAME}"': f'"{SHARED_PACKAGE_ORG}/{SHARED_NAME}" = "{SHARED_REQ}"',
+        f'"{package_org}/{interfaces_name}"': f'"{package_org}/{interfaces_name}" = "^0.1.0"',
     }
     if text is None:
         text = f'''[package]
-org = "{org}"
+org = "{package_org}"
 name = "{prefix}-lib-core"
 version = "0.1.0"
 description = "Canonical {org} core library"
