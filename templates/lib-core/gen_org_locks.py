@@ -162,7 +162,7 @@ dir = "golang"
 adapter = "none"
 
 [scripts]
-contracts = "npx ores-contracts check --config contracts/contracts.config.json"
+contracts = "npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json"
 '''
 
     entry_rows = "\n".join(
@@ -346,6 +346,7 @@ model LockCatalog {{
 name = "{kebab}-locks"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 description = "{org} lock routines: ores-locks-and-leases with the {org} key prefix and lock catalog"
 repository = "https://github.com/{org}/{prefix}-lib-core"
@@ -480,7 +481,11 @@ mod tests {{
             "main": "./dist/index.js",
             "types": "./dist/index.d.ts",
             "files": ["dist"],
-            "scripts": {"build": "tsc -p tsconfig.json", "test": "npm run build && node --test test/*.test.mjs"},
+            "scripts": {
+                "build:shared": f"npm --prefix {VENDOR}/ts ci --no-audit --no-fund && npm --prefix {VENDOR}/ts run build",
+                "build": "npm run build:shared && tsc -p tsconfig.json",
+                "test": "npm run build && node --test test/*.test.mjs",
+            },
             "dependencies": {"@oresoftware/locks-and-leases": f"file:{VENDOR}/ts"},
             "devDependencies": {"typescript": "^5.4.0"},
         },
@@ -565,8 +570,8 @@ test("placeholders are filled in order and every entry plans", () => {{
 '''
 
     # --- dart ------------------------------------------------------------------
-    dart_domains = "\n".join(f"  {ident(d, 'snake').replace('_', '')}('{d}')," for d in domains)
-    dart_entries = "\n".join(
+    dart_domains = ",\n".join(f"  {ident(d, 'snake').replace('_', '')}('{d}')" for d in domains)
+    dart_entries = "\n\n".join(
         f'''  /// {e['description']}
   static const {camel(entry_ident(e, 'snake'))} = Entry(
     domain: Domain.{ident(e['domain'], 'snake').replace('_', '')},
@@ -628,12 +633,21 @@ final class Entry {{
   final PgScope pgScope;
   final bool wait;
 
-  const Entry({{required this.domain, required this.name, required this.layers, required this.pgScope, required this.wait}});
+  const Entry({{
+    required this.domain,
+    required this.name,
+    required this.layers,
+    required this.pgScope,
+    required this.wait,
+  }});
 
   /// The key for this entry with `{{placeholders}}` filled from [fill], in order of appearance.
   LockKey key(List<String> fill) {{
     var i = 0;
-    final filled = name.replaceAllMapped(RegExp(r'\\{{[^}}]*\\}}'), (_) => i < fill.length ? fill[i++] : '');
+    final filled = name.replaceAllMapped(
+      RegExp(r'\\{{[^}}]*\\}}'),
+      (_) => i < fill.length ? fill[i++] : '',
+    );
     return LockKey('$org/${{domain.wire}}/$filled');
   }}
 
@@ -641,7 +655,8 @@ final class Entry {{
   LockPlan get plan => planFor(layers, pgScope, wait);
 }}
 
-LockPlan planFor(LockLayers layers, PgScope scope, bool wait) => plan(layers, scope, wait);
+LockPlan planFor(LockLayers layers, PgScope scope, bool wait) =>
+    plan(layers, scope, wait);
 
 /// The catalog, as constants.
 abstract final class Catalog {{
@@ -657,7 +672,13 @@ void main() {{
   }});
 
   test('placeholders are filled in order', () {{
-    const entry = Entry(domain: Domain.{ident(domains[0], 'snake').replace('_', '')}, name: '{{a}}/x/{{b}}', layers: LockLayers.both, pgScope: PgScope.transaction, wait: true);
+    const entry = Entry(
+      domain: Domain.{ident(domains[0], 'snake').replace('_', '')},
+      name: '{{a}}/x/{{b}}',
+      layers: LockLayers.both,
+      pgScope: PgScope.transaction,
+      wait: true,
+    );
     expect(entry.key(['1', '2']).value, '{org}/{domains[0]}/1/x/2');
     expect(entry.plan.steps.first, LockStep.fiduciaAcquire);
   }});
@@ -733,7 +754,10 @@ pub type Entry {{
 }}
 
 /// The key for `entry` with `{{placeholders}}` filled from `fill`, in order.
-pub fn entry_key(entry: Entry, fill: List(String)) -> Result(locks.LockKey, String) {{
+pub fn entry_key(
+  entry: Entry,
+  fill: List(String),
+) -> Result(locks.LockKey, String) {{
   key(entry.domain, fill_placeholders(entry.name, fill))
 }}
 
@@ -817,6 +841,12 @@ pub fn placeholders_are_filled_in_order_test() {{
 go 1.22
 
 require github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.0
+'''
+    # Pin the immutable nested-module release. This keeps generated consumers
+    # reproducible even while a freshly published version is still propagating
+    # through proxy.golang.org and sum.golang.org caches.
+    files["locks/golang/go.sum"] = '''github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.0 h1:ukOGh6w3yz4vgQry8+ADiGWxha66zATdrAmpOfWBKhA=
+github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.0/go.mod h1:L5hcHZjI6AjJa0swONnyu5lMQwNp74krvEyoKSUN66g=
 '''
     files["locks/golang/locks.go"] = f'''// Package {snake}locks wraps ORESoftware/ores-locks-and-leases with the {org}
 // key prefix and lock catalog. Generated from ../catalog.json by
