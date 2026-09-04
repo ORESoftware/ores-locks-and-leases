@@ -343,7 +343,11 @@ model LockCatalog {{
     }};'''
         for e in catalog
     )
-    files["locks/rust/Cargo.toml"] = f'''[package]
+    files["locks/rust/Cargo.toml"] = f'''# Keep this generated crate independent when the consumer repository is a
+# Cargo workspace that does not list locks/rust as a member.
+[workspace]
+
+[package]
 name = "{kebab}-locks"
 version = "0.1.0"
 edition = "2024"
