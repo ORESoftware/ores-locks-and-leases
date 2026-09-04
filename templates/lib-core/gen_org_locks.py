@@ -343,7 +343,12 @@ model LockCatalog {{
     }};'''
         for e in catalog
     )
-    files["locks/rust/Cargo.toml"] = f'''[package]
+    files["locks/rust/Cargo.toml"] = f'''# Keep this generated crate independent when the consumer repository is a
+# Cargo workspace that does not list locks/rust as a member.
+[workspace]
+resolver = "3"
+
+[package]
 name = "{kebab}-locks"
 version = "0.1.0"
 edition = "2024"
@@ -483,7 +488,7 @@ mod tests {{
             "types": "./dist/index.d.ts",
             "files": ["dist"],
             "scripts": {
-                "build:shared": f"npm --prefix {VENDOR}/ts ci --no-audit --no-fund && npm --prefix {VENDOR}/ts run build",
+                "build:shared": f"npm --prefix {VENDOR}/ts ci --no-audit --no-fund && node {VENDOR}/ts/node_modules/typescript/bin/tsc -p {VENDOR}/ts/tsconfig.json",
                 "build": "npm run build:shared && tsc -p tsconfig.json",
                 "test": "npm run build && node --test test/*.test.mjs",
             },

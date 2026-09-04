@@ -14,6 +14,15 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
 
+# Reproduce a lib-core whose repository root is a virtual Cargo workspace.
+# Without an explicit workspace in locks/rust/Cargo.toml, Cargo rejects the
+# generated package because it is nested below but absent from `members`.
+printf '%s\n' \
+  '[workspace]' \
+  'resolver = "2"' \
+  'members = []' \
+  > "$scratch/Cargo.toml"
+
 log() { printf '[generated-lib-core] %s\n' "$*"; }
 
 log "scratch: $scratch"
