@@ -1013,12 +1013,18 @@ def head_file(repo: pathlib.Path, path: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def commit_without_touching_worktree(repo: pathlib.Path, files: dict[str, str], branch: str, message: str) -> str:
-    """Build HEAD + files in a temporary index, commit, and point `branch` at it."""
+def commit_without_touching_worktree(
+    repo: pathlib.Path,
+    files: dict[str, str],
+    branch: str,
+    base_ref: str,
+    message: str,
+) -> str:
+    """Build base_ref + files in a temporary index, commit, and point branch at it."""
     with tempfile.TemporaryDirectory() as tmp:
         index = os.path.join(tmp, "index")
         env = dict(os.environ, GIT_INDEX_FILE=index)
-        head = git(repo, "rev-parse", "HEAD").strip()
+        head = git(repo, "rev-parse", f"{base_ref}^{{commit}}").strip()
         git(repo, "read-tree", head, env=env)
         for rel, content in files.items():
             blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"], input=content, capture_output=True, text=True, check=True).stdout.strip()
@@ -1027,12 +1033,18 @@ def commit_without_touching_worktree(repo: pathlib.Path, files: dict[str, str], 
         if tree == git(repo, "rev-parse", f"{head}^{{tree}}").strip():
             print(f"[gen] {repo.name}: nothing to commit (HEAD already carries the package)")
             return head
-        existing = git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}^{{tree}}", check=False).strip()
-        if existing == tree:
-            print(f"[gen] {repo.name}: {branch} already carries exactly this package; leaving it alone")
-            return git(repo, "rev-parse", f"refs/heads/{branch}").strip()
+        existing_commit = git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}^{{commit}}", check=False).strip()
+        if existing_commit:
+            existing_tree = git(repo, "rev-parse", f"{existing_commit}^{{tree}}").strip()
+            if existing_tree == tree:
+                print(f"[gen] {repo.name}: {branch} already carries exactly this package; leaving it alone")
+                return existing_commit
+            raise SystemExit(
+                f"{repo}: refusing to overwrite existing branch {branch}; "
+                "review or merge its unique work, then choose a new DEN-backed branch"
+            )
         commit = subprocess.run(["git", "-C", str(repo), "commit-tree", tree, "-p", head, "-m", message], capture_output=True, text=True, check=True).stdout.strip()
-        git(repo, "branch", "-f", branch, commit)
+        git(repo, "branch", branch, commit)
         print(f"[gen] {repo.name}: {branch} -> {commit[:12]} ({len(files)} files)")
         return commit
 
@@ -1043,7 +1055,8 @@ def main() -> int:
     ap.add_argument("--org", required=True, help="GitHub org, e.g. fanwaave")
     ap.add_argument("--prefix", required=True, help="repo prefix, e.g. fanwaave (repos are <prefix>-lib-core, <prefix>-interfaces)")
     ap.add_argument("--interfaces", help="interfaces package name; default <prefix>-interfaces")
-    ap.add_argument("--branch", default="feat/ores-locks-and-leases")
+    ap.add_argument("--branch", default="", help="DEN-backed branch name; required with --commit")
+    ap.add_argument("--base-ref", default="HEAD", help="commit/ref to use as the generated commit parent")
     ap.add_argument("--commit", action="store_true", help="commit to --branch via a temporary index without touching the working tree")
     ap.add_argument("--stdout", action="store_true", help="print the file list and exit")
     args = ap.parse_args()
@@ -1079,7 +1092,9 @@ def main() -> int:
     if args.commit:
         if not (repo / ".git").exists():
             raise SystemExit(f"{repo} is not a git repository")
-        commit_without_touching_worktree(repo, files, args.branch, message)
+        if not re.search(r"(?:^|/)DEN-[0-9]+(?:/|$)", args.branch, re.IGNORECASE):
+            raise SystemExit("--branch must contain a Linear identifier such as DEN-123")
+        commit_without_touching_worktree(repo, files, args.branch, args.base_ref, message)
         return 0
 
     for rel, content in files.items():

@@ -86,3 +86,19 @@ Object tagStep(Object error, LockStep step) {
   if (error is LockError && error.step == null) error.step = step;
   return error;
 }
+
+/// Keep a safety-critical cleanup failure primary while retaining the guarded
+/// operation's earlier failure. A failed release/unlock leaves ownership or
+/// session state unknown, so callers must not see only a work error and assume
+/// an immediate whole-operation retry is safe.
+LockError cleanupFailure(LockKey key, Object cleanup, Object inner) {
+  final normalized =
+      cleanup is LockError ? cleanup : LockError.transport(key, cleanup);
+  return LockError(
+    normalized.kind,
+    normalized.key,
+    '${normalized.message}; guarded operation also failed: $inner',
+    step: normalized.step,
+    cause: (cleanup: cleanup, inner: inner),
+  );
+}

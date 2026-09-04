@@ -5,7 +5,7 @@
  * the node HTTP protocol; tests use in-memory fakes.
  */
 
-import { LockError, tagStep } from "./errors.js";
+import { LockError, cleanupFailure, tagStep } from "./errors.js";
 import type { LockKey } from "./key.js";
 
 /**
@@ -119,15 +119,21 @@ export async function settled<T>(promise: Promise<T>): Promise<Outcome<T>> {
 /** Release the lease and combine its outcome with the inner one. */
 export async function settle<T>(key: LockKey, lease: Lease, grant: LeaseGrant, inner: Outcome<T>): Promise<T> {
   const released = await settled(lease.release(grant));
-  if (!inner.ok) throw inner.error;
-  if (!released.ok) throw tagStep(released.error, "fiducia.release");
+  if (!released.ok) {
+    const cleanup = tagStep(released.error, "fiducia.release");
+    if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error);
+    throw cleanup;
+  }
   if (!released.value) {
-    throw new LockError(
+    const cleanup = new LockError(
       "lost_lease",
       key,
       `release of \`${key}\` (holder ${grant.holder}, fencing token ${grant.fencingToken}) matched no grant: the lease lapsed while the work ran`,
       { step: "fiducia.release" },
     );
+    if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error);
+    throw cleanup;
   }
+  if (!inner.ok) throw inner.error;
   return inner.value;
 }

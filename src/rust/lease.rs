@@ -211,19 +211,25 @@ where
         .map_err(|err| tag_step(err, LockStep::FiduciaRelease));
 
     match (outcome, released) {
-        (Err(work_err), _) => Err(work_err),
+        (Err(work_err), Err(release_err)) => Err(release_err.after_inner_failure(&work_err)),
+        (Err(work_err), Ok(false)) => Err(release_lost(key, &grant).after_inner_failure(&work_err)),
+        (Err(work_err), Ok(true)) => Err(work_err),
         (Ok(_), Err(release_err)) => Err(release_err),
-        (Ok(_), Ok(false)) => Err(LockError::new(
-            LockErrorKind::LostLease,
-            key,
-            format!(
-                "release of `{key}` (holder {}, fencing token {}) matched no grant: the lease lapsed while the work ran",
-                grant.holder, grant.fencing_token
-            ),
-        )
-        .at(LockStep::FiduciaRelease)),
+        (Ok(_), Ok(false)) => Err(release_lost(key, &grant)),
         (Ok(value), Ok(true)) => Ok(value),
     }
+}
+
+pub(crate) fn release_lost(key: &LockKey, grant: &LeaseGrant) -> LockError {
+    LockError::new(
+        LockErrorKind::LostLease,
+        key,
+        format!(
+            "release of `{key}` (holder {}, fencing token {}) matched no grant: the lease lapsed while the work ran",
+            grant.holder, grant.fencing_token
+        ),
+    )
+    .at(LockStep::FiduciaRelease)
 }
 
 pub(crate) fn tag_step(err: LockError, step: LockStep) -> LockError {
@@ -248,6 +254,7 @@ pub(crate) mod fake {
         pub held_by: Mutex<Option<(String, String)>>, // (key, holder)
         pub next_token: Mutex<FencingToken>,
         pub lapse_on_release: bool,
+        pub error_on_release: bool,
         pub log: Mutex<Vec<LockStep>>,
     }
 
@@ -301,6 +308,13 @@ pub(crate) mod fake {
 
         async fn release(&self, grant: &LeaseGrant) -> Result<bool, LockError> {
             self.log.lock().unwrap().push(LockStep::FiduciaRelease);
+            if self.error_on_release {
+                return Err(LockError::new(
+                    LockErrorKind::Transport,
+                    &grant.key,
+                    "release transport failed; ownership is unknown",
+                ));
+            }
             let mut held = self.held_by.lock().unwrap();
             let matched = held
                 .as_ref()
@@ -440,5 +454,47 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind, LockErrorKind::LostLease);
         assert_eq!(err.step, Some(LockStep::FiduciaRelease));
+    }
+
+    #[test]
+    fn cleanup_failure_wins_and_retains_the_work_failure() {
+        let lease = FakeLease {
+            error_on_release: true,
+            ..FakeLease::default()
+        };
+        let err = block_on(with_lease(
+            &key(),
+            true,
+            true,
+            &AcquireOptions::default(),
+            Some(&lease),
+            |_| Box::pin(async { Err::<(), _>("work exploded") }),
+        ))
+        .unwrap_err();
+        assert_eq!(err.kind, LockErrorKind::Transport);
+        assert_eq!(err.step, Some(LockStep::FiduciaRelease));
+        assert!(err.message.contains("guarded operation also failed"));
+        assert!(err.message.contains("work exploded"));
+        assert!(lease.held_by.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn lapsed_release_wins_over_a_work_failure() {
+        let lease = FakeLease {
+            lapse_on_release: true,
+            ..FakeLease::default()
+        };
+        let err = block_on(with_lease(
+            &key(),
+            true,
+            true,
+            &AcquireOptions::default(),
+            Some(&lease),
+            |_| Box::pin(async { Err::<(), _>("work exploded") }),
+        ))
+        .unwrap_err();
+        assert_eq!(err.kind, LockErrorKind::LostLease);
+        assert_eq!(err.step, Some(LockStep::FiduciaRelease));
+        assert!(err.message.contains("work exploded"));
     }
 }

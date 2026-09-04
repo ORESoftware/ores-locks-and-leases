@@ -17,7 +17,7 @@ scalar LockKey extends string;
 scalar AdvisoryKey extends int64;
 
 @doc("A monotonically increasing token minted by the lease authority on every grant. Writes guarded by the lease carry it so a stale holder cannot clobber a newer one.")
-scalar FencingToken extends int64;
+scalar FencingToken extends uint64;
 
 @doc("Which coordination layers a routine engages. Both false is a deliberate pass-through (tests, single-writer dev).")
 model LockLayers {
@@ -67,7 +67,7 @@ model AcquireOptions {
   @doc("Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released.")
   ttlMs: int64;
 
-  @doc("Total time to keep waiting before giving up, in milliseconds. Ignored when wait is false.")
+  @doc("Time to poll the fiducia authority before giving up, in milliseconds. PostgreSQL blocking waits use that session's lock_timeout/statement_timeout; ignored when wait is false.")
   waitTimeoutMs: int64;
 
   @doc("Poll interval while waiting on the fiducia layer, in milliseconds.")

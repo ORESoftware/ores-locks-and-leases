@@ -11,8 +11,11 @@ fiducia.acquire ─► pg.advisory_lock ─► work ─► pg.advisory_unlock �
 
 The fiducia lease is the **outermost** layer because it is the only one that
 spans hosts and databases, and because it is the one with a clock: a holder
-that dies mid-work stops renewing and the lease lapses, so the next holder is
-never blocked forever. The Postgres advisory lock is **inside** it because it
+that dies mid-work cannot renew and the lease lapses, so the next holder is
+never blocked forever. The routines do not renew automatically; long-running
+work must renew explicitly through the supplied lease adapter and stop guarded
+effects immediately if renewal fails. The Postgres advisory lock is **inside**
+it because it
 is the layer the database enforces — a transaction-scoped lock cannot leak,
 and a session-scoped lock dies with its connection — so it protects the data
 even when the lease authority is misconfigured, split, or switched off.
@@ -55,6 +58,13 @@ Rust's `DedicatedConnection` (SeaORM pool of one), Go's `sql.DB.Conn`, TS's
 `pool.connect()` held for the section, Dart's `Pool.withConnection`, Gleam's
 `dedicated(pog.pool_size(1))`.
 
+`AcquireOptions.wait_timeout` bounds Fiducia's polling loop. PostgreSQL's
+blocking advisory-lock functions are bounded by the database session's
+`lock_timeout` or `statement_timeout`, not by that option; deployments must set
+one of those server-side limits when an unbounded database wait is not
+acceptable. `wait == false` never blocks: every slice uses the corresponding
+`pg_try_advisory_*` function and reports `contention` immediately.
+
 ## Key derivation
 
 Postgres advisory functions take a `bigint`. Every slice derives it the same
@@ -96,6 +106,25 @@ the routine will not hide it.
 
 `transport` is deliberately not `contention`: a 503 from the node does not
 mean the key is free, and treating it that way is the two-leader bug.
+
+Cleanup is part of the safety boundary, not best-effort housekeeping. When
+guarded work fails and the subsequent lease release or Postgres session
+unlock also fails, the cleanup error is primary and the work error is retained
+in its message/cause. The release failure leaves lease ownership unknown; the
+unlock failure makes a pooled session unsafe to reuse. Returning only the
+earlier work error would invite an immediate retry while the old authority may
+still be live.
+
+## Numeric wire safety
+
+The current Fiducia HTTP API serializes its `u64` fencing token as a JSON
+number. Rust, Go (using `json.Number`), and Gleam preserve the integer exactly.
+JavaScript's JSON parser cannot preserve numeric literals above `2^53 - 1`,
+and Flutter web has the same constraint. The TypeScript and Dart adapters
+therefore reject out-of-range numeric responses and refuse to serialize an
+out-of-range token for renew/release. Both accept decimal strings on input so
+a future Fiducia string-token wire revision can be adopted without changing
+their public `bigint`/`BigInt` models. Silent rounding is never allowed.
 
 ## Contracts
 

@@ -20,7 +20,7 @@ use sea_orm::{DatabaseTransaction, TransactionTrait};
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant, WorkFuture, tag_step};
+use crate::lease::{AcquireOptions, Lease, LeaseGrant, WorkFuture, release_lost, tag_step};
 use crate::pg::{self, DedicatedConnection};
 use crate::plan::{LockLayers, LockStep};
 
@@ -194,24 +194,65 @@ where
                 })
                 .await
                 .map_err(|cause| LockError::work(key, cause));
-                let unlocked = pg::session_unlock(conn, key).await;
-                match (outcome, unlocked) {
-                    (Err(err), _) => Err(err),
-                    (Ok(_), Err(err)) => Err(err),
-                    (Ok(_), Ok(false)) => Err(LockError::new(
-                        LockErrorKind::Database,
-                        key,
-                        "pg_advisory_unlock reported the session did not hold the lock",
-                    )
-                    .at(LockStep::PgAdvisoryUnlock)),
-                    (Ok(value), Ok(true)) => Ok(value),
+                let mut unlocked = pg::session_unlock(conn, key).await;
+                if !matches!(&unlocked, Ok(true)) {
+                    // A failed/mismatched unlock leaves the physical session
+                    // unsafe to reuse. This dedicated pool has one session,
+                    // so closing it by reference destroys that session before
+                    // the cleanup error is returned.
+                    if let Err(close_err) = conn.inner().close_by_ref().await {
+                        let close_err = LockError::new(
+                            LockErrorKind::Database,
+                            key,
+                            format!("failed to close the uncertain dedicated session: {close_err}"),
+                        )
+                        .at(LockStep::PgAdvisoryUnlock);
+                        unlocked = Err(match unlocked {
+                            Err(unlock_err) => close_err.after_inner_failure(&unlock_err),
+                            Ok(false) => close_err.after_inner_failure(
+                                &LockError::new(
+                                    LockErrorKind::Database,
+                                    key,
+                                    "pg_advisory_unlock reported the session did not hold the lock",
+                                )
+                                .at(LockStep::PgAdvisoryUnlock),
+                            ),
+                            Ok(true) => close_err,
+                        });
+                    }
                 }
+                settle_session(key, outcome, unlocked)
             }
         }
     }
     .await;
 
     settle(key, lease, grant, inner).await
+}
+
+fn settle_session<T>(
+    key: &LockKey,
+    inner: Result<T, LockError>,
+    unlocked: Result<bool, LockError>,
+) -> Result<T, LockError> {
+    let cleanup = match unlocked {
+        Err(err) => Some(err),
+        Ok(false) => Some(
+            LockError::new(
+                LockErrorKind::Database,
+                key,
+                "pg_advisory_unlock reported the session did not hold the lock",
+            )
+            .at(LockStep::PgAdvisoryUnlock),
+        ),
+        Ok(true) => None,
+    };
+    match (inner, cleanup) {
+        (Err(inner_err), Some(cleanup_err)) => Err(cleanup_err.after_inner_failure(&inner_err)),
+        (Err(inner_err), None) => Err(inner_err),
+        (Ok(_), Some(cleanup_err)) => Err(cleanup_err),
+        (Ok(value), None) => Ok(value),
+    }
 }
 
 fn pick_lease<'l, L: Lease>(
@@ -266,17 +307,13 @@ async fn settle<L: Lease + Sync, T>(
         .await
         .map_err(|err| tag_step(err, LockStep::FiduciaRelease));
     match (inner, released) {
-        (Err(err), _) => Err(err),
-        (Ok(_), Err(err)) => Err(err),
-        (Ok(_), Ok(false)) => Err(LockError::new(
-            LockErrorKind::LostLease,
-            key,
-            format!(
-                "release of `{key}` (holder {}, fencing token {}) matched no grant: the lease lapsed while the work ran",
-                grant.holder, grant.fencing_token
-            ),
-        )
-        .at(LockStep::FiduciaRelease)),
+        (Err(inner_err), Err(release_err)) => Err(release_err.after_inner_failure(&inner_err)),
+        (Err(inner_err), Ok(false)) => {
+            Err(release_lost(key, &grant).after_inner_failure(&inner_err))
+        }
+        (Err(inner_err), Ok(true)) => Err(inner_err),
+        (Ok(_), Err(release_err)) => Err(release_err),
+        (Ok(_), Ok(false)) => Err(release_lost(key, &grant)),
         (Ok(value), Ok(true)) => Ok(value),
     }
 }
@@ -305,4 +342,58 @@ where
         work,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+
+    use super::*;
+    use crate::lease::fake::FakeLease;
+
+    fn key() -> LockKey {
+        LockKey::new("test/coordinated/cleanup").expect("valid test key")
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        use std::task::{Context, Poll, Waker};
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut future = std::pin::pin!(future);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
+                return value;
+            }
+        }
+    }
+
+    #[test]
+    fn session_cleanup_failure_wins_over_work_failure() {
+        let key = key();
+        let inner = Err::<(), _>(LockError::work(&key, "work failed"));
+        let cleanup = Err(
+            LockError::new(LockErrorKind::Database, &key, "unlock transport failed")
+                .at(LockStep::PgAdvisoryUnlock),
+        );
+        let err = settle_session(&key, inner, cleanup).expect_err("cleanup must fail");
+        assert_eq!(err.kind, LockErrorKind::Database);
+        assert_eq!(err.step, Some(LockStep::PgAdvisoryUnlock));
+        assert!(err.message.contains("work failed"));
+    }
+
+    #[test]
+    fn outer_release_failure_wins_over_inner_failure() {
+        let key = key();
+        let lease = FakeLease {
+            error_on_release: true,
+            ..FakeLease::default()
+        };
+        let grant = block_on(lease.acquire(&key, &AcquireOptions::default(), true))
+            .expect("acquire fake lease");
+        let inner = Err::<(), _>(LockError::work(&key, "work failed"));
+        let err = block_on(settle(&key, Some(&lease), Some(grant), inner))
+            .expect_err("release must fail");
+        assert_eq!(err.kind, LockErrorKind::Transport);
+        assert_eq!(err.step, Some(LockStep::FiduciaRelease));
+        assert!(err.message.contains("work failed"));
+    }
 }

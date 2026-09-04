@@ -3,6 +3,7 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/string
 import gleeunit
 import gleeunit/should
 import ores_locks_and_leases as locks
@@ -82,7 +83,7 @@ fn string_repeat(s: String, n: Int) -> String {
 // --- fake lease -------------------------------------------------------------
 
 type Fake {
-  Fake(held: Bool, lapse_on_release: Bool)
+  Fake(held: Bool, lapse_on_release: Bool, fail_release: Bool)
 }
 
 fn fake_lease(fake: Fake) -> locks.Lease {
@@ -103,7 +104,16 @@ fn fake_lease(fake: Fake) -> locks.Lease {
       }
     },
     renew: fn(grant, ttl_ms) { Ok(locks.LeaseGrant(..grant, ttl_ms: ttl_ms)) },
-    release: fn(_grant) { Ok(!fake.lapse_on_release) },
+    release: fn(grant) {
+      case fake.fail_release {
+        True ->
+          Error(locks.transport_error(
+            grant.key,
+            "release transport failed; ownership is unknown",
+          ))
+        False -> Ok(!fake.lapse_on_release)
+      }
+    },
   )
 }
 
@@ -118,7 +128,7 @@ pub fn with_lease_disabled_is_pass_through_test() {
     False,
     True,
     locks.default_acquire_options(),
-    Some(fake_lease(Fake(False, False))),
+    Some(fake_lease(Fake(False, False, False))),
     fn(grant) { Ok(option.is_none(grant)) },
   )
   |> should.equal(Ok(True))
@@ -143,7 +153,7 @@ pub fn with_lease_threads_the_fencing_token_test() {
     True,
     True,
     locks.default_acquire_options(),
-    Some(fake_lease(Fake(False, False))),
+    Some(fake_lease(Fake(False, False, False))),
     fn(grant) {
       let assert Some(grant) = grant
       Ok(grant.fencing_token)
@@ -159,7 +169,7 @@ pub fn with_lease_work_failure_is_work_test() {
       True,
       False,
       locks.default_acquire_options(),
-      Some(fake_lease(Fake(False, False))),
+      Some(fake_lease(Fake(False, False, False))),
       fn(_) { Error("kaboom") },
     )
   error.kind |> should.equal(locks.WorkFailed)
@@ -168,7 +178,7 @@ pub fn with_lease_work_failure_is_work_test() {
 }
 
 pub fn with_lease_contention_timeout_and_lost_lease_test() {
-  let busy = Some(fake_lease(Fake(True, False)))
+  let busy = Some(fake_lease(Fake(True, False, False)))
   let assert Error(contended) =
     locks.with_lease(
       key(),
@@ -196,9 +206,39 @@ pub fn with_lease_contention_timeout_and_lost_lease_test() {
       True,
       True,
       locks.default_acquire_options(),
-      Some(fake_lease(Fake(False, True))),
+      Some(fake_lease(Fake(False, True, False))),
       fn(_) { Ok(Nil) },
     )
   lost.kind |> should.equal(locks.LostLease)
   lost.step |> should.equal(Some(locks.FiduciaRelease))
+}
+
+pub fn cleanup_failure_wins_over_work_failure_test() {
+  let assert Error(error) =
+    locks.with_lease(
+      key(),
+      True,
+      True,
+      locks.default_acquire_options(),
+      Some(fake_lease(Fake(False, False, True))),
+      fn(_) { Error("work exploded") },
+    )
+  error.kind |> should.equal(locks.Transport)
+  error.step |> should.equal(Some(locks.FiduciaRelease))
+  string.contains(error.message, "work exploded") |> should.be_true
+}
+
+pub fn confirmed_lapse_wins_over_work_failure_test() {
+  let assert Error(error) =
+    locks.with_lease(
+      key(),
+      True,
+      True,
+      locks.default_acquire_options(),
+      Some(fake_lease(Fake(False, True, False))),
+      fn(_) { Error("work exploded") },
+    )
+  error.kind |> should.equal(locks.LostLease)
+  error.step |> should.equal(Some(locks.FiduciaRelease))
+  string.contains(error.message, "work exploded") |> should.be_true
 }

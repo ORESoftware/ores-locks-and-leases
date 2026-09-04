@@ -169,15 +169,21 @@ Future<Outcome<T>> settled<T>(Future<T> Function() run) async {
 Future<T> settle<T>(
     LockKey key, Lease lease, LeaseGrant grant, Outcome<T> inner) async {
   final released = await settled(() => lease.release(grant));
-  if (!inner.ok) Error.throwWithStackTrace(inner.error!, inner.trace!);
-  if (!released.ok) throw tagStep(released.error!, LockStep.fiduciaRelease);
+  if (!released.ok) {
+    final cleanup = tagStep(released.error!, LockStep.fiduciaRelease);
+    if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error!);
+    Error.throwWithStackTrace(cleanup, released.trace!);
+  }
   if (released.value != true) {
-    throw LockError(
+    final cleanup = LockError(
       LockErrorKind.lostLease,
       key,
       'release of `$key` (holder ${grant.holder}, fencing token ${grant.fencingToken}) matched no grant: the lease lapsed while the work ran',
       step: LockStep.fiduciaRelease,
     );
+    if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error!);
+    throw cleanup;
   }
+  if (!inner.ok) Error.throwWithStackTrace(inner.error!, inner.trace!);
   return inner.value as T;
 }

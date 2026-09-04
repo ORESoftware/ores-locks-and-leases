@@ -1,6 +1,9 @@
 package oreslocks
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Kind is why an acquisition or guarded run failed. Contract enum LockErrorKind.
 type Kind string
@@ -71,6 +74,24 @@ func invalidPlan(key LockKey, message string) *Error {
 
 func dbErr(key LockKey, step Step, cause error) *Error {
 	return newError(KindDatabase, key, step, cause.Error(), cause)
+}
+
+// cleanupFailure keeps the cleanup error as the primary structured failure
+// while retaining the earlier guarded-operation failure in both diagnostics
+// and the unwrap chain. A failed release or unlock leaves ownership/session
+// state unknown, so callers must not see only the earlier work error and
+// assume a whole-operation retry is safe.
+func cleanupFailure(cleanup, inner error) error {
+	if inner == nil {
+		return cleanup
+	}
+	if lockErr, ok := cleanup.(*Error); ok {
+		combined := *lockErr
+		combined.Message += "; guarded operation also failed: " + inner.Error()
+		combined.Cause = errors.Join(lockErr.Cause, inner)
+		return &combined
+	}
+	return fmt.Errorf("cleanup failed after guarded operation also failed (%v): %w", inner, cleanup)
 }
 
 // tagStep fills in the step on an *Error that has none; other errors pass through.
