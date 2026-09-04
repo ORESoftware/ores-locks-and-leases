@@ -344,7 +344,7 @@ model LockCatalog {{
         for e in catalog
     )
     files["locks/rust/Cargo.toml"] = f'''[workspace]
-resolver = "2"
+resolver = "3"
 
 [package]
 name = "{kebab}-locks"
