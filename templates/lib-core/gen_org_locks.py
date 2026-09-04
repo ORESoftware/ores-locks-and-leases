@@ -343,7 +343,10 @@ model LockCatalog {{
     }};'''
         for e in catalog
     )
-    files["locks/rust/Cargo.toml"] = f'''[package]
+    files["locks/rust/Cargo.toml"] = f'''[workspace]
+resolver = "2"
+
+[package]
 name = "{kebab}-locks"
 version = "0.1.0"
 edition = "2024"
