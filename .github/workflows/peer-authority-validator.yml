@@ -1,0 +1,52 @@
+name: peer-authority-validator
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/peer-authority-validator.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/peer-authority-validator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: peer-authority-validator-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Compare independently authored TypeSpec and JSON Schema authorities
+        uses: ORESoftware/typespec-json-schema-validator@282883afc4645f3303ed746bdb1e1571475724c5
+        with:
+          typespec: contracts/typespec/main.tsp
+          schema: contracts/json-schema/contract.schema.json
+          report: target/typespec-json-schema-validator/report.json
+          sarif: target/typespec-json-schema-validator/report.sarif
+          output_dir: target/typespec-json-schema-validator/generated-schema-b
+          max_probes: '128'
+
+      - name: Upload deterministic parity evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: peer-authority-evidence-${{ github.sha }}
+          path: target/typespec-json-schema-validator/
+          if-no-files-found: error
+          retention-days: 30
