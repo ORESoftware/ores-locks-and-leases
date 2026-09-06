@@ -33,10 +33,11 @@ jobs:
           show-progress: false
 
       - name: Compare independently authored TypeSpec and JSON Schema authorities
-        uses: ORESoftware/typespec-json-schema-validator@282883afc4645f3303ed746bdb1e1571475724c5
+        uses: ORESoftware/typespec-json-schema-validator@54e2bf6162acf8b1e65e7a97468d2e996f5bdd28
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
+          int64_strategy: number
           report: target/typespec-json-schema-validator/report.json
           sarif: target/typespec-json-schema-validator/report.sarif
           output_dir: target/typespec-json-schema-validator/generated-schema-b
