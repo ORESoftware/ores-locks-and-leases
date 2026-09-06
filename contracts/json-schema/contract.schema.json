@@ -11,17 +11,15 @@
     },
     "AdvisoryKey": {
       "type": "integer",
-      "x-ores-width": 64,
       "description": "The Postgres advisory-lock integer derived from a LockKey: FNV-1a 64 over the UTF-8 bytes, reinterpreted as a two's-complement bigint. Vectors: conformance/cases/advisory-key.json."
     },
     "FencingToken": {
       "type": "integer",
-      "x-ores-width": 64,
       "description": "A monotonically increasing token minted by the lease authority on every grant. Writes guarded by the lease carry it so a stale holder cannot clobber a newer one."
     },
     "LockLayers": {
       "type": "object",
-      "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "Which coordination layers a routine engages. Both false is a deliberate pass-through (tests, single-writer dev).",
       "properties": {
         "fiducia": {
@@ -60,7 +58,7 @@
     },
     "LockPlan": {
       "type": "object",
-      "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "A pure function of the inputs; every implementation must produce the same steps.",
       "properties": {
         "layers": { "$ref": "#/$defs/LockLayers" },
@@ -75,22 +73,19 @@
     },
     "AcquireOptions": {
       "type": "object",
-      "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "Acquisition tuning shared by every layer.",
       "properties": {
         "ttlMs": {
           "type": "integer",
-          "x-ores-width": 64,
           "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released."
         },
         "waitTimeoutMs": {
           "type": "integer",
-          "x-ores-width": 64,
           "description": "Time to poll the fiducia authority before giving up, in milliseconds. PostgreSQL blocking waits use that session's lock_timeout/statement_timeout; ignored when wait is false."
         },
         "retryIntervalMs": {
           "type": "integer",
-          "x-ores-width": 64,
           "description": "Poll interval while waiting on the fiducia layer, in milliseconds."
         },
         "holder": {
@@ -102,7 +97,7 @@
     },
     "LeaseGrant": {
       "type": "object",
-      "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "A held fiducia grant, as returned by the lease authority.",
       "properties": {
         "key": { "$ref": "#/$defs/LockKey" },
@@ -110,10 +105,9 @@
         "fencingToken": { "$ref": "#/$defs/FencingToken" },
         "leaseExpiresMs": {
           "type": "integer",
-          "x-ores-width": 64,
           "description": "Absolute expiry in Unix milliseconds when the authority reports it."
         },
-        "ttlMs": { "type": "integer", "x-ores-width": 64 }
+        "ttlMs": { "type": "integer" }
       },
       "required": ["key", "holder", "fencingToken", "ttlMs"]
     },
@@ -132,7 +126,7 @@
     },
     "LockError": {
       "type": "object",
-      "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "The structured failure every implementation surfaces.",
       "properties": {
         "kind": { "$ref": "#/$defs/LockErrorKind" },
