@@ -95,7 +95,8 @@ jobs:
       - working-directory: src/dart
         run: |
           dart pub get --enforce-lockfile
-          dart format --output=none --set-exit-if-changed lib test
+          dart format lib test
+          git diff --exit-code -- lib test
           dart analyze --fatal-infos
           dart test
 
@@ -109,7 +110,8 @@ jobs:
         with: { otp-version: "27", gleam-version: "1.16.0", rebar3-version: "3" }
       - working-directory: src/gleam
         run: |
-          gleam format --check src test
+          gleam format src test
+          git diff --exit-code -- src test
           gleam test
 
   persistence:
