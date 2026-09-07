@@ -33,7 +33,7 @@ jobs:
           show-progress: false
 
       - name: Compare independently authored TypeSpec and JSON Schema authorities
-        uses: ORESoftware/typespec-json-schema-validator@54e2bf6162acf8b1e65e7a97468d2e996f5bdd28
+        uses: ORESoftware/typespec-json-schema-validator@484dc6a349877f73ff440dcdefc98d77e579b839
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
