@@ -13,8 +13,13 @@ export type LockKey = string & { readonly __brand: "LockKey" };
 
 const encoder = new TextEncoder();
 
-/** Validate the contract's length bound and brand the string. */
+/** Validate the contract's type and length bounds, then brand the string. */
 export function lockKey(key: string): LockKey {
+  // TypeScript types disappear at JavaScript and JSON boundaries. Check before
+  // TextEncoder, which otherwise stringifies numbers, arrays, and objects.
+  if (typeof key !== "string") {
+    throw new TypeError("lock key must be a string");
+  }
   const bytes = encoder.encode(key).length;
   if (bytes > MAX_LOCK_KEY_BYTES) {
     throw new RangeError(`lock key is ${bytes} bytes; the contract allows at most ${MAX_LOCK_KEY_BYTES}`);
