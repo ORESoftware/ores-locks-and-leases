@@ -1,0 +1,15 @@
+{
+  "schema": "ores.typespec-json-schema-validator.mapping/v1",
+  "declarations": [
+    {
+      "typespec": "Ores.LocksAndLeases.MissingLeaseGrant",
+      "generated": "LockPlan",
+      "authored": "LockPlan"
+    }
+  ],
+  "ignore": {
+    "typespec": [],
+    "generated": [],
+    "authored": []
+  }
+}
