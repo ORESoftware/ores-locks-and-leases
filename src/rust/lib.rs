@@ -21,15 +21,22 @@
 //! `bigint` the advisory functions take from a string key so every runtime
 //! locks the same integer for the same key.
 //!
+//! [`evaluate_fence`] is the dependency-free application-side decision
+//! primitive. The concrete PostgreSQL/Supabase/Neon and Redis atomic adapters
+//! live under `persistence/`; every datastore that owns protected state must
+//! enforce its own watermark in the same transaction or script as the write.
+//!
 //! Nothing here depends on the network or on SeaORM unless the matching
-//! cargo feature is enabled: the core (`key`, `plan`, `error`, `lease`) is
-//! dependency-free and is what `zed-lib-core` and friends import first.
+//! cargo feature is enabled: the core (`key`, `plan`, `error`, `lease`,
+//! `fence`) is dependency-free and is what `zed-lib-core` and friends import
+//! first.
 //!
 //! ```text
-//! fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work ─► pg.commit ─► fiducia.release
+//! fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► work ─► pg.commit ─► fiducia.release
 //! ```
 
 pub mod error;
+pub mod fence;
 pub mod key;
 pub mod lease;
 pub mod plan;
@@ -44,6 +51,12 @@ pub mod fiducia;
 pub mod coordinated;
 
 pub use error::{LockError, LockErrorKind};
+pub use fence::{
+    FenceDecision, FenceDecisionKind, FenceValidationError, FenceWatermark,
+    FencedWriteRequest, FencingTokenText, MAX_FENCE_METADATA_BYTES,
+    MAX_FENCING_TOKEN_TEXT, MAX_OPERATION_ID_BYTES, MAX_TENANT_SCOPE_BYTES,
+    evaluate_fence,
+};
 pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64};
 pub use lease::{AcquireOptions, FencingToken, Lease, LeaseGrant, NoLease, WorkFuture, with_lease};
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};

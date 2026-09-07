@@ -1,157 +1,207 @@
 # ores-locks-and-leases
 
 Composed distributed locking for the ORESoftware fleet: a **fiducia-cloud
-lease** around a **Postgres advisory lock**, each layer individually
-switchable, with **fencing tokens** threaded through to the guarded work.
+lease** around a **PostgreSQL advisory lock**, each layer individually
+switchable, plus **application-side fencing** that prevents an expired holder
+from overwriting work committed by a newer holder.
 
 ```text
-fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work ─► pg.commit ─► fiducia.release
+fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► fenced work ─► pg.commit ─► fiducia.release
 ```
 
-One package, five slices — Rust, Go, TypeScript, Dart, Gleam — all held to the
-same `conformance/cases/*.json`, so a job in a Gleam server and a job in a
-Rust API server lock the same integer for the same key and unwind in the
-same order when something fails. Shared repository, same precedent as
-`ores-transport` and `ores-proximity`; every `*-lib-core` imports it through
-zed-pkg rather than re-implementing it.
+One zed package ships five runtime slices—Rust, Go, TypeScript, Dart/Flutter,
+and Gleam—plus peer TypeSpec and JSON Schema contracts, one cross-runtime
+conformance corpus, a PostgreSQL adapter for Supabase/Neon, and an atomic Redis
+script.
 
-| Path | Package | Postgres via | Fiducia via |
+| Path | Package / purpose | PostgreSQL via | Fiducia via |
 | --- | --- | --- | --- |
-| `src/rust` | `ores-locks-and-leases` (crate) | SeaORM (`pg` feature) | official async client (`fiducia` feature) |
+| `src/rust` | `ores-locks-and-leases` crate | SeaORM (`pg` feature) | official async client (`fiducia` feature) |
 | `src/go` | `github.com/ORESoftware/ores-locks-and-leases/src/go` | `database/sql` | `net/http` |
-| `src/ts` | `@oresoftware/locks-and-leases` | node-postgres-shaped pool (no `pg` import) | `fetch` |
+| `src/ts` | `@oresoftware/locks-and-leases` | node-postgres-shaped pool | `fetch` |
 | `src/dart` | `ores_locks_and_leases` | `package:postgres` | `package:http` |
 | `src/gleam` | `ores_locks_and_leases` | `pog` | `gleam_httpc` |
-| `contracts` | TypeSpec + JSON Schema authorities (ores-contracts) | | |
-| `conformance` | the corpus every slice is tested against | | |
+| `persistence/postgres` | Supabase/Neon/PostgreSQL watermark table and function | native SQL | |
+| `persistence/redis` | atomic fenced `SET` for Redis-resident state | | |
+| `contracts` | independent TypeSpec + JSON Schema authorities | | |
+| `conformance` | vectors every runtime follows | | |
 
-## The routines
+Every `*-lib-core` consumes this repository through zed-pkg and wraps lock keys
+with its own `<org>/<domain>/<name>` prefix rather than reimplementing the
+coordination or fencing rules.
 
-Every slice exposes the same three, named for the Postgres scope they use:
+## Lock routines
 
-- **`with_xact_lock`** — fiducia lease (optional) around `pg_advisory_xact_lock`
-  inside a transaction the routine opens and commits. `work` receives the
-  transaction and the fencing token. The default.
-- **`with_session_lock`** — fiducia lease (optional) around `pg_advisory_lock`
-  / `pg_advisory_unlock` on one dedicated connection. **No transaction** —
-  for DDL, batch jobs that commit as they go, or work that touches no
-  database but wants a database-enforced mutex.
-- **`with_lease`** — fiducia only, no database layer.
+Every runtime exposes the same three routines:
 
-Each takes `LockLayers { fiducia, pg_advisory }` so a call site can run with
-both, either, or neither (`neither` is a pass-through for tests and
-single-writer development), and `wait` to choose blocking or fail-fast
-acquisition.
+- **`with_xact_lock`**: optional Fiducia lease around
+  `pg_advisory_xact_lock`, inside a transaction opened around the caller's
+  work. This is the default for PostgreSQL mutations.
+- **`with_session_lock`**: optional Fiducia lease around
+  `pg_advisory_lock`/`pg_advisory_unlock` on one dedicated physical
+  connection. No transaction is opened automatically.
+- **`with_lease`**: Fiducia only, for non-PostgreSQL work or callers that own
+  their transaction boundary.
 
-Lease renewal is deliberately explicit rather than hidden in a background
-task. Work expected to approach the configured TTL must call the adapter's
-`renew` operation before expiry and stop producing guarded effects if renewal
-fails. Fencing tokens remain mandatory on guarded writes; release detects a
-lease that lapsed before completion and reports `lost_lease`.
+Each routine accepts switchable `LockLayers`, a transaction/session scope, and
+blocking versus fail-fast acquisition. Fiducia is always outermost; the
+database lock sits inside it; work is innermost.
 
-### Rust
+Lease renewal is explicit. Work approaching the configured TTL must renew
+before expiry and stop producing effects when renewal fails. A successful
+renewal keeps the same fencing token. A new grant receives a larger token.
 
-```rust
-use ores_locks_and_leases::{
-    AcquireOptions, LockKey, LockLayers, fiducia::FiduciaLease, with_xact_lock,
-};
+## Fencing is mandatory for guarded writes
 
-let key = LockKey::new("zed-pkg/registry/publish:zed-lib-core")?;
-let lease = FiduciaLease::internal("http://fiducia-node.fiducia.svc:8090", &secret, &org_id);
+A lease can expire while a process is paused. The process can resume after a
+new holder has committed. The protected datastore—not the old process—must
+decide whether the write is still authoritative.
 
-let published = with_xact_lock(
-    &key,
-    LockLayers::BOTH,
-    true,                       // wait for the lock; false fails fast with `contention`
-    &AcquireOptions::default(), // 60s lease, 30s wait budget, 250ms poll
-    Some(&lease),
-    Some(&db),                  // sea_orm::DatabaseConnection
-    |g| Box::pin(async move {
-        let txn = g.txn.expect("pg layer is on");
-        let token = g.fencing_token().expect("fiducia layer is on");
-        publish_version(txn, token).await   // guarded writes record `token`
-    }),
-).await?;
+For one `(tenantScope, resourceKey)` watermark:
+
+| comparison | decision | apply mutation? |
+| --- | --- | --- |
+| no prior watermark or incoming token is larger | `advanced` | yes, once |
+| equal token, operation id, and payload digest | `replay` | no |
+| incoming token is smaller | `stale` | no |
+| equal token with different operation id or digest | `token_reuse` | no |
+
+The compare, watermark advance, and business mutation must be one atomic unit.
+See [`docs/fencing-tokens.md`](docs/fencing-tokens.md) and
+[`persistence/README.md`](persistence/README.md).
+
+### Supabase and Neon
+
+Both are PostgreSQL. Install `persistence/postgres/fencing.sql` independently
+in every physical database that stores protected state. A fence accepted by
+Supabase does not authorize a Neon write, and a Redis watermark cannot protect
+a PostgreSQL mutation.
+
+The migration stores the full Fiducia `uint64` in `NUMERIC(20,0)`, because
+PostgreSQL `BIGINT` is signed. Call the function and mutate business state in
+the same transaction:
+
+```sql
+BEGIN;
+
+WITH fence AS MATERIALIZED (
+  SELECT *
+  FROM ores_locks.try_advance_fence(
+    'tenant/acme',
+    'zed-pkg/registry/publish:zed-lib-core',
+    '18446744073709551615',
+    'publish-request-9f2c',
+    '6f1ed002ab5595859014ebf0951522d9a0f1db7a81d5e10e4b3397f14a4d4117',
+    'registry-worker-7',
+    'fiducia-lease-456'
+  )
+), applied AS (
+  UPDATE registry.packages AS package
+  SET published_version = '1.4.0',
+      last_fencing_token = fence.current_token::numeric
+  FROM fence
+  WHERE fence.should_apply
+    AND package.package_name = 'zed-lib-core'
+  RETURNING 1
+)
+SELECT fence.*, EXISTS (SELECT 1 FROM applied) AS mutation_applied
+FROM fence;
+
+COMMIT;
 ```
 
-### Go
+The migration creates a dedicated schema, revokes `PUBLIC`, and grants nothing
+to Supabase `anon` or `authenticated`. Product infrastructure explicitly
+grants access only to trusted API/worker roles.
 
-```go
-err := oreslocks.WithXactLock(ctx, key, oreslocks.LayersBoth, true, oreslocks.DefaultAcquireOptions(), lease, db,
-    func(ctx context.Context, g oreslocks.XactGuarded) error {
-        token, _ := g.FencingToken()
-        _, err := g.Tx.ExecContext(ctx, "UPDATE … WHERE fencing_token < $1", token)
-        return err
-    })
+### Redis
+
+`persistence/redis/fenced-write.lua` compares the decimal token and writes one
+Redis-resident value in a single script. The watermark and state keys must use
+the same non-empty cluster hash tag. The script never calls `tonumber`, because
+Redis Lua numbers cannot preserve all unsigned-64 values.
+
+Redis fencing protects Redis state only. For PostgreSQL state, use the
+PostgreSQL adapter in the same transaction as the SQL mutation.
+
+## Runtime decision helpers
+
+The five language slices expose the same dependency-free request, watermark,
+and decision types. They validate untrusted data before any datastore call:
+
+- Rust: `FencingTokenText`, `FencedWriteRequest`, `evaluate_fence`
+- Go: `ParseFencingTokenText`, `FencedWriteRequest`, `EvaluateFence`
+- TypeScript: `fencingTokenText`, `fencedWriteRequest`, `evaluateFence`
+- Dart: `FencingTokenText`, `FencedWriteRequest`, `evaluateFence`
+- Gleam: `ores_locks_and_leases/fence`
+
+These helpers are semantic mirrors of the SQL and Redis adapters. They are not
+a substitute for datastore atomicity.
+
+## Token representation
+
+Fiducia tokens are unsigned 64-bit integers with maximum value:
+
+```text
+18446744073709551615
 ```
 
-### TypeScript
+Use canonical decimal strings at JSON, SQL, Redis, and cross-language
+boundaries. Native `u64`, `uint64`, `bigint`, `BigInt`, or BEAM `Int` is safe
+inside a runtime. Never pass a token through JavaScript `number`, Dart `num`,
+Redis Lua `tonumber`, or PostgreSQL signed `BIGINT`.
 
-```ts
-await withXactLock(key, LAYERS_BOTH, true, DEFAULT_ACQUIRE_OPTIONS, lease, pool, async (g) => {
-  await g.client!.query("UPDATE … WHERE fencing_token < $1", [g.grant!.fencingToken.toString()]);
-});
-```
-
-### Dart
-
-```dart
-await withXactLock(key, layers: LockLayers.both, wait: true, lease: lease, db: pool, work: (g) async {
-  await g.tx!.execute(Sql.named('UPDATE … WHERE fencing_token < @t'), parameters: {'t': g.fencingToken!.toInt()});
-});
-```
-
-### Gleam
-
-```gleam
-pg.with_xact_lock(key, locks.layers_both, True, locks.default_acquire_options(), Some(lease), Some(db), fn(g) {
-  // g.conn is inside the transaction; g.grant carries the fencing token
-  Ok(Nil)
-})
-```
+The existing Fiducia clients fail closed when a JSON numeric token is above
+the exact range of their decoder and accept decimal-string responses, allowing
+the Fiducia wire API to migrate losslessly.
 
 ## Keys
 
-`<org>/<domain>/<name>` — `advisory_key(key)` is FNV-1a 64 over the UTF-8
-bytes, reinterpreted as a signed `bigint`; identical in every slice and
-pinned by `conformance/cases/advisory-key.json`. Each `*-lib-core` wraps the
-routines with its org prefix so orgs sharing a database cannot collide.
+Keys follow `<org>/<domain>/<name>`. `advisory_key(key)` is FNV-1a 64 over the
+UTF-8 bytes, reinterpreted as a signed PostgreSQL `bigint`. Every runtime is
+pinned to `conformance/cases/advisory-key.json`, so the same key locks the same
+integer everywhere.
 
 ## Failure kinds
 
-`contention`, `timeout`, `lost_lease`, `transport`, `database`, `work`,
-`invalid_plan` — one structured error in every slice, always naming the step
-that failed. `transport` is never treated as "not held". Details, and why the
-layers are ordered the way they are, in [`docs/design.md`](docs/design.md).
+Lock acquisition and cleanup use:
 
-Cleanup failures take precedence over an earlier guarded-work failure. A
-failed lease release leaves ownership unknown; a failed session unlock leaves
-the physical connection unsafe to reuse. The returned cleanup error retains
-the work failure in its diagnostics so neither signal is lost, but callers
-cannot accidentally retry based on the less important inner error alone.
+```text
+contention, timeout, lost_lease, transport, database, work, invalid_plan
+```
 
-### Fencing-token JSON safety
+`transport` is never interpreted as “not held.” Cleanup failures take
+precedence over an earlier work failure: a failed lease release leaves
+ownership unknown, and a failed session unlock makes the physical connection
+unsafe to reuse.
 
-Fiducia currently exposes `u64` fencing tokens as JSON numbers. Go decodes
-them with `json.Number`, never `float64`. JavaScript/TypeScript and Dart/Flutter
-reject numeric tokens above `2^53 - 1` and refuse to renew or release them,
-because their JSON runtimes cannot guarantee exact integers beyond that bound.
-Both slices already accept decimal-string responses so Fiducia can migrate to
-a lossless string wire form without changing the in-memory `bigint`/`BigInt`
-API. Failing closed is intentional: sending a rounded fencing token would act
-on the wrong lease.
+Fencing decisions are separate from acquisition failures:
+`advanced`, `replay`, `stale`, and `token_reuse`.
 
 ## Contracts and conformance
 
-`contracts/typespec/main.tsp` and `contracts/json-schema/contract.schema.json`
-are independent authorities checked for parity by
-[`ORESoftware/ores-contracts`](https://github.com/ORESoftware/ores-contracts)
-(`npx ores-contracts check --config contracts/contracts.config.json`).
-`conformance/cases/` is what the slices' tests read; adding a case there
-fails every slice that disagrees.
+`contracts/typespec/main.tsp` and
+`contracts/json-schema/contract.schema.json` are independently authored peers.
+`ORESoftware/ores-contracts` and
+`ORESoftware/typespec-json-schema-validator` compile TypeSpec to disposable
+Schema B, compare it with authored Schema A, and refuse final artifacts when
+the declarations disagree.
+
+The corpus includes:
+
+- `advisory-key.json`
+- `lock-plan.json`
+- `fence-decision.json`
+
+Changing a decision vector must update every runtime, SQL/Redis adapter test,
+and both contract authorities.
 
 ## Testing
 
-`sh scripts/test-all.sh` runs every slice the local toolchain can run. Live
-Postgres checks (Rust `tests/live_postgres.rs`) run when
-`ORES_LOCKS_TEST_DATABASE_URL` is set.
+```sh
+sh scripts/test-all.sh
+```
+
+CI runs every runtime, the contract parity gate, live PostgreSQL fencing tests,
+Redis script tests, and a generated `*-lib-core` preflight. Local live
+PostgreSQL lock tests run when `ORES_LOCKS_TEST_DATABASE_URL` is set.

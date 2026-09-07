@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end preflight for templates/lib-core/gen_org_locks.py. This exercises
-# the generated package exactly as a consumer repository will see it, with the
+# End-to-end preflight for the lib-core generators. This exercises the
+# generated package exactly as a consumer repository will see it, with the
 # current checkout standing in for zed-pkg's vendored source tree.
 set -euo pipefail
 
@@ -31,6 +31,10 @@ python3 "$repo_root/templates/lib-core/gen_org_locks.py" \
   --org preflight-example \
   --prefix preflight \
   --interfaces preflight-interfaces
+python3 "$repo_root/templates/lib-core/gen_org_fencing.py" \
+  --repo "$scratch" \
+  --org preflight-example \
+  --prefix preflight
 
 mkdir -p "$vendor_parent"
 ln -s "$repo_root" "$vendor_parent/ores-locks-and-leases"
@@ -45,6 +49,16 @@ log "Zed manifests"
   zed validate
   zed validate --manifest locks/.zpkg.toml
 )
+
+log "Generated fencing assets"
+python3 -m json.tool \
+  "$scratch/locks/persistence/fencing.config.json" >/dev/null
+grep -q '^CREATE SCHEMA IF NOT EXISTS preflight_locks;' \
+  "$scratch/locks/persistence/postgres/fencing.sql"
+grep -q 'preflight-example-locks:{' \
+  "$scratch/locks/persistence/redis/fenced-write.lua"
+sh -n "$scratch/locks/persistence/redis/test-fenced-write.sh"
+test "$(grep -c 'ores-locks-and-leases:fencing-assets:v1' "$scratch/locks/README.md")" -eq 1
 
 log "Rust"
 cargo test --manifest-path "$scratch/locks/rust/Cargo.toml" --all-targets --features full
@@ -81,4 +95,4 @@ log "TypeSpec and JSON Schema"
     ores-contracts check --config contracts/contracts.config.json
 )
 
-log "all generated runtime and contract checks passed"
+log "all generated runtime, contract, and fencing-asset checks passed"

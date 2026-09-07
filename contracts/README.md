@@ -25,6 +25,25 @@ stale, ambiguous, duplicate, or contradictory mappings and ignore lists.
 Generated Schema B is written under `target/` and must never overwrite the
 authored JSON Schema.
 
+## Application-fencing declarations
+
+Both authorities independently declare the datastore-facing fencing boundary:
+
+- `FencingTokenText`: canonical unsigned-64 decimal text, never a lossy JSON
+  number;
+- `FenceDecisionKind`: `advanced`, `replay`, `stale`, or `token_reuse`;
+- `FencedWriteRequest`: resource identity, token, operation id, canonical
+  payload SHA-256, and optional holder/lease diagnostics;
+- `FenceWatermark`: the last accepted request identity for one protected
+  resource; and
+- `FenceDecision`: whether the mutation may apply and which token remains
+  current.
+
+The runtime helpers and `conformance/cases/fence-decision.json` must agree with
+these declarations. PostgreSQL and Redis persistence adapters enforce the same
+state machine atomically in the datastore; contract parity alone is not a
+substitute for that atomicity.
+
 ## Negative mapping-integrity canary
 
 `mapping-tests/stale.mapping.json` deliberately names absent TypeSpec

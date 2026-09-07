@@ -1,7 +1,8 @@
 #!/bin/sh
 # Prove that --commit derives both content and parentage from --base-ref while
-# leaving a parked checkout untouched, and that reruns never overwrite a
-# divergent existing branch.
+# leaving a parked checkout untouched, that reruns never overwrite a divergent
+# existing branch, and that the companion fencing generator safely appends one
+# deterministic commit to the DEN-backed generated branch.
 set -eu
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
@@ -98,6 +99,52 @@ if python3 "$repo_root/templates/lib-core/gen_org_locks.py" \
   exit 1
 fi
 test "$(git -C "$fixture" rev-parse DEN-2050/ores-locks-and-leases)" = "$generated_commit"
+test "$(git -C "$fixture" rev-parse HEAD)" = "$parked_commit"
+test -z "$(git -C "$fixture" status --porcelain)"
+
+# The companion generator appends exactly one deterministic commit to the
+# existing generated branch, still without touching the parked checkout.
+python3 "$repo_root/templates/lib-core/gen_org_fencing.py" \
+  --repo "$fixture" \
+  --org fixture-org \
+  --prefix fixture \
+  --branch DEN-2050/ores-locks-and-leases \
+  --base-ref main \
+  --commit
+fencing_commit=$(git -C "$fixture" rev-parse DEN-2050/ores-locks-and-leases)
+test "$fencing_commit" != "$generated_commit"
+test "$(git -C "$fixture" rev-parse "$fencing_commit^")" = "$generated_commit"
+git -C "$fixture" show "$fencing_commit:locks/persistence/fencing.config.json" \
+  | grep -q '"postgresSchema": "fixture_locks"'
+git -C "$fixture" show "$fencing_commit:locks/persistence/postgres/fencing.sql" \
+  | grep -q '^CREATE SCHEMA IF NOT EXISTS fixture_locks;'
+git -C "$fixture" show "$fencing_commit:locks/persistence/redis/fenced-write.lua" \
+  | grep -q 'fixture-org-locks:{'
+test "$(git -C "$fixture" rev-parse HEAD)" = "$parked_commit"
+test -z "$(git -C "$fixture" status --porcelain)"
+
+# An identical companion rerun is idempotent.
+python3 "$repo_root/templates/lib-core/gen_org_fencing.py" \
+  --repo "$fixture" \
+  --org fixture-org \
+  --prefix fixture \
+  --branch DEN-2050/ores-locks-and-leases \
+  --base-ref main \
+  --commit
+test "$(git -C "$fixture" rev-parse DEN-2050/ores-locks-and-leases)" = "$fencing_commit"
+
+# Once metadata exists, a mismatched org/prefix can never overwrite it.
+if python3 "$repo_root/templates/lib-core/gen_org_fencing.py" \
+  --repo "$fixture" \
+  --org other-org \
+  --prefix other \
+  --branch DEN-2050/ores-locks-and-leases \
+  --base-ref main \
+  --commit >/dev/null 2>&1; then
+  echo "fencing generator overwrote assets for another org" >&2
+  exit 1
+fi
+test "$(git -C "$fixture" rev-parse DEN-2050/ores-locks-and-leases)" = "$fencing_commit"
 test "$(git -C "$fixture" rev-parse HEAD)" = "$parked_commit"
 test -z "$(git -C "$fixture" status --porcelain)"
 
