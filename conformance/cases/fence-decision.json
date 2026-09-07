@@ -1,0 +1,208 @@
+{
+  "$comment": "Cross-runtime fencing decision corpus. Tokens are canonical unsigned-64 decimal strings; payloadSha256 is lowercase hex.",
+  "cases": [
+    {
+      "name": "first grant advances an absent watermark",
+      "current": null,
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "op-1",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "holder": "worker-a",
+        "leaseId": "lease-1"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "1",
+        "currentToken": "1",
+        "previousToken": null
+      }
+    },
+    {
+      "name": "larger token advances an existing watermark",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "41",
+        "operationId": "op-41",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "holder": "worker-a",
+        "leaseId": "lease-41"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "holder": "worker-b",
+        "leaseId": "lease-42"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "42",
+        "currentToken": "42",
+        "previousToken": "41"
+      }
+    },
+    {
+      "name": "same token operation and payload is an idempotent replay",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "holder": "worker-b",
+        "leaseId": "lease-42"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "holder": "worker-b-retry",
+        "leaseId": "lease-42"
+      },
+      "expected": {
+        "kind": "replay",
+        "shouldApply": false,
+        "incomingToken": "42",
+        "currentToken": "42",
+        "previousToken": "42"
+      }
+    },
+    {
+      "name": "same token with a different operation id is rejected as token reuse",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-other",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": {
+        "kind": "token_reuse",
+        "shouldApply": false,
+        "incomingToken": "42",
+        "currentToken": "42",
+        "previousToken": "42"
+      }
+    },
+    {
+      "name": "same token with a different payload is rejected as token reuse",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "expected": {
+        "kind": "token_reuse",
+        "shouldApply": false,
+        "incomingToken": "42",
+        "currentToken": "42",
+        "previousToken": "42"
+      }
+    },
+    {
+      "name": "smaller token is stale",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "41",
+        "operationId": "op-41-late",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "kind": "stale",
+        "shouldApply": false,
+        "incomingToken": "41",
+        "currentToken": "42",
+        "previousToken": "42"
+      }
+    },
+    {
+      "name": "full unsigned 64 bit maximum remains exact",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "18446744073709551614",
+        "operationId": "op-max-minus-one",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "18446744073709551615",
+        "operationId": "op-max",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "18446744073709551615",
+        "currentToken": "18446744073709551615",
+        "previousToken": "18446744073709551614"
+      }
+    },
+    {
+      "name": "watermark identity mismatch fails validation",
+      "current": {
+        "tenantScope": "tenant/other",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "42",
+        "operationId": "op-42",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "43",
+        "operationId": "op-43",
+        "payloadSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "expectedError": "identity_mismatch"
+    }
+  ],
+  "invalidTokens": [
+    "",
+    "00",
+    "01",
+    "+1",
+    "-1",
+    "1.0",
+    " 1",
+    "1 ",
+    "18446744073709551616",
+    "99999999999999999999",
+    "not-a-token"
+  ]
+}

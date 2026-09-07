@@ -19,6 +19,88 @@ scalar AdvisoryKey extends int64;
 @doc("A monotonically increasing token minted by the lease authority on every grant. Writes guarded by the lease carry it so a stale holder cannot clobber a newer one.")
 scalar FencingToken extends uint64;
 
+@doc("Lossless wire and storage form of a Fiducia uint64 token: canonical unsigned decimal text with no sign, whitespace, fractional part, or leading zeroes. Implementations also reject values above 18446744073709551615.")
+@maxLength(20)
+@pattern("^(0|[1-9][0-9]{0,19})$")
+scalar FencingTokenText extends string;
+
+@doc("Outcome of comparing an incoming fencing token and idempotency identity with a stored watermark.")
+enum FenceDecisionKind {
+  @doc("No watermark exists or the incoming token is larger. Advance the watermark and apply the mutation exactly once.")
+  advanced: "advanced",
+
+  @doc("Equal token, operation id, and payload digest. The earlier commit is being retried; do not reapply.")
+  replay: "replay",
+
+  @doc("The incoming token is smaller than the stored watermark. Reject the stale holder.")
+  stale: "stale",
+
+  @doc("The token is equal but the operation id or payload digest differs. Reject the ambiguous token reuse.")
+  tokenReuse: "token_reuse",
+}
+
+@doc("One application mutation guarded by a Fiducia fencing token.")
+model FencedWriteRequest {
+  @minLength(1)
+  @maxLength(256)
+  tenantScope: string;
+
+  resourceKey: LockKey;
+  fencingToken: FencingTokenText;
+
+  @minLength(1)
+  @maxLength(128)
+  operationId: string;
+
+  @doc("Lowercase SHA-256 of the canonical mutation payload.")
+  @pattern("^[0-9a-f]{64}$")
+  payloadSha256: string;
+
+  @minLength(1)
+  @maxLength(256)
+  holder?: string;
+
+  @minLength(1)
+  @maxLength(256)
+  leaseId?: string;
+}
+
+@doc("The last accepted write for one `(tenantScope, resourceKey)` identity.")
+model FenceWatermark {
+  @minLength(1)
+  @maxLength(256)
+  tenantScope: string;
+
+  resourceKey: LockKey;
+  fencingToken: FencingTokenText;
+
+  @minLength(1)
+  @maxLength(128)
+  operationId: string;
+
+  @pattern("^[0-9a-f]{64}$")
+  payloadSha256: string;
+
+  @minLength(1)
+  @maxLength(256)
+  holder?: string;
+
+  @minLength(1)
+  @maxLength(256)
+  leaseId?: string;
+}
+
+@doc("Pure fencing decision. `shouldApply` is true only for `advanced`.")
+model FenceDecision {
+  kind: FenceDecisionKind;
+  shouldApply: boolean;
+  incomingToken: FencingTokenText;
+  @doc("Token that remains current after the decision.")
+  currentToken: FencingTokenText;
+  @doc("Watermark before the decision; absent only for the first accepted write.")
+  previousToken?: FencingTokenText;
+}
+
 @doc("Which coordination layers a routine engages. Both false is a deliberate pass-through (tests, single-writer dev).")
 model LockLayers {
   @doc("Engage the fiducia-cloud lease (outermost layer, cross-host, TTL-bounded, fenced).")

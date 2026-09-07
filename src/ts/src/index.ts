@@ -13,6 +13,7 @@
  */
 
 export { MAX_LOCK_KEY_BYTES, advisoryKey, fnv1a64, lockKey, type LockKey } from "./key.js";
+export * from "./fence.js";
 export {
   ALL_STEPS,
   LAYERS_BOTH,

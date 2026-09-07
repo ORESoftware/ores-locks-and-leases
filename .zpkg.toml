@@ -2,7 +2,7 @@
 org = "oresoftware"
 name = "ores-locks-and-leases"
 version = "0.1.1"
-description = "Composed distributed locking for the fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer switchable, with fencing tokens threaded through to the guarded work — Rust, Go, TypeScript, Dart and Gleam slices held to one conformance corpus"
+description = "Composed distributed locking for the fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer switchable, with full-width fencing-token decisions and atomic PostgreSQL/Redis persistence adapters — Rust, Go, TypeScript, Dart and Gleam slices held to one conformance corpus"
 license = "MIT"
 keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing", "fiducia", "polyglot"]
 
@@ -19,7 +19,7 @@ url = "https://github.com/ORESoftware/ores-locks-and-leases"
 [publish]
 include_readme = true
 tag_format = "v{version}"
-smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\""
+smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/fence-decision.json\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/postgres/fencing.sql\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/redis/fenced-write.lua\""
 exclude = [
   ".env",
   ".env.*",
@@ -42,8 +42,8 @@ exclude = [
 [install]
 dir = ".vendor/.zed"
 
-# Whole-repository slice: every implementation plus the corpus they are all
-# verified against.
+# Whole-repository slice: every implementation plus the corpus and persistence
+# adapters they are all verified against.
 [targets.repository]
 dir = "."
 
@@ -87,6 +87,12 @@ adapter = "none"
 [targets.conformance]
 dir = "conformance"
 name = "ores-locks-and-leases-conformance"
+adapter = "none"
+
+# Database-owned fencing enforcement for Supabase/Neon/PostgreSQL and Redis.
+[targets.persistence]
+dir = "persistence"
+name = "ores-locks-and-leases-persistence"
 adapter = "none"
 
 [scripts]

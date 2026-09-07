@@ -95,7 +95,8 @@ jobs:
       - working-directory: src/dart
         run: |
           dart pub get --enforce-lockfile
-          dart format --output=none --set-exit-if-changed lib test
+          dart format lib test
+          git diff --exit-code -- lib test
           dart analyze --fatal-infos
           dart test
 
@@ -109,8 +110,40 @@ jobs:
         with: { otp-version: "27", gleam-version: "1.16.0", rebar3-version: "3" }
       - working-directory: src/gleam
         run: |
-          gleam format --check src test
+          gleam format src test
+          git diff --exit-code -- src test
           gleam test
+
+  persistence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: locks
+          POSTGRES_DB: locks
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, show-progress: false }
+      - name: Install PostgreSQL and Redis clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client redis-tools
+      - name: Test canonical and generated fencing adapters
+        env:
+          ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: "6379"
+        run: sh scripts/test-persistence.sh
 
   contracts:
     runs-on: ubuntu-24.04
@@ -123,13 +156,20 @@ jobs:
       - name: Validate rollout tooling safety gates
         run: |
           bash -n templates/lib-core/fanout.sh
+          sh -n scripts/test-persistence.sh
+          sh -n persistence/redis/test-fenced-write.sh
           python3 -c 'compile(open("templates/lib-core/gen_org_locks.py", encoding="utf-8").read(), "templates/lib-core/gen_org_locks.py", "exec")'
+          python3 -c 'compile(open("templates/lib-core/gen_org_fencing.py", encoding="utf-8").read(), "templates/lib-core/gen_org_fencing.py", "exec")'
           if templates/lib-core/fanout.sh --no-push; then
             echo "fanout unexpectedly accepted a missing Linear issue" >&2
             exit 1
           fi
           if python3 templates/lib-core/gen_org_locks.py --repo . --org ORESoftware --prefix ores --interfaces ores-interfaces --commit --branch feat/no-linear-id; then
             echo "generator unexpectedly accepted a branch without a Linear issue" >&2
+            exit 1
+          fi
+          if python3 templates/lib-core/gen_org_fencing.py --repo . --org ORESoftware --prefix ores --commit --branch feat/no-linear-id; then
+            echo "fencing generator unexpectedly accepted a branch without a Linear issue" >&2
             exit 1
           fi
           sh scripts/test-generator-safety.sh

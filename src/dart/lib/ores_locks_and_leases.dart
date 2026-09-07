@@ -7,15 +7,16 @@
 /// contract's and the same in every language slice:
 ///
 /// ```text
-/// fiducia.acquire → pg.begin → pg.advisory_xact_lock → work → pg.commit → fiducia.release
+/// fiducia.acquire → pg.begin → pg_advisory_xact_lock → work → pg.commit → fiducia.release
 /// ```
 ///
-/// `key`, `plan`, `errors` and `lease` are dependency-free and safe for
-/// Flutter and browser targets (the `*-pub-lib-core` packages); `pg` needs
+/// `key`, `plan`, `errors`, `lease`, and `fence` are dependency-free and safe
+/// for Flutter and browser targets (the `*-pub-lib-core` packages); `pg` needs
 /// `package:postgres` and `fiducia` needs `package:http`.
 library;
 
 export 'src/errors.dart';
+export 'src/fence.dart';
 export 'src/fiducia.dart';
 export 'src/key.dart';
 export 'src/lease.dart';
