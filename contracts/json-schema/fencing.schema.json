@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.oresoftware.com/ores-locks-and-leases/fencing.schema.json",
+  "title": "ORES Fencing Watermark Contract",
+  "$defs": {
+    "FencingTokenDecimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "description": "Canonical unsigned-64 decimal token. Runtime validators additionally reject values above 18446744073709551615."
+    },
+    "OperationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "PayloadSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "FenceWatermark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fencingToken", "operationId", "payloadSha256"],
+      "properties": {
+        "fencingToken": {"$ref": "#/$defs/FencingTokenDecimal"},
+        "operationId": {"$ref": "#/$defs/OperationId"},
+        "payloadSha256": {"$ref": "#/$defs/PayloadSha256"}
+      }
+    },
+    "FenceAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fencingToken", "operationId", "payloadSha256"],
+      "properties": {
+        "fencingToken": {"$ref": "#/$defs/FencingTokenDecimal"},
+        "operationId": {"$ref": "#/$defs/OperationId"},
+        "payloadSha256": {"$ref": "#/$defs/PayloadSha256"}
+      }
+    },
+    "FenceDecisionKind": {
+      "type": "string",
+      "enum": ["advanced", "replay", "token_reuse", "stale"]
+    },
+    "FenceDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "apply", "watermark"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/FenceDecisionKind"},
+        "apply": {"type": "boolean"},
+        "watermark": {"$ref": "#/$defs/FenceWatermark"}
+      }
+    }
+  },
+  "$ref": "#/$defs/FenceDecision"
+}
