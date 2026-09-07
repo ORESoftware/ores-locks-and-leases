@@ -186,3 +186,69 @@ test("field validation does not invoke caller coercion hooks", () => {
   );
   assert.equal(coercions, 0);
 });
+
+test("closed request and watermark objects reject every extra own string field", () => {
+  for (const extra of [
+    { unexpected: true },
+    { authority: "forged" },
+    { currentToken: "18446744073709551615" },
+  ]) {
+    throwsFenceCode(
+      () => fencedWriteRequest({ ...validInput, ...extra }),
+      "unexpected_field",
+    );
+    throwsFenceCode(
+      () => fenceWatermark({ ...validInput, ...extra }),
+      "unexpected_field",
+    );
+  }
+
+  const nonEnumerable = { ...validInput };
+  Object.defineProperty(nonEnumerable, "hidden", {
+    value: "not JSON contract data",
+    enumerable: false,
+  });
+  throwsFenceCode(() => fencedWriteRequest(nonEnumerable), "unexpected_field");
+});
+
+test("required fields must be own data properties, not inherited values", () => {
+  const inherited = Object.create(validInput);
+  throwsFenceCode(() => fencedWriteRequest(inherited), "invalid_type");
+
+  const partlyInherited = Object.create({ tenantScope: validInput.tenantScope });
+  Object.assign(partlyInherited, {
+    resourceKey: validInput.resourceKey,
+    fencingToken: validInput.fencingToken,
+    operationId: validInput.operationId,
+    payloadSha256: validInput.payloadSha256,
+  });
+  throwsFenceCode(() => fencedWriteRequest(partlyInherited), "invalid_type");
+});
+
+test("accessor-backed fields are rejected without executing getters", () => {
+  let getterCalls = 0;
+  for (const field of ["tenantScope", "holder"]) {
+    const accessor = { ...validInput };
+    Object.defineProperty(accessor, field, {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error(`${field} getter executed`);
+      },
+    });
+    throwsFenceCode(() => fencedWriteRequest(accessor), "invalid_type");
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test("descriptor inspection failures become typed rejection", () => {
+  let trapCalls = 0;
+  const proxy = new Proxy({ ...validInput }, {
+    ownKeys() {
+      trapCalls += 1;
+      throw new Error("ownKeys trap");
+    },
+  });
+  throwsFenceCode(() => fencedWriteRequest(proxy), "invalid_type");
+  assert.equal(trapCalls, 1);
+});
