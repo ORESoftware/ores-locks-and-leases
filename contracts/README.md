@@ -18,19 +18,40 @@ The validation sequence is deliberately bidirectional:
 
 `.github/workflows/peer-authority-validator.yml` executes the immutable
 `ORESoftware/typespec-json-schema-validator` action at merge commit
-`484dc6a349877f73ff440dcdefc98d77e579b839`. That revision preserves the
-Draft 2020-12 runtime resource graph during differential validation while
-using comparison-only normalization for peer-authority evidence. Generated
-Schema B is written under `target/` and must never overwrite the authored JSON
-Schema.
+`8584720715e4e90573535e14b16cb3a24c14ca63`. That revision preserves the
+Draft 2020-12 runtime resource graph during differential validation, uses
+comparison-only normalization for peer-authority evidence, and fails closed on
+stale, ambiguous, duplicate, or contradictory mappings and ignore lists.
+Generated Schema B is written under `target/` and must never overwrite the
+authored JSON Schema.
+
+## Negative mapping-integrity canary
+
+`mapping-tests/stale.mapping.json` deliberately names absent TypeSpec
+declaration `Ores.LocksAndLeases.MissingLeaseGrant` while targeting the real
+`LockPlan` declarations in both JSON Schema lanes. The exact-head workflow must:
+
+- return exit code 2 through a `continue-on-error` step;
+- retain report status `stopped_for_evaluation` rather than `failed`;
+- emit exactly one `mapping-typespec-declaration-missing` finding with a stable
+  fingerprint;
+- emit no generic `run-failed` or unrelated target-collision finding;
+- leave both authored authorities and the mapping fixture byte-identical; and
+- retain positive and negative JSON, SARIF, and generated-schema evidence in
+  separate directories.
+
+The verifier script is intentionally independent from the validator package. A
+negative lane that unexpectedly passes, cannot write its receipt, produces the
+wrong rule, or mutates an authored input fails the workflow.
 
 The existing `ores-contracts` gate remains in the main CI workflow because it
 also validates this repository's generated Rust, TypeScript, and Dart artifact
 configuration. The two gates are complementary: the peer-authority validator
-establishes independent declaration/shape parity, while `ores-contracts`
-continues to exercise the existing multi-language generation contract.
+establishes independent declaration/shape parity and mapping integrity, while
+`ores-contracts` continues to exercise the existing multi-language generation
+contract.
 
 After changing either authority, run the existing local contract check and
-inspect the hosted peer-authority evidence before merging. A mergeable pull
-request, skipped workflow, or job that failed before checkout is not passing
-contract evidence.
+inspect the hosted positive and negative peer-authority evidence before merging.
+A mergeable pull request, skipped workflow, or job that failed before checkout
+is not passing contract evidence.
