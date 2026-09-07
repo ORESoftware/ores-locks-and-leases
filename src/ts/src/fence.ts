@@ -3,6 +3,15 @@ import { MAX_LOCK_KEY_BYTES, lockKey, type LockKey } from "./key.js";
 const MAX_FENCING_TOKEN = 18_446_744_073_709_551_615n;
 const CANONICAL_TOKEN = /^(0|[1-9][0-9]{0,19})$/;
 const LOWER_SHA256 = /^[0-9a-f]{64}$/;
+const FENCED_WRITE_FIELDS = new Set([
+  "tenantScope",
+  "resourceKey",
+  "fencingToken",
+  "operationId",
+  "payloadSha256",
+  "holder",
+  "leaseId",
+]);
 
 declare const fencingTokenBrand: unique symbol;
 
@@ -23,6 +32,7 @@ export type FenceValidationCode =
   | "empty_field"
   | "too_long"
   | "invalid_type"
+  | "unexpected_field"
   | "invalid_fencing_token"
   | "invalid_payload_sha256"
   | "identity_mismatch";
@@ -274,6 +284,12 @@ export function evaluateFence(
   };
 }
 
+/**
+ * Read only own data-property descriptors into a null-prototype snapshot.
+ * Accessor properties are refused without executing their getters, inherited
+ * values cannot satisfy required fields, and unknown JSON object keys are
+ * rejected to match `unevaluatedProperties: false` in both peer authorities.
+ */
 function requestRecord(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new FenceValidationError(
@@ -281,7 +297,41 @@ function requestRecord(value: unknown): Record<string, unknown> {
       "fenced write request must be a non-array object",
     );
   }
-  return value as Record<string, unknown>;
+
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    throw new FenceValidationError(
+      "invalid_type",
+      "fenced write request properties could not be inspected safely",
+    );
+  }
+
+  const snapshot = Object.create(null) as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(descriptors)) {
+    // Symbols are not members of the JSON object data model and cannot affect
+    // any field consumed below. String keys are the closed contract surface.
+    if (typeof key !== "string") continue;
+    if (!FENCED_WRITE_FIELDS.has(key)) {
+      throw new FenceValidationError(
+        "unexpected_field",
+        `fenced write request contains unknown field ${JSON.stringify(key)}`,
+        key,
+      );
+    }
+
+    const descriptor = descriptors[key];
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) {
+      throw new FenceValidationError(
+        "invalid_type",
+        `${key} must be an own data property`,
+        key,
+      );
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return snapshot;
 }
 
 function validateField(
