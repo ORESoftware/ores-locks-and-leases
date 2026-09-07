@@ -17,9 +17,12 @@ The validation sequence is deliberately bidirectional:
 5. retain the JSON, SARIF, and generated-schema evidence for review.
 
 `.github/workflows/peer-authority-validator.yml` executes the immutable
-`ORESoftware/typespec-json-schema-validator` action at commit
-`282883afc4645f3303ed746bdb1e1571475724c5`. Generated Schema B is written
-under `target/` and must never overwrite the authored JSON Schema.
+`ORESoftware/typespec-json-schema-validator` action at merge commit
+`484dc6a349877f73ff440dcdefc98d77e579b839`. That revision preserves the
+Draft 2020-12 runtime resource graph during differential validation while
+using comparison-only normalization for peer-authority evidence. Generated
+Schema B is written under `target/` and must never overwrite the authored JSON
+Schema.
 
 The existing `ores-contracts` gate remains in the main CI workflow because it
 also validates this repository's generated Rust, TypeScript, and Dart artifact
