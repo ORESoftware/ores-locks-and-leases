@@ -24,8 +24,8 @@ fn request(
       token,
       operation_id,
       payload_sha256,
-      None,
-      None,
+      option.None,
+      option.None,
     )
   request
 }

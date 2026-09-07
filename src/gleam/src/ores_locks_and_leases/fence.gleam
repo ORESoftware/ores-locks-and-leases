@@ -34,7 +34,7 @@ pub fn fencing_token_text(
   let canonical = case text {
     "0" -> True
     _ ->
-      list.length(graphemes) > 0
+      graphemes != []
       && list.length(graphemes) <= 20
       && !string.starts_with(text, "0")
       && list.all(graphemes, is_decimal_digit)
