@@ -10,8 +10,7 @@ Map<String, dynamic> _map(Object? value) =>
 FencedWriteRequest _request(Map<String, dynamic> value) => FencedWriteRequest(
       tenantScope: value['tenantScope'] as String,
       resourceKey: LockKey(value['resourceKey'] as String),
-      fencingToken:
-          FencingTokenText.parse(value['fencingToken'] as String),
+      fencingToken: FencingTokenText.parse(value['fencingToken'] as String),
       operationId: value['operationId'] as String,
       payloadSha256: value['payloadSha256'] as String,
       holder: value['holder'] as String?,

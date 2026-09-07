@@ -13,8 +13,11 @@ import gleam/string
 import ores_locks_and_leases as locks
 
 pub const max_fencing_token_text = "18446744073709551615"
+
 pub const max_tenant_scope_bytes = 256
+
 pub const max_operation_id_bytes = 128
+
 pub const max_fence_metadata_bytes = 256
 
 const max_fencing_token = 18_446_744_073_709_551_615
@@ -53,10 +56,7 @@ pub fn fencing_token_value(token: FencingTokenText) -> Int {
 }
 
 fn is_decimal_digit(value: String) -> Bool {
-  list.contains(
-    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
-    value,
-  )
+  list.contains(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], value)
 }
 
 /// Stable decision vocabulary shared by SQL, Redis, and every runtime.
@@ -98,38 +98,42 @@ pub fn new_fenced_write_request(
   holder: Option(String),
   lease_id: Option(String),
 ) -> Result(FencedWriteRequest, FenceValidationError) {
-  use _ <- result.try(
-    validate_field("tenantScope", tenant_scope, max_tenant_scope_bytes),
-  )
-  use _ <- result.try(
-    validate_field(
-      "resourceKey",
-      locks.key_to_string(resource_key),
-      locks.max_lock_key_bytes,
-    ),
-  )
-  use _ <- result.try(
-    validate_field("operationId", operation_id, max_operation_id_bytes),
-  )
-  use _ <- result.try(
-    validate_optional_field("holder", holder, max_fence_metadata_bytes),
-  )
-  use _ <- result.try(
-    validate_optional_field("leaseId", lease_id, max_fence_metadata_bytes),
-  )
+  use _ <- result.try(validate_field(
+    "tenantScope",
+    tenant_scope,
+    max_tenant_scope_bytes,
+  ))
+  use _ <- result.try(validate_field(
+    "resourceKey",
+    locks.key_to_string(resource_key),
+    locks.max_lock_key_bytes,
+  ))
+  use _ <- result.try(validate_field(
+    "operationId",
+    operation_id,
+    max_operation_id_bytes,
+  ))
+  use _ <- result.try(validate_optional_field(
+    "holder",
+    holder,
+    max_fence_metadata_bytes,
+  ))
+  use _ <- result.try(validate_optional_field(
+    "leaseId",
+    lease_id,
+    max_fence_metadata_bytes,
+  ))
   use _ <- result.try(validate_payload_sha256(payload_sha256))
 
-  Ok(
-    FencedWriteRequest(
-      tenant_scope: tenant_scope,
-      resource_key: resource_key,
-      fencing_token: fencing_token,
-      operation_id: operation_id,
-      payload_sha256: payload_sha256,
-      holder: holder,
-      lease_id: lease_id,
-    ),
-  )
+  Ok(FencedWriteRequest(
+    tenant_scope: tenant_scope,
+    resource_key: resource_key,
+    fencing_token: fencing_token,
+    operation_id: operation_id,
+    payload_sha256: payload_sha256,
+    holder: holder,
+    lease_id: lease_id,
+  ))
 }
 
 /// Last accepted write for one tenant/resource identity.
@@ -178,17 +182,16 @@ pub fn evaluate_fence(
 ) -> Result(FenceDecision, FenceValidationError) {
   case current {
     None ->
-      Ok(
-        FenceDecision(
-          kind: Advanced,
-          should_apply: True,
-          incoming_token: incoming.fencing_token,
-          current_token: incoming.fencing_token,
-          previous_token: None,
-        ),
-      )
+      Ok(FenceDecision(
+        kind: Advanced,
+        should_apply: True,
+        incoming_token: incoming.fencing_token,
+        current_token: incoming.fencing_token,
+        previous_token: None,
+      ))
     Some(current) -> {
-      case current.tenant_scope == incoming.tenant_scope
+      case
+        current.tenant_scope == incoming.tenant_scope
         && current.resource_key == incoming.resource_key
       {
         False -> Error(IdentityMismatch)
@@ -198,41 +201,36 @@ pub fn evaluate_fence(
           let current_value = fencing_token_value(current.fencing_token)
           case incoming_value > current_value, incoming_value < current_value {
             True, _ ->
-              Ok(
-                FenceDecision(
-                  kind: Advanced,
-                  should_apply: True,
-                  incoming_token: incoming.fencing_token,
-                  current_token: incoming.fencing_token,
-                  previous_token: previous,
-                ),
-              )
+              Ok(FenceDecision(
+                kind: Advanced,
+                should_apply: True,
+                incoming_token: incoming.fencing_token,
+                current_token: incoming.fencing_token,
+                previous_token: previous,
+              ))
             False, True ->
-              Ok(
-                FenceDecision(
-                  kind: Stale,
-                  should_apply: False,
-                  incoming_token: incoming.fencing_token,
-                  current_token: current.fencing_token,
-                  previous_token: previous,
-                ),
-              )
+              Ok(FenceDecision(
+                kind: Stale,
+                should_apply: False,
+                incoming_token: incoming.fencing_token,
+                current_token: current.fencing_token,
+                previous_token: previous,
+              ))
             False, False -> {
-              let kind = case current.operation_id == incoming.operation_id
+              let kind = case
+                current.operation_id == incoming.operation_id
                 && current.payload_sha256 == incoming.payload_sha256
               {
                 True -> Replay
                 False -> TokenReuse
               }
-              Ok(
-                FenceDecision(
-                  kind: kind,
-                  should_apply: False,
-                  incoming_token: incoming.fencing_token,
-                  current_token: current.fencing_token,
-                  previous_token: previous,
-                ),
-              )
+              Ok(FenceDecision(
+                kind: kind,
+                should_apply: False,
+                incoming_token: incoming.fencing_token,
+                current_token: current.fencing_token,
+                previous_token: previous,
+              ))
             }
           }
         }
@@ -284,13 +282,9 @@ fn validate_optional_field(
   }
 }
 
-fn validate_payload_sha256(
-  value: String,
-) -> Result(Nil, FenceValidationError) {
+fn validate_payload_sha256(value: String) -> Result(Nil, FenceValidationError) {
   let graphemes = string.to_graphemes(value)
-  case list.length(graphemes) == 64
-    && list.all(graphemes, is_lower_hex_digit)
-  {
+  case list.length(graphemes) == 64 && list.all(graphemes, is_lower_hex_digit) {
     True -> Ok(Nil)
     False -> Error(InvalidPayloadSha256)
   }

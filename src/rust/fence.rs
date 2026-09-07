@@ -156,11 +156,7 @@ impl FencedWriteRequest {
     }
 
     pub fn validate(&self) -> Result<(), FenceValidationError> {
-        validate_non_empty(
-            "tenantScope",
-            &self.tenant_scope,
-            MAX_TENANT_SCOPE_BYTES,
-        )?;
+        validate_non_empty("tenantScope", &self.tenant_scope, MAX_TENANT_SCOPE_BYTES)?;
         validate_non_empty("resourceKey", self.resource_key.as_str(), 512)?;
         validate_non_empty("operationId", &self.operation_id, MAX_OPERATION_ID_BYTES)?;
         validate_sha256(&self.payload_sha256)?;

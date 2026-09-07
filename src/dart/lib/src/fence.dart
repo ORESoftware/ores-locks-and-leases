@@ -251,9 +251,8 @@ FenceDecision evaluateFence(
   final sameOperation = current.operationId == incoming.operationId &&
       current.payloadSha256 == incoming.payloadSha256;
   return FenceDecision(
-    kind: sameOperation
-        ? FenceDecisionKind.replay
-        : FenceDecisionKind.tokenReuse,
+    kind:
+        sameOperation ? FenceDecisionKind.replay : FenceDecisionKind.tokenReuse,
     shouldApply: false,
     incomingToken: incoming.fencingToken,
     currentToken: current.fencingToken,

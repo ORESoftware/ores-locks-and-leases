@@ -52,10 +52,9 @@ pub mod coordinated;
 
 pub use error::{LockError, LockErrorKind};
 pub use fence::{
-    FenceDecision, FenceDecisionKind, FenceValidationError, FenceWatermark,
-    FencedWriteRequest, FencingTokenText, MAX_FENCE_METADATA_BYTES,
-    MAX_FENCING_TOKEN_TEXT, MAX_OPERATION_ID_BYTES, MAX_TENANT_SCOPE_BYTES,
-    evaluate_fence,
+    FenceDecision, FenceDecisionKind, FenceValidationError, FenceWatermark, FencedWriteRequest,
+    FencingTokenText, MAX_FENCE_METADATA_BYTES, MAX_FENCING_TOKEN_TEXT, MAX_OPERATION_ID_BYTES,
+    MAX_TENANT_SCOPE_BYTES, evaluate_fence,
 };
 pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64};
 pub use lease::{AcquireOptions, FencingToken, Lease, LeaseGrant, NoLease, WorkFuture, with_lease};

@@ -31,8 +31,7 @@ fn request(
 }
 
 pub fn fencing_token_preserves_full_unsigned_64_range_test() {
-  let assert Ok(token) =
-    fence.fencing_token_text("18446744073709551615")
+  let assert Ok(token) = fence.fencing_token_text("18446744073709551615")
   fence.fencing_token_to_string(token)
   |> should.equal("18446744073709551615")
   fence.fencing_token_value(token)
@@ -78,9 +77,7 @@ pub fn decision_matrix_matches_shared_corpus_test() {
   advanced.should_apply |> should.be_true
 
   let current =
-    fence.watermark_from_request(
-      request("tenant/acme", "42", "op-42", digest_b),
-    )
+    fence.watermark_from_request(request("tenant/acme", "42", "op-42", digest_b))
   let assert Ok(replay) =
     fence.evaluate_fence(
       option.Some(current),
@@ -109,14 +106,12 @@ pub fn decision_matrix_matches_shared_corpus_test() {
 
 pub fn identity_mismatch_fails_validation_test() {
   let current =
-    fence.watermark_from_request(
-      request(
-        "tenant/other",
-        "42",
-        "op-42",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      ),
-    )
+    fence.watermark_from_request(request(
+      "tenant/other",
+      "42",
+      "op-42",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ))
   let incoming =
     request(
       "tenant/acme",
@@ -124,8 +119,7 @@ pub fn identity_mismatch_fails_validation_test() {
       "op-43",
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     )
-  let assert Error(error) =
-    fence.evaluate_fence(option.Some(current), incoming)
+  let assert Error(error) = fence.evaluate_fence(option.Some(current), incoming)
   fence.fence_validation_error_code(error)
   |> should.equal("identity_mismatch")
 }

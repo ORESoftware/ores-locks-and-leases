@@ -49,7 +49,11 @@ fn fence_decisions_match_the_shared_corpus() {
             None => {
                 let expected = &case["expected"];
                 let decision = evaluate_fence(current.as_ref(), &incoming).unwrap();
-                assert_eq!(decision.kind.as_str(), expected["kind"].as_str().unwrap(), "{name}");
+                assert_eq!(
+                    decision.kind.as_str(),
+                    expected["kind"].as_str().unwrap(),
+                    "{name}"
+                );
                 assert_eq!(
                     decision.should_apply,
                     expected["shouldApply"].as_bool().unwrap(),
@@ -66,7 +70,10 @@ fn fence_decisions_match_the_shared_corpus() {
                     "{name}"
                 );
                 assert_eq!(
-                    decision.previous_token.as_ref().map(FencingTokenText::as_str),
+                    decision
+                        .previous_token
+                        .as_ref()
+                        .map(FencingTokenText::as_str),
                     expected["previousToken"].as_str(),
                     "{name}"
                 );
