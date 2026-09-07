@@ -13,9 +13,9 @@
 -- Returns:
 --   { decision, should_apply ("1"|"0"), current_token, previous_token_or_empty }
 --
--- The two keys must carry the same non-empty Redis Cluster hash tag. This
--- script deliberately never calls tonumber(): Redis Lua numbers are doubles
--- and cannot preserve the full Fiducia uint64 range.
+-- The two keys must be distinct and carry the same non-empty Redis Cluster
+-- hash tag. This script deliberately never calls tonumber(): Redis Lua numbers
+-- are doubles and cannot preserve the full Fiducia uint64 range.
 
 local MAX_TOKEN = "18446744073709551615"
 
@@ -80,6 +80,10 @@ end
 
 local watermark_key = KEYS[1]
 local state_key = KEYS[2]
+-- Check before any Redis call: SET on the watermark key would destroy the hash.
+if watermark_key == state_key then
+  return fail("watermark and state keys must be distinct")
+end
 local watermark_tag = hash_tag(watermark_key)
 local state_tag = hash_tag(state_key)
 if not watermark_tag or not state_tag or watermark_tag ~= state_tag then
