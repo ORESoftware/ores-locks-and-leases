@@ -28,11 +28,48 @@ run_fence() {
     | paste -sd '|' -
 }
 
+assert_alias_rejected() {
+  alias_key=$1
+  invalid=$(
+    redis-cli -h "$redis_host" -p "$redis_port" --raw \
+      --eval "$here/fenced-write.lua" "$alias_key" "$alias_key" , \
+      2 op-alias "$digest_b" corrupted worker-alias lease-alias 2>&1 || true
+  )
+  # A shared hash tag does not imply two distinct keys. Require our exact error,
+  # not a later WRONGTYPE error after the script has already touched a key.
+  if ! printf '%s' "$invalid" | grep -Fq 'ORES_FENCE watermark and state keys must be distinct'; then
+    printf 'expected distinct-key rejection, got: %s\n' "$invalid" >&2
+    return 1
+  fi
+}
+
 cleanup
+
+# Rejection on an absent key must not create either a hash or a state string.
+assert_alias_rejected "$watermark"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" EXISTS "$watermark")" = "0"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" EXISTS "$state")" = "0"
 
 reply=$(run_fence 1 op-1 "$digest_a" first worker-a lease-1)
 test "$reply" = "advanced|1|1|"
 test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw GET "$state")" = "first"
+
+# Token 2 would otherwise advance the hash and then SET over that same hash.
+assert_alias_rejected "$watermark"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw TYPE "$watermark")" = "hash"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HLEN "$watermark")" = "5"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HGET "$watermark" fencing_token)" = "1"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HGET "$watermark" operation_id)" = "op-1"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HGET "$watermark" payload_sha256)" = "$digest_a"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HGET "$watermark" holder)" = "worker-a"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HGET "$watermark" lease_id)" = "lease-1"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw GET "$state")" = "first"
+
+# Reject an alias of the existing state key before even attempting HGET.
+assert_alias_rejected "$state"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw TYPE "$state")" = "string"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw GET "$state")" = "first"
+test "$(redis-cli -h "$redis_host" -p "$redis_port" --raw HGET "$watermark" fencing_token)" = "1"
 
 reply=$(run_fence 1 op-1 "$digest_a" replayed worker-a-retry lease-1)
 test "$reply" = "replay|0|1|1"
