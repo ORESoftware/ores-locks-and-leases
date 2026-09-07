@@ -1,0 +1,64 @@
+{
+  "$comment": "Cross-runtime fencing-token persistence decisions. Tokens are canonical uint64 decimal strings; operation IDs and payload digests identify an idempotent write.",
+  "schemaVersion": 1,
+  "maximumFencingToken": "18446744073709551615",
+  "cases": [
+    {
+      "name": "first writer advances",
+      "current": null,
+      "incoming": {"fencingToken": "1", "operationId": "op:first", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+      "expect": {"kind": "advanced", "apply": true, "watermark": {"fencingToken": "1", "operationId": "op:first", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"}}
+    },
+    {
+      "name": "newer token advances",
+      "current": {"fencingToken": "7", "operationId": "op:seven", "payloadSha256": "7777777777777777777777777777777777777777777777777777777777777777"},
+      "incoming": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "expect": {"kind": "advanced", "apply": true, "watermark": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"}}
+    },
+    {
+      "name": "same operation is replay",
+      "current": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "incoming": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "expect": {"kind": "replay", "apply": false, "watermark": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"}}
+    },
+    {
+      "name": "equal token with another operation is token reuse",
+      "current": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "incoming": {"fencingToken": "8", "operationId": "op:other", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "expect": {"kind": "token_reuse", "apply": false, "watermark": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"}}
+    },
+    {
+      "name": "equal token with another payload is token reuse",
+      "current": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "incoming": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "9999999999999999999999999999999999999999999999999999999999999999"},
+      "expect": {"kind": "token_reuse", "apply": false, "watermark": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"}}
+    },
+    {
+      "name": "older token is stale",
+      "current": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      "incoming": {"fencingToken": "7", "operationId": "op:late-seven", "payloadSha256": "7777777777777777777777777777777777777777777777777777777777777777"},
+      "expect": {"kind": "stale", "apply": false, "watermark": {"fencingToken": "8", "operationId": "op:eight", "payloadSha256": "8888888888888888888888888888888888888888888888888888888888888888"}}
+    },
+    {
+      "name": "maximum unsigned token is exact",
+      "current": {"fencingToken": "18446744073709551614", "operationId": "op:max-minus-one", "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "incoming": {"fencingToken": "18446744073709551615", "operationId": "op:max", "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "expect": {"kind": "advanced", "apply": true, "watermark": {"fencingToken": "18446744073709551615", "operationId": "op:max", "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+    },
+    {
+      "name": "zero is canonical",
+      "current": null,
+      "incoming": {"fencingToken": "0", "operationId": "op:zero", "payloadSha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+      "expect": {"kind": "advanced", "apply": true, "watermark": {"fencingToken": "0", "operationId": "op:zero", "payloadSha256": "0000000000000000000000000000000000000000000000000000000000000000"}}
+    }
+  ],
+  "invalid": [
+    {"name": "leading zero token", "incoming": {"fencingToken": "01", "operationId": "op:bad-token", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"}, "field": "fencingToken"},
+    {"name": "token over uint64", "incoming": {"fencingToken": "18446744073709551616", "operationId": "op:overflow", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"}, "field": "fencingToken"},
+    {"name": "signed token", "incoming": {"fencingToken": "-1", "operationId": "op:signed", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"}, "field": "fencingToken"},
+    {"name": "empty operation id", "incoming": {"fencingToken": "1", "operationId": "", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"}, "field": "operationId"},
+    {"name": "operation id with a space", "incoming": {"fencingToken": "1", "operationId": "op has space", "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"}, "field": "operationId"},
+    {"name": "uppercase payload digest", "incoming": {"fencingToken": "1", "operationId": "op:uppercase", "payloadSha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, "field": "payloadSha256"},
+    {"name": "short payload digest", "incoming": {"fencingToken": "1", "operationId": "op:short", "payloadSha256": "abcd"}, "field": "payloadSha256"}
+  ]
+}
