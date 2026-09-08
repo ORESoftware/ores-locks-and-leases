@@ -80,7 +80,8 @@ FencedWriteRequest fencedWriteRequestFromJsonValue(Object? value) {
   }
 
   final tenantScope = _requiredString(fields, 'tenantScope', 'invalid_type');
-  final resourceKeyText = _requiredString(fields, 'resourceKey', 'invalid_type');
+  final resourceKeyText =
+      _requiredString(fields, 'resourceKey', 'invalid_type');
   final fencingTokenText =
       _requiredString(fields, 'fencingToken', 'invalid_fencing_token');
   final operationId = _requiredString(fields, 'operationId', 'invalid_type');
