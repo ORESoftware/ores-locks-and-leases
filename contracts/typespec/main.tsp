@@ -112,17 +112,18 @@ model LockLayers {
 
 @doc("How the Postgres advisory lock is scoped.")
 enum PgScope {
-  @doc("pg_advisory_xact_lock inside a transaction the routine opens; released at commit/rollback. The caller's work runs inside that transaction.")
+  @doc("pg_advisory_xact_lock inside a transaction the routine opens; released at commit/rollback. The caller's work runs inside it.")
   transaction: "transaction",
 
   @doc("pg_advisory_lock / pg_advisory_unlock on one dedicated connection; no transaction is opened. For work that must not run inside a transaction.")
   session: "session",
 }
 
-@doc("The ordered actions a routine performs for a given LockLayers / PgScope / wait tuple. Matrix: conformance/cases/lock-plan.json.")
+@doc("One observable action in a lock routine. Maintained transactions may emit fiducia.renew dynamically without changing the legacy static lock-plan matrix.")
 enum LockStep {
   fiduciaAcquire: "fiducia.acquire",
   fiduciaTryAcquire: "fiducia.try_acquire",
+  fiduciaRenew: "fiducia.renew",
   fiduciaRelease: "fiducia.release",
   pgBegin: "pg.begin",
   pgAdvisoryXactLock: "pg.advisory_xact_lock",
@@ -135,7 +136,7 @@ enum LockStep {
   work: "work",
 }
 
-@doc("A pure function of the inputs; every implementation must produce the same steps.")
+@doc("A pure function of the inputs; every implementation must produce the same steps. Dynamic maintenance renewals are intentionally not included.")
 model LockPlan {
   layers: LockLayers;
   pgScope: PgScope;
@@ -149,14 +150,19 @@ model AcquireOptions {
   @doc("Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released.")
   ttlMs: int64;
 
-  @doc("Time to poll the fiducia authority before giving up, in milliseconds. PostgreSQL blocking waits use that session's lock_timeout/statement_timeout; ignored when wait is false.")
+  @doc("Time to poll the fiducia authority before giving up, in milliseconds. Maintained PostgreSQL waits use this as their bounded advisory-lock budget; ignored when wait is false.")
   waitTimeoutMs: int64;
 
-  @doc("Poll interval while waiting on the fiducia layer, in milliseconds.")
+  @doc("Poll interval while waiting on the fiducia or maintained PostgreSQL advisory-lock layer, in milliseconds.")
   retryIntervalMs: int64;
 
   @doc("Caller identity for the fiducia layer; also the release key. Absent: an unguessable generated id.")
   holder?: string;
+}
+
+@doc("Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer.")
+model LeaseMaintenanceOptions {
+  renewIntervalMs: int64;
 }
 
 @doc("A held fiducia grant, as returned by the lease authority.")
@@ -189,7 +195,7 @@ enum LockErrorKind {
   @doc("The caller's work returned an error; outer layers were still released/rolled back.")
   work: "work",
 
-  @doc("The inputs cannot be planned (e.g. pgAdvisory with session scope on a pooled connection).")
+  @doc("The inputs cannot be planned (e.g. pgAdvisory with session scope on a pooled connection, or an unsafe renewal cadence).")
   invalidPlan: "invalid_plan",
 }
 
