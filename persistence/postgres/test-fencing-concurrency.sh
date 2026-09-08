@@ -18,11 +18,9 @@ digest_a=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 digest_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ores-fence-pg.XXXXXX")
 
-
 psql_db() {
-  PGDATABASE="$database_url" psql "$@"
+  psql "$database_url" "$@"
 }
-
 
 cleanup() {
   psql_db -v ON_ERROR_STOP=1 -q \
