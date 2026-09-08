@@ -46,22 +46,22 @@ concurrency:
 jobs:
   format-and-push:
     if: >-
-      github.event_name == 'push' &&
+      github.event_name == 'pull_request' &&
       github.actor != 'github-actions[bot]' &&
-      github.ref == 'refs/heads/feat/DEN-2045-renewal-supervisor'
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Check out exact formatter revision
+      - name: Check out exact PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
-          fetch-depth: 2
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
           persist-credentials: true
           show-progress: false
-      - name: Verify exact formatter revision
+      - name: Verify exact PR head
         env:
-          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with: { toolchain: '1.85.1', components: 'rustfmt' }
@@ -69,18 +69,19 @@ jobs:
         with: { sdk: '3.13.3' }
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
-      - name: Format and commit only the reviewed renewal paths
+      - name: Format and commit only reviewed renewal paths
         env:
-          BRANCH: feat/DEN-2045-renewal-supervisor
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           cargo fmt --manifest-path src/rust/Cargo.toml --all
           dart format src/dart/lib src/dart/test
           gleam format src/gleam/src src/gleam/test
 
-          # Restore this workflow to its reviewed pre-helper form and remove
-          # the unregistered one-shot probe. Both paths remain explicit.
-          git checkout HEAD^ -- .github/workflows/renewal-supervisor.yml
+          # Restore the reviewed exact-head workflow from the feature commit
+          # and remove the temporary, unregistered one-shot formatter probe.
+          git checkout 9d6cc0b570d174bd7ccc34b4c426fc809b192267 -- \
+            .github/workflows/renewal-supervisor.yml
           git rm -- .github/workflows/format-renewal-once.yml
 
           git config user.name 'github-actions[bot]'
