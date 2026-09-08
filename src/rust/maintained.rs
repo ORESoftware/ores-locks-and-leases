@@ -15,14 +15,12 @@ use std::time::Duration;
 use sea_orm::{DatabaseTransaction, TransactionTrait};
 use tokio::time::{Instant, Interval, MissedTickBehavior, interval_at, sleep_until};
 
+use crate::LockKey;
 use crate::coordinated::Guarded;
 use crate::error::{LockError, LockErrorKind};
-use crate::lease::{
-    AcquireOptions, Lease, LeaseGrant, WorkFuture, release_lost, tag_step,
-};
+use crate::lease::{AcquireOptions, Lease, LeaseGrant, WorkFuture, release_lost, tag_step};
 use crate::pg;
 use crate::plan::LockStep;
-use crate::LockKey;
 
 /// Renewal cadence for [`with_maintained_xact_lock`].
 ///
@@ -53,7 +51,12 @@ impl LeaseMaintenanceOptions {
     }
 
     /// Validate before either coordination layer is acquired.
-    pub fn validate(&self, key: &LockKey, acquire: &AcquireOptions, wait: bool) -> Result<(), LockError> {
+    pub fn validate(
+        &self,
+        key: &LockKey,
+        acquire: &AcquireOptions,
+        wait: bool,
+    ) -> Result<(), LockError> {
         if acquire.ttl.is_zero() {
             return Err(LockError::invalid_plan(
                 key,
@@ -118,19 +121,16 @@ where
 {
     maintenance.validate(key, acquire, wait)?;
 
-    let grant = lease
-        .acquire(key, acquire, wait)
-        .await
-        .map_err(|err| {
-            tag_step(
-                err,
-                if wait {
-                    LockStep::FiduciaAcquire
-                } else {
-                    LockStep::FiduciaTryAcquire
-                },
-            )
-        })?;
+    let grant = lease.acquire(key, acquire, wait).await.map_err(|err| {
+        tag_step(
+            err,
+            if wait {
+                LockStep::FiduciaAcquire
+            } else {
+                LockStep::FiduciaTryAcquire
+            },
+        )
+    })?;
 
     let txn = match db.begin().await {
         Ok(txn) => txn,
@@ -147,16 +147,8 @@ where
     );
     renewals.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    if let Err(error) = acquire_transaction_lock(
-        &txn,
-        key,
-        wait,
-        acquire,
-        lease,
-        &grant,
-        &mut renewals,
-    )
-    .await
+    if let Err(error) =
+        acquire_transaction_lock(&txn, key, wait, acquire, lease, &grant, &mut renewals).await
     {
         return rollback_then_settle(key, lease, &grant, txn, error).await;
     }
@@ -199,8 +191,7 @@ where
     let committed = match txn.commit().await {
         Ok(()) => Ok(value),
         Err(cause) => Err(
-            LockError::new(LockErrorKind::Database, key, cause.to_string())
-                .at(LockStep::PgCommit),
+            LockError::new(LockErrorKind::Database, key, cause.to_string()).at(LockStep::PgCommit),
         ),
     };
     settle_lease(key, lease, &grant, committed).await
@@ -285,10 +276,7 @@ async fn renew_checked<L: Lease + Sync>(
     Ok(renewed)
 }
 
-fn validate_renewed_grant(
-    original: &LeaseGrant,
-    renewed: &LeaseGrant,
-) -> Result<(), LockError> {
+fn validate_renewed_grant(original: &LeaseGrant, renewed: &LeaseGrant) -> Result<(), LockError> {
     let mismatch = if renewed.key != original.key {
         Some("key")
     } else if renewed.holder != original.holder {
@@ -303,9 +291,7 @@ fn validate_renewed_grant(
         return Err(LockError::new(
             LockErrorKind::LostLease,
             &original.key,
-            format!(
-                "fiducia renewal changed the grant {field}; fenced authority cannot be proven"
-            ),
+            format!("fiducia renewal changed the grant {field}; fenced authority cannot be proven"),
         )
         .at(LockStep::FiduciaRenew));
     }
