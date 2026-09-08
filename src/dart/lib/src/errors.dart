@@ -45,31 +45,31 @@ final class LockError implements Exception {
   LockError(this.kind, this.key, this.message, {this.step, this.cause});
 
   LockError.contention(this.key, LockStep this.step)
-      : kind = LockErrorKind.contention,
-        message = '`$key` is held by another holder',
-        cause = null;
+    : kind = LockErrorKind.contention,
+      message = '`$key` is held by another holder',
+      cause = null;
 
   LockError.timeout(this.key, LockStep this.step, int waitedMs)
-      : kind = LockErrorKind.timeout,
-        message = 'gave up waiting for `$key` after $waitedMs ms',
-        cause = null;
+    : kind = LockErrorKind.timeout,
+      message = 'gave up waiting for `$key` after $waitedMs ms',
+      cause = null;
 
   LockError.work(this.key, Object this.cause)
-      : kind = LockErrorKind.work,
-        step = LockStep.work,
-        message = cause.toString();
+    : kind = LockErrorKind.work,
+      step = LockStep.work,
+      message = cause.toString();
 
   LockError.invalidPlan(this.key, this.message)
-      : kind = LockErrorKind.invalidPlan,
-        cause = null;
+    : kind = LockErrorKind.invalidPlan,
+      cause = null;
 
   LockError.database(this.key, LockStep this.step, Object this.cause)
-      : kind = LockErrorKind.database,
-        message = cause.toString();
+    : kind = LockErrorKind.database,
+      message = cause.toString();
 
   LockError.transport(this.key, Object this.cause, {this.step})
-      : kind = LockErrorKind.transport,
-        message = cause.toString();
+    : kind = LockErrorKind.transport,
+      message = cause.toString();
 
   /// Retrying the whole routine is reasonable: busy or out of budget, nothing half-done.
   bool get retryable =>
@@ -92,8 +92,9 @@ Object tagStep(Object error, LockStep step) {
 /// session state unknown, so callers must not see only a work error and assume
 /// an immediate whole-operation retry is safe.
 LockError cleanupFailure(LockKey key, Object cleanup, Object inner) {
-  final normalized =
-      cleanup is LockError ? cleanup : LockError.transport(key, cleanup);
+  final normalized = cleanup is LockError
+      ? cleanup
+      : LockError.transport(key, cleanup);
   return LockError(
     normalized.kind,
     normalized.key,

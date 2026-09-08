@@ -8,22 +8,24 @@ Map<String, dynamic> _map(Object? value) =>
     (value as Map<Object?, Object?>).cast<String, dynamic>();
 
 FencedWriteRequest _request(Map<String, dynamic> value) => FencedWriteRequest(
-      tenantScope: value['tenantScope'] as String,
-      resourceKey: LockKey(value['resourceKey'] as String),
-      fencingToken: FencingTokenText.parse(value['fencingToken'] as String),
-      operationId: value['operationId'] as String,
-      payloadSha256: value['payloadSha256'] as String,
-      holder: value['holder'] as String?,
-      leaseId: value['leaseId'] as String?,
-    );
+  tenantScope: value['tenantScope'] as String,
+  resourceKey: LockKey(value['resourceKey'] as String),
+  fencingToken: FencingTokenText.parse(value['fencingToken'] as String),
+  operationId: value['operationId'] as String,
+  payloadSha256: value['payloadSha256'] as String,
+  holder: value['holder'] as String?,
+  leaseId: value['leaseId'] as String?,
+);
 
 FenceWatermark _watermark(Map<String, dynamic> value) =>
     FenceWatermark.fromRequest(_request(value));
 
 void main() {
-  final corpus = _map(jsonDecode(
-    File('../../conformance/cases/fence-decision.json').readAsStringSync(),
-  ));
+  final corpus = _map(
+    jsonDecode(
+      File('../../conformance/cases/fence-decision.json').readAsStringSync(),
+    ),
+  );
 
   for (final rawCase in corpus['cases'] as List<dynamic>) {
     final fixture = _map(rawCase);
@@ -38,8 +40,11 @@ void main() {
         expect(
           () => evaluateFence(current, incoming),
           throwsA(
-            isA<FenceValidationException>()
-                .having((error) => error.code, 'code', expectedError),
+            isA<FenceValidationException>().having(
+              (error) => error.code,
+              'code',
+              expectedError,
+            ),
           ),
         );
         return;
@@ -72,8 +77,9 @@ void main() {
   });
 
   test('full unsigned-64 maximum remains exact', () {
-    final token =
-        FencingTokenText.fromBigInt(BigInt.parse(maxFencingTokenText));
+    final token = FencingTokenText.fromBigInt(
+      BigInt.parse(maxFencingTokenText),
+    );
     expect(token.value, maxFencingTokenText);
     expect(token.numeric, (BigInt.one << 64) - BigInt.one);
   });

@@ -72,11 +72,11 @@ enum FenceDecisionKind {
   tokenReuse;
 
   String get wire => switch (this) {
-        FenceDecisionKind.advanced => 'advanced',
-        FenceDecisionKind.replay => 'replay',
-        FenceDecisionKind.stale => 'stale',
-        FenceDecisionKind.tokenReuse => 'token_reuse',
-      };
+    FenceDecisionKind.advanced => 'advanced',
+    FenceDecisionKind.replay => 'replay',
+    FenceDecisionKind.stale => 'stale',
+    FenceDecisionKind.tokenReuse => 'token_reuse',
+  };
 }
 
 /// One application mutation guarded by a Fiducia token.
@@ -248,11 +248,13 @@ FenceDecision evaluateFence(
     );
   }
 
-  final sameOperation = current.operationId == incoming.operationId &&
+  final sameOperation =
+      current.operationId == incoming.operationId &&
       current.payloadSha256 == incoming.payloadSha256;
   return FenceDecision(
-    kind:
-        sameOperation ? FenceDecisionKind.replay : FenceDecisionKind.tokenReuse,
+    kind: sameOperation
+        ? FenceDecisionKind.replay
+        : FenceDecisionKind.tokenReuse,
     shouldApply: false,
     incomingToken: incoming.fencingToken,
     currentToken: current.fencingToken,
