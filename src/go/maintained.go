@@ -323,7 +323,6 @@ func (m *leaseMaintainer) run(
 func (m *leaseMaintainer) stop() error {
 	m.stopOnce.Do(func() { close(m.stopCh) })
 	<-m.doneCh
-	m.cancel(nil)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.failure
