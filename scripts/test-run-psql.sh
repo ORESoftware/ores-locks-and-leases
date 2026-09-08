@@ -93,8 +93,10 @@ expect_failure fragment \
   'postgres://user:p%40ss@db.example.test/locks#fragment' \
   'must not include a fragment'
 
-if PATH="$scratch:$PATH" node "$root/scripts/run-psql.mjs" --version \
-  >"$scratch/missing.stdout" 2>"$scratch/missing.stderr"; then
+if (
+  unset ORES_LOCKS_TEST_DATABASE_URL
+  PATH="$scratch:$PATH" node "$root/scripts/run-psql.mjs" --version
+) >"$scratch/missing.stdout" 2>"$scratch/missing.stderr"; then
   echo "missing URL unexpectedly succeeded" >&2
   exit 1
 fi
