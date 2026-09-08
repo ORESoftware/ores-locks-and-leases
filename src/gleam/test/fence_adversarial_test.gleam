@@ -165,7 +165,10 @@ fn corpus_decoder() -> decode.Decoder(Corpus) {
   use schema <- decode.field("schema", decode.string)
   use generator <- decode.field("generator", decode.string)
   use seed <- decode.field("seed", decode.string)
-  use token_cases <- decode.field("tokenCases", decode.list(token_case_decoder()))
+  use token_cases <- decode.field(
+    "tokenCases",
+    decode.list(token_case_decoder()),
+  )
   use request_cases <- decode.field(
     "requestCases",
     decode.list(request_case_decoder()),
@@ -259,7 +262,9 @@ pub fn adversarial_decision_classification_test() {
         Some(fence.watermark_from_request(current_request))
       }
     }
-    case fence.evaluate_fence(current, incoming), test_case.expected,
+    case
+      fence.evaluate_fence(current, incoming),
+      test_case.expected,
       test_case.expected_error
     {
       Error(error), None, Some(expected_error) ->

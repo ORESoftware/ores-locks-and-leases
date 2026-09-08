@@ -105,7 +105,7 @@ test("generated wire adversaries cannot trigger coercion or escape the closed ob
   const valid = corpus.requestCases.find((item) => item.expected.ok).incoming;
   for (const [field, value, code] of [
     ["tenantScope", hostile, "invalid_type"],
-    ["fencingToken", hostile, "invalid_fencing_token"],
+    ["fencingToken", hostile, "invalid_type"],
     ["payloadSha256", hostile, "invalid_payload_sha256"],
   ]) {
     assertFenceError(
