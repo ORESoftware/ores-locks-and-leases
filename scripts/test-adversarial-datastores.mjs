@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import net from "node:net";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
-import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_CORPUS = "conformance/cases/fence-decision.json";
 const DEFAULT_REDIS_SCRIPT = "persistence/redis/fenced-write.lua";
 const DEFAULT_RECEIPT = "target/adversarial/store-receipt.json";
+const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const PSQL_LAUNCHER = resolve(SCRIPT_DIRECTORY, "run-psql.mjs");
 
 function parseArgs(argv) {
   const out = {
@@ -147,15 +150,20 @@ function postgresProgram(corpus, tenant, resource) {
 }
 
 function runPostgres(corpus, tenant, resource) {
-  const databaseUrl = process.env.ORES_LOCKS_TEST_DATABASE_URL;
-  if (!databaseUrl) throw new Error("ORES_LOCKS_TEST_DATABASE_URL is required");
+  if (!process.env.ORES_LOCKS_TEST_DATABASE_URL) {
+    throw new Error("ORES_LOCKS_TEST_DATABASE_URL is required");
+  }
   const sql = postgresProgram(corpus, tenant, resource);
-  const result = spawnSync("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1"], {
-    input: sql,
-    encoding: "utf8",
-    env: { ...process.env, PGDATABASE: databaseUrl },
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  const result = spawnSync(
+    process.execPath,
+    [PSQL_LAUNCHER, "-X", "-q", "-v", "ON_ERROR_STOP=1"],
+    {
+      input: sql,
+      encoding: "utf8",
+      env: process.env,
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`PostgreSQL adversarial sequence failed: ${result.stderr.trim().slice(-4000)}`);
