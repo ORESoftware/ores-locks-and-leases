@@ -16,6 +16,13 @@
 -- The two keys must be distinct and carry the same non-empty Redis Cluster
 -- hash tag. This script deliberately never calls tonumber(): Redis Lua numbers
 -- are doubles and cannot preserve the full Fiducia uint64 range.
+--
+-- Redis does not roll back commands already executed by a script that later
+-- errors. Consequently every deterministic input, key-slot, key-type, and
+-- persisted-state check is completed before the first HSET. If an
+-- infrastructure failure interrupts the final HSET/SET pair, the next call
+-- detects the watermark/state invariant violation and fails closed rather
+-- than silently repairing it.
 
 local MAX_TOKEN = "18446744073709551615"
 
@@ -67,8 +74,19 @@ local function compare_decimal(left, right)
   return 0
 end
 
+local function valid_required(value, max_bytes)
+  return value ~= nil and #value >= 1 and #value <= max_bytes
+end
+
 local function valid_optional(value, max_bytes)
-  return value == nil or value == "" or (#value >= 1 and #value <= max_bytes)
+  return value ~= nil and (#value == 0 or (#value >= 1 and #value <= max_bytes))
+end
+
+local function reply_text(reply)
+  if type(reply) == "table" then
+    return reply.ok
+  end
+  return reply
 end
 
 if #KEYS ~= 2 then
@@ -80,7 +98,8 @@ end
 
 local watermark_key = KEYS[1]
 local state_key = KEYS[2]
--- Check before any Redis call: SET on the watermark key would destroy the hash.
+-- Check identities before any key read or write. A shared hash tag does not
+-- make the logical watermark and protected value interchangeable.
 if watermark_key == state_key then
   return fail("watermark and state keys must be distinct")
 end
@@ -100,7 +119,7 @@ local lease_id = ARGV[6] or ""
 if not canonical_token(incoming) then
   return fail("fencing token must be canonical unsigned-64 decimal text")
 end
-if not operation_id or #operation_id < 1 or #operation_id > 128 then
+if not valid_required(operation_id, 128) then
   return fail("operation id must contain 1..128 bytes")
 end
 if not payload_sha256
@@ -116,8 +135,25 @@ if not valid_optional(lease_id, 256) then
   return fail("lease id must be absent or contain 1..256 bytes")
 end
 
+-- Wrong Redis key types are deterministic script errors. Detect them before
+-- the first mutation so a caller cannot cause a partial HSET/SET sequence.
+local watermark_type = reply_text(redis.call("TYPE", watermark_key))
+local state_type = reply_text(redis.call("TYPE", state_key))
+if watermark_type ~= "none" and watermark_type ~= "hash" then
+  return fail("watermark key must be absent or a hash")
+end
+if state_type ~= "none" and state_type ~= "string" then
+  return fail("state key must be absent or a string")
+end
+if watermark_type == "none" and state_type ~= "none" then
+  return fail("protected state exists without a fencing watermark")
+end
+if watermark_type == "hash" and state_type == "none" then
+  return fail("fencing watermark exists without protected state")
+end
+
 local current = redis.call("HGET", watermark_key, "fencing_token")
-if not current then
+if watermark_type == "none" then
   redis.call(
     "HSET",
     watermark_key,
@@ -131,8 +167,32 @@ if not current then
   return { "advanced", "1", incoming, "" }
 end
 
+-- A persisted hash is closed state, not a bag of fields. Missing, extra, or
+-- malformed metadata is corruption and may not be repaired by a newer token.
+if redis.call("HLEN", watermark_key) ~= 5 then
+  return fail("stored watermark has an unexpected field set")
+end
+local current_operation = redis.call("HGET", watermark_key, "operation_id")
+local current_payload = redis.call("HGET", watermark_key, "payload_sha256")
+local current_holder = redis.call("HGET", watermark_key, "holder")
+local current_lease = redis.call("HGET", watermark_key, "lease_id")
 if not canonical_token(current) then
   return fail("stored watermark is not canonical unsigned-64 decimal text")
+end
+if not valid_required(current_operation, 128) then
+  return fail("stored watermark operation id is malformed")
+end
+if not current_payload
+    or #current_payload ~= 64
+    or not string.match(current_payload, "^[0-9a-f]+$")
+then
+  return fail("stored watermark payload SHA-256 is malformed")
+end
+if not valid_optional(current_holder, 256) then
+  return fail("stored watermark holder is malformed")
+end
+if not valid_optional(current_lease, 256) then
+  return fail("stored watermark lease id is malformed")
 end
 
 local comparison = compare_decimal(incoming, current)
@@ -154,8 +214,6 @@ if comparison < 0 then
   return { "stale", "0", current, current }
 end
 
-local current_operation = redis.call("HGET", watermark_key, "operation_id")
-local current_payload = redis.call("HGET", watermark_key, "payload_sha256")
 if current_operation == operation_id and current_payload == payload_sha256 then
   return { "replay", "0", current, current }
 end

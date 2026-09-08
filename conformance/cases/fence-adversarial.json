@@ -1,0 +1,357 @@
+{
+  "$comment": "Deterministic adversarial fencing corpus. Generated; edit scripts/generate-fence-adversarial.py, not this file.",
+  "schema": "ores.locks.fence-adversarial/v1",
+  "generator": "splitmix64-v1",
+  "seed": "0x4f5245534c4f434b",
+  "randomDecisionCases": 1,
+  "counts": {
+    "tokenCases": 6,
+    "requestCases": 5,
+    "decisionCases": 8,
+    "total": 19
+  },
+  "tokenCases": [
+    {
+      "name": "valid-token-000",
+      "value": "0",
+      "expected": {
+        "ok": true,
+        "canonical": "0"
+      }
+    },
+    {
+      "name": "valid-token-008",
+      "value": "9007199254740992",
+      "expected": {
+        "ok": true,
+        "canonical": "9007199254740992"
+      }
+    },
+    {
+      "name": "valid-token-014",
+      "value": "18446744073709551615",
+      "expected": {
+        "ok": true,
+        "canonical": "18446744073709551615"
+      }
+    },
+    {
+      "name": "invalid-token-000",
+      "value": "",
+      "expected": {
+        "ok": false,
+        "error": "invalid_fencing_token"
+      }
+    },
+    {
+      "name": "invalid-token-001",
+      "value": "00",
+      "expected": {
+        "ok": false,
+        "error": "invalid_fencing_token"
+      }
+    },
+    {
+      "name": "invalid-token-016",
+      "value": "18446744073709551616",
+      "expected": {
+        "ok": false,
+        "error": "invalid_fencing_token"
+      }
+    }
+  ],
+  "requestCases": [
+    {
+      "name": "valid-two-byte-utf8-boundaries",
+      "incoming": {
+        "tenantScope": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "payloadSha256": "7927da7421a7ddc47f6a1e24eb424ae08a4e77567c5fbf4280b3de235a4a4819",
+        "holder": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "leaseId": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      },
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "name": "tenant-two-byte-utf8-overlong",
+      "incoming": {
+        "tenantScope": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "op-1",
+        "payloadSha256": "7927da7421a7ddc47f6a1e24eb424ae08a4e77567c5fbf4280b3de235a4a4819",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "ok": false,
+        "error": "too_long"
+      }
+    },
+    {
+      "name": "holder-empty-is-not-absence",
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "op-1",
+        "payloadSha256": "7927da7421a7ddc47f6a1e24eb424ae08a4e77567c5fbf4280b3de235a4a4819",
+        "holder": "",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "ok": false,
+        "error": "empty_field"
+      }
+    },
+    {
+      "name": "holder-overlong",
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "op-1",
+        "payloadSha256": "7927da7421a7ddc47f6a1e24eb424ae08a4e77567c5fbf4280b3de235a4a4819",
+        "holder": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "ok": false,
+        "error": "too_long"
+      }
+    },
+    {
+      "name": "payload-uppercase",
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "op-1",
+        "payloadSha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "ok": false,
+        "error": "invalid_payload_sha256"
+      }
+    }
+  ],
+  "decisionCases": [
+    {
+      "name": "boundary-000-first-zero",
+      "current": null,
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "0",
+        "operationId": "op-first-zero-new",
+        "payloadSha256": "6b77dbed0d35c8d90247314331e6dbf6130eaf45f21eff9a6b26f71b9ffab328",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "0",
+        "currentToken": "0",
+        "previousToken": null
+      }
+    },
+    {
+      "name": "boundary-001-zero-to-one",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "0",
+        "operationId": "op-zero-to-one-old",
+        "payloadSha256": "ae251c3f115449fb6c8f40189e2a2d3f5927bd700fbb3a22443fdbbe80f2452b",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "1",
+        "operationId": "op-zero-to-one-new",
+        "payloadSha256": "1457ebc1d7b2817ce525bab8dddecbdafa1ac73a7025458b518b91e8a172e4d2",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "1",
+        "currentToken": "1",
+        "previousToken": "0"
+      }
+    },
+    {
+      "name": "boundary-002-js-safe-boundary",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9007199254740991",
+        "operationId": "op-js-safe-boundary-old",
+        "payloadSha256": "27bbf639c21a522cfcacf6a705b49eb6f5cb05849b33370a484bd754162e8060",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9007199254740992",
+        "operationId": "op-js-safe-boundary-new",
+        "payloadSha256": "e86fe5c3840702708ecab3f676a62d953269bb334096369a2486c701fa2ff64d",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "9007199254740992",
+        "currentToken": "9007199254740992",
+        "previousToken": "9007199254740991"
+      }
+    },
+    {
+      "name": "boundary-003-js-unsafe-neighbor",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9007199254740992",
+        "operationId": "op-js-unsafe-neighbor-old",
+        "payloadSha256": "1636019dab486aa381bc4cfe5fcbaf7727d381b64eeffd897218a671bd313478",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9007199254740993",
+        "operationId": "op-js-unsafe-neighbor-new",
+        "payloadSha256": "62f4ca41df9027ad1b400f6e530281929b3c28bdad187a60a3e724be4cd49de0",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "9007199254740993",
+        "currentToken": "9007199254740993",
+        "previousToken": "9007199254740992"
+      }
+    },
+    {
+      "name": "boundary-004-signed-boundary",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9223372036854775807",
+        "operationId": "op-signed-boundary-old",
+        "payloadSha256": "97c48f640bd7f7970cfc46d07a0fc5d881642893b25461b63eadf91a08422230",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9223372036854775808",
+        "operationId": "op-signed-boundary-new",
+        "payloadSha256": "131b0902c68800b75268e868615f57f3886eda2d5bec2ce7ee25fe75b0810eb7",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "9223372036854775808",
+        "currentToken": "9223372036854775808",
+        "previousToken": "9223372036854775807"
+      }
+    },
+    {
+      "name": "boundary-005-uint64-maximum",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "18446744073709551614",
+        "operationId": "op-uint64-maximum-old",
+        "payloadSha256": "6fcc9636d5a8a8c9456a01402e891ca9f95ee375cca1f6ac4a96a1b0a53359c1",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "18446744073709551615",
+        "operationId": "op-uint64-maximum-new",
+        "payloadSha256": "bcc5158bcc53ed82b178ac5b6bea9e1315bdd9e807f2ea6f6dd09c636696c7fe",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "18446744073709551615",
+        "currentToken": "18446744073709551615",
+        "previousToken": "18446744073709551614"
+      }
+    },
+    {
+      "name": "boundary-006-stale-below-maximum",
+      "current": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "18446744073709551615",
+        "operationId": "op-stale-below-maximum-old",
+        "payloadSha256": "ad36e88feb10c3b35cefea417f2fbf8eb983f0298b1971c430ded249b8bb4439",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "18446744073709551614",
+        "operationId": "op-stale-below-maximum-new",
+        "payloadSha256": "11bbeae7aa17903e4e66c45a650415fc75a735c64e4ba0a58d5ffc866ac43276",
+        "holder": "worker-a",
+        "leaseId": "lease-a"
+      },
+      "expected": {
+        "kind": "stale",
+        "shouldApply": false,
+        "incomingToken": "18446744073709551614",
+        "currentToken": "18446744073709551615",
+        "previousToken": "18446744073709551615"
+      }
+    },
+    {
+      "name": "generated-0000",
+      "current": {
+        "tenantScope": "tenant/other",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "16621995089355107262",
+        "operationId": "op-0000-f41a83f26a67a9b1",
+        "payloadSha256": "4453163e78bc69f30476a3699c1911a801c64c9fab952e8b8eedc4832b47e3a9",
+        "holder": "worker-ebc739b3eeb526c3",
+        "leaseId": "lease-8c2be2661edf73cf"
+      },
+      "incoming": {
+        "tenantScope": "tenant/acme",
+        "resourceKey": "example/jobs/rebuild",
+        "fencingToken": "9223372036854775808",
+        "operationId": "op-0000-f41a83f26a67a9b1",
+        "payloadSha256": "391dde2d3d3eedb55d62239449b3f91159040b5d3aaf8792fd395d405fa185bb",
+        "holder": "worker-587683428eaf9199",
+        "leaseId": "lease-480e41910d3ad05d"
+      },
+      "expectedError": "identity_mismatch"
+    }
+  ],
+  "profile": "smoke"
+}

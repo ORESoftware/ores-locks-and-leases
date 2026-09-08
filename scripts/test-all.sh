@@ -7,6 +7,15 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 status=0
 
+if command -v python3 >/dev/null 2>&1; then
+  adversarial_corpus="$root/target/fence-adversarial/corpus.json"
+  mkdir -p "$(dirname "$adversarial_corpus")"
+  python3 "$root/scripts/generate-fence-adversarial.py" \
+    --cases "${ORES_FENCE_ADVERSARIAL_CASES:-128}" \
+    --output "$adversarial_corpus"
+  export ORES_FENCE_ADVERSARIAL_CORPUS="$adversarial_corpus"
+fi
+
 run() {
   name=$1; shift
   echo "== $name"
@@ -38,7 +47,7 @@ if command -v gleam >/dev/null 2>&1; then
 else echo "== gleam: skipped (no gleam)"; fi
 
 if command -v python3 >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then
-  run rollout-tools sh -c "bash -n '$root/templates/lib-core/fanout.sh' && sh -n '$root/scripts/test-generator-safety.sh' && sh -n '$root/scripts/test-persistence.sh' && sh -n '$root/persistence/redis/test-fenced-write.sh' && python3 -c 'compile(open(\"$root/templates/lib-core/gen_org_locks.py\", encoding=\"utf-8\").read(), \"gen_org_locks.py\", \"exec\")' && python3 -c 'compile(open(\"$root/templates/lib-core/gen_org_fencing.py\", encoding=\"utf-8\").read(), \"gen_org_fencing.py\", \"exec\")' && ! '$root/templates/lib-core/fanout.sh' --no-push >/dev/null 2>&1 && ! python3 '$root/templates/lib-core/gen_org_locks.py' --repo '$root' --org ORESoftware --prefix ores --interfaces ores-interfaces --commit --branch feat/no-linear-id >/dev/null 2>&1 && ! python3 '$root/templates/lib-core/gen_org_fencing.py' --repo '$root' --org ORESoftware --prefix ores --commit --branch feat/no-linear-id >/dev/null 2>&1 && sh '$root/scripts/test-generator-safety.sh'"
+  run rollout-tools sh -c "bash -n '$root/templates/lib-core/fanout.sh' && sh -n '$root/scripts/test-generator-safety.sh' && sh -n '$root/scripts/test-persistence.sh' && sh -n '$root/persistence/postgres/test-fencing-concurrency.sh' && sh -n '$root/persistence/redis/test-fenced-write.sh' && python3 -m py_compile '$root/scripts/generate-fence-adversarial.py' '$root/scripts/write-fence-adversarial-receipt.py' '$root/templates/lib-core/gen_org_locks.py' '$root/templates/lib-core/gen_org_fencing.py' && python3 '$root/scripts/generate-fence-adversarial.py' --cases 1 --smoke --check '$root/conformance/cases/fence-adversarial.json' && ! '$root/templates/lib-core/fanout.sh' --no-push >/dev/null 2>&1 && ! python3 '$root/templates/lib-core/gen_org_locks.py' --repo '$root' --org ORESoftware --prefix ores --interfaces ores-interfaces --commit --branch feat/no-linear-id >/dev/null 2>&1 && ! python3 '$root/templates/lib-core/gen_org_fencing.py' --repo '$root' --org ORESoftware --prefix ores --commit --branch feat/no-linear-id >/dev/null 2>&1 && sh '$root/scripts/test-generator-safety.sh'"
 else echo "== rollout-tools: skipped (no python3/bash)"; fi
 
 if command -v psql >/dev/null 2>&1 \

@@ -1,0 +1,198 @@
+name: adversarial-fencing
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adversarial-fencing-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: locks
+          POSTGRES_DB: locks
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact revision and install datastore clients
+        id: setup
+        continue-on-error: true
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client redis-tools
+          python3 -m py_compile scripts/generate-fence-adversarial.py scripts/write-fence-adversarial-receipt.py
+          sh -n scripts/test-persistence.sh
+          sh -n persistence/postgres/test-fencing-concurrency.sh
+          sh -n persistence/redis/test-fenced-write.sh
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        continue-on-error: true
+        with:
+          toolchain: '1.85.1'
+          components: rustfmt,clippy
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        continue-on-error: true
+        with:
+          go-version: '1.22'
+          cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        continue-on-error: true
+        with:
+          node-version: '22'
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+        continue-on-error: true
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        continue-on-error: true
+        with:
+          otp-version: '27'
+          gleam-version: '1.16.0'
+          rebar3-version: '3'
+      - name: Generate pinned pull-request corpus
+        id: corpus
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p target/fence-adversarial
+          python3 scripts/generate-fence-adversarial.py \
+            --seed 0x4f5245534c4f434b \
+            --cases 128 \
+            --output target/fence-adversarial/corpus.json
+          echo "660093a8e70491c268341ae94a740f8f68e2751badd29a2da37ac9a2489a6cbf  target/fence-adversarial/corpus.json" \
+            | sha256sum --check --strict
+          echo "ORES_FENCE_ADVERSARIAL_CORPUS=$GITHUB_WORKSPACE/target/fence-adversarial/corpus.json" >> "$GITHUB_ENV"
+      - name: Rust adversarial matrix
+        id: rust
+        continue-on-error: true
+        working-directory: src/rust
+        run: cargo test --locked --test fence_adversarial
+      - name: Go adversarial matrix
+        id: go
+        continue-on-error: true
+        working-directory: src/go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./... -run '^(TestFenceAdversarial|TestFencedWriteJSON)'
+      - name: TypeScript adversarial matrix
+        id: typescript
+        continue-on-error: true
+        working-directory: src/ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          node --test test/fence-adversarial.test.mjs
+      - name: Dart adversarial matrix
+        id: dart
+        continue-on-error: true
+        working-directory: src/dart
+        run: |
+          dart pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
+          dart analyze --fatal-infos
+          dart test test/fence_adversarial_test.dart
+      - name: Gleam adversarial matrix
+        id: gleam
+        continue-on-error: true
+        working-directory: src/gleam
+        run: |
+          gleam format --check src test
+          gleam test
+      - name: PostgreSQL and Redis adversarial matrix
+        id: persistence
+        continue-on-error: true
+        run: sh scripts/test-persistence.sh
+      - name: Peer-authority contract gate
+        id: contracts
+        continue-on-error: true
+        run: npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config contracts/contracts.config.json
+      - name: Write exact-head receipt
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          SETUP_RESULT: ${{ steps.setup.outcome }}
+          CORPUS_RESULT: ${{ steps.corpus.outcome }}
+          RUST_RESULT: ${{ steps.rust.outcome }}
+          GO_RESULT: ${{ steps.go.outcome }}
+          TYPESCRIPT_RESULT: ${{ steps.typescript.outcome }}
+          DART_RESULT: ${{ steps.dart.outcome }}
+          GLEAM_RESULT: ${{ steps.gleam.outcome }}
+          PERSISTENCE_RESULT: ${{ steps.persistence.outcome }}
+          CONTRACTS_RESULT: ${{ steps.contracts.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/fence-adversarial
+          if [ ! -f target/fence-adversarial/corpus.json ]; then
+            printf '%s\n' '{"schema":"ores.locks.fence-adversarial/v1","generator":"failed","seed":null,"counts":null}' > target/fence-adversarial/corpus.json
+          fi
+          mode=main
+          if [ "$EVENT_NAME" = pull_request ]; then mode=pull_request; fi
+          python3 scripts/write-fence-adversarial-receipt.py \
+            --corpus target/fence-adversarial/corpus.json \
+            --output target/fence-adversarial/receipt.json \
+            --mode "$mode" \
+            --revision "$REVISION" \
+            --result setup="$SETUP_RESULT" \
+            --result corpus="$CORPUS_RESULT" \
+            --result rust="$RUST_RESULT" \
+            --result go="$GO_RESULT" \
+            --result typescript="$TYPESCRIPT_RESULT" \
+            --result dart="$DART_RESULT" \
+            --result gleam="$GLEAM_RESULT" \
+            --result persistence="$PERSISTENCE_RESULT" \
+            --result contracts="$CONTRACTS_RESULT"
+      - name: Retain receipt and corpus
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fence-adversarial-${{ github.sha }}
+          path: target/fence-adversarial/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce zero unexplained mismatches
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          receipt = json.load(open('target/fence-adversarial/receipt.json', encoding='utf-8'))
+          if receipt['status'] != 'passed' or not receipt['zeroUnexplainedMismatches']:
+              raise SystemExit(json.dumps(receipt, indent=2, sort_keys=True))
+          PY

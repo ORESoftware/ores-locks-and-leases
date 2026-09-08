@@ -1,0 +1,17 @@
+{
+  "schema": "ores.locks.fence-adversarial-config/v1",
+  "generator": "splitmix64-v1",
+  "seed": "0x4f5245534c4f434b",
+  "smokeRandomDecisionCases": 1,
+  "pullRequestRandomDecisionCases": 128,
+  "scheduledRandomDecisionCases": 2048,
+  "maximumRandomDecisionCases": 100000,
+  "expectedSmokeSha256": "0eb341b157b2f7b79e14e2c0889c787ce503e9187efaef46a16c2f2265867a11",
+  "expectedPullRequestSha256": "660093a8e70491c268341ae94a740f8f68e2751badd29a2da37ac9a2489a6cbf",
+  "trackedSmokeCorpus": "conformance/cases/fence-adversarial.json",
+  "generatedCorpusAuthority": false,
+  "contractAuthorities": [
+    "contracts/typespec/main.tsp",
+    "contracts/json-schema/contract.schema.json"
+  ]
+}

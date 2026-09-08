@@ -201,6 +201,36 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Defense in depth for rows created by an older migration, manual DBA
+    -- intervention, disabled constraints, logical replication, or corrupted
+    -- restore. A higher incoming token must never silently "repair" malformed
+    -- authority state because that would turn untrusted storage into a grant.
+    IF v_current.tenant_scope IS NULL
+        OR octet_length(v_current.tenant_scope) NOT BETWEEN 1 AND 256
+        OR v_current.resource_key IS NULL
+        OR octet_length(v_current.resource_key) NOT BETWEEN 1 AND 512
+        OR v_current.fencing_token IS NULL
+        OR v_current.fencing_token < 0
+        OR v_current.fencing_token > 18446744073709551615::numeric
+        OR scale(v_current.fencing_token) <> 0
+        OR v_current.operation_id IS NULL
+        OR octet_length(v_current.operation_id) NOT BETWEEN 1 AND 128
+        OR v_current.payload_sha256 IS NULL
+        OR v_current.payload_sha256 !~ '^[0-9a-f]{64}$'
+        OR (
+            v_current.holder IS NOT NULL
+            AND octet_length(v_current.holder) NOT BETWEEN 1 AND 256
+        )
+        OR (
+            v_current.lease_id IS NOT NULL
+            AND octet_length(v_current.lease_id) NOT BETWEEN 1 AND 256
+        )
+    THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22000',
+            MESSAGE = 'stored fencing watermark is malformed; refusing mutation';
+    END IF;
+
     IF v_incoming > v_current.fencing_token THEN
         UPDATE ores_locks.fencing_watermarks AS watermark
         SET
