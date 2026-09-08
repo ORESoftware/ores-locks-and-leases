@@ -25,7 +25,8 @@ credential-safe PostgreSQL launcher.
 ## Deterministic corpus
 
 `scripts/generate-fence-adversarial.mjs` owns the generated
-`conformance/cases/fence-decision.json` corpus. The generated `pr` profile records its seed and contains:
+`conformance/cases/fence-decision.json` corpus. The generated `pr` profile
+records its seed and contains:
 
 - exact unsigned-64 boundaries, including `2^53 +/- 1`, `2^63 +/- 1`, and
   `2^64 - 1`;
@@ -38,13 +39,24 @@ credential-safe PostgreSQL launcher.
 - a long stateful sequence with the expected watermark and protected value
   after every operation.
 
-The generator supports a larger `scheduled` profile. A second deterministic `--check` run refuses any mismatch with the first generated output, and every generation emits a machine-readable receipt with the seed, profile, counts, digest, exact workflow head, and final status. Generated corpora live under `target/` and are retained as CI evidence rather than becoming a third editable contract authority.
+The generator supports a larger `scheduled` profile. A second deterministic
+`--check` run refuses any mismatch with the first generated output, and every
+generation emits a machine-readable receipt with the seed, profile, counts,
+digest, exact workflow head, and final status. Generated corpora live under
+`target/` and are retained as CI evidence rather than becoming a third editable
+contract authority.
 
 All five language test suites consume the generated decision corpus. Go and
 Dart additionally expose strict, bounded untrusted-JSON decoders. They reject
 numeric tokens, coercion, unknown fields, duplicate top-level fields, invalid
 UTF-8 where the runtime exposes bytes, trailing JSON, null optionals, and
 oversized request bodies before a datastore call.
+
+`scripts/test-adversarial-runtimes.mjs` executes each runtime projection even
+when an earlier projection fails, retains one log and SHA-256 per runtime, and
+writes a single exact-head JSON receipt. That receipt is successful only when
+all five runtimes accept the same generated semantics with zero unexplained
+findings.
 
 ## Stateful datastore proof
 
@@ -104,14 +116,20 @@ letting an arbitrary newer writer guess the missing state.
 
 ## CI admission
 
-The normal pull-request matrix still runs Rust, Go, TypeScript, Dart, Gleam, contracts, generated consumers, PostgreSQL, Redis, and RustSec. The dedicated `adversarial-fencing` workflow also:
+The normal pull-request matrix still runs Rust, Go, TypeScript, Dart, Gleam,
+contracts, generated consumers, PostgreSQL, Redis, and RustSec. The dedicated
+`adversarial-fencing` workflow also:
 
 1. checks out the exact requested revision;
 2. generates and deterministically rechecks a seeded corpus under `target/`;
-3. projects that disposable corpus onto the existing test path inside the CI checkout;
-4. runs every runtime and both datastore adapters for pull requests and main; and
-5. uses the larger profile on scheduled or manual runs, retaining both corpus and store receipts.
+3. projects that disposable corpus through every runtime and writes one
+   machine-readable cross-runtime receipt;
+4. applies the same stateful sequence independently to PostgreSQL and Redis;
+   and
+5. uses the larger profile on scheduled or manual runs, retaining generation,
+   runtime, and datastore receipts plus per-runtime logs.
 
-A green badge without the generated receipts is not adversarial execution
-evidence. Any unexplained mismatch remains `stopped_for_evaluation` or
-`failed`; publication and automatic merge must remain blocked.
+A green badge without the generation, cross-runtime, and datastore receipts is
+not adversarial execution evidence. Any unexplained mismatch remains
+`stopped_for_evaluation` or `failed`; publication and automatic merge must
+remain blocked.
