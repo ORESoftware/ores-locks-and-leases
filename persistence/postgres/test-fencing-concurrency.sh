@@ -19,7 +19,7 @@ digest_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ores-fence-pg.XXXXXX")
 
 psql_db() {
-  psql "$database_url" "$@"
+  env PGDATABASE="$database_url" psql "$@"
 }
 
 cleanup() {
