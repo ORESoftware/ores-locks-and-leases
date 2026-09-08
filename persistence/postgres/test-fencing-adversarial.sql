@@ -46,60 +46,85 @@ $test$;
 -- Every byte limit is measured with octet_length, not character count.
 DO $test$
 BEGIN
-        BEGIN
-            PERFORM * FROM ores_locks.try_advance_fence(
-                repeat('é', 129), 'resource', '1', 'op', repeat('a', 64), NULL, NULL
-            );
-            RAISE EXCEPTION 'oversized tenant unexpectedly accepted';
-        EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
-        END;
+    BEGIN
+        PERFORM * FROM ores_locks.try_advance_fence(
+            repeat('é', 129), 'resource', '1', 'op', repeat('a', 64), NULL, NULL
+        );
+        RAISE EXCEPTION 'oversized tenant unexpectedly accepted';
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+    END;
 
-        BEGIN
-            PERFORM * FROM ores_locks.try_advance_fence(
-                'tenant', repeat('é', 257), '1', 'op', repeat('a', 64), NULL, NULL
-            );
-            RAISE EXCEPTION 'oversized resource unexpectedly accepted';
-        EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
-        END;
+    BEGIN
+        PERFORM * FROM ores_locks.try_advance_fence(
+            'tenant', repeat('é', 257), '1', 'op', repeat('a', 64), NULL, NULL
+        );
+        RAISE EXCEPTION 'oversized resource unexpectedly accepted';
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+    END;
 
-        BEGIN
-            PERFORM * FROM ores_locks.try_advance_fence(
-                'tenant', 'resource', '1', repeat('é', 65), repeat('a', 64), NULL, NULL
-            );
-            RAISE EXCEPTION 'oversized operation unexpectedly accepted';
-        EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
-        END;
+    BEGIN
+        PERFORM * FROM ores_locks.try_advance_fence(
+            'tenant', 'resource', '1', repeat('é', 65), repeat('a', 64), NULL, NULL
+        );
+        RAISE EXCEPTION 'oversized operation unexpectedly accepted';
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+    END;
 
-        BEGIN
-            PERFORM * FROM ores_locks.try_advance_fence(
-                'tenant', 'resource', '1', 'op', repeat('a', 64), repeat('é', 129), NULL
-            );
-            RAISE EXCEPTION 'oversized holder unexpectedly accepted';
-        EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
-        END;
+    BEGIN
+        PERFORM * FROM ores_locks.try_advance_fence(
+            'tenant', 'resource', '1', 'op', repeat('a', 64), repeat('é', 129), NULL
+        );
+        RAISE EXCEPTION 'oversized holder unexpectedly accepted';
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+    END;
 
-        BEGIN
-            PERFORM * FROM ores_locks.try_advance_fence(
-                'tenant', 'resource', '1', 'op', repeat('a', 64), NULL, repeat('é', 129)
-            );
-            RAISE EXCEPTION 'oversized lease unexpectedly accepted';
-        EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
-        END;
+    BEGIN
+        PERFORM * FROM ores_locks.try_advance_fence(
+            'tenant', 'resource', '1', 'op', repeat('a', 64), NULL, repeat('é', 129)
+        );
+        RAISE EXCEPTION 'oversized lease unexpectedly accepted';
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+    END;
 END;
 $test$;
 
--- A watermark advance participates in the caller's transaction. Rollback must
--- leave no authorization residue for a later protected mutation.
+-- A watermark advance, protected state write, and durable idempotency receipt
+-- must share one transaction. Rollback must erase all three side effects.
+CREATE TEMP TABLE protected_state (
+    tenant_scope text NOT NULL,
+    resource_key text NOT NULL,
+    value text NOT NULL,
+    PRIMARY KEY (tenant_scope, resource_key)
+) ON COMMIT PRESERVE ROWS;
+CREATE TEMP TABLE fence_receipts (
+    tenant_scope text NOT NULL,
+    resource_key text NOT NULL,
+    operation_id text NOT NULL,
+    PRIMARY KEY (tenant_scope, resource_key, operation_id)
+) ON COMMIT PRESERVE ROWS;
+
 BEGIN;
-SELECT * FROM ores_locks.try_advance_fence(
-    'tenant/rollback',
-    'resource/rollback',
-    '9007199254740993',
-    'op-rollback',
-    repeat('d', 64),
-    'worker-rollback',
-    'lease-rollback'
-);
+WITH fence AS MATERIALIZED (
+    SELECT * FROM ores_locks.try_advance_fence(
+        'tenant/rollback',
+        'resource/rollback',
+        '9007199254740993',
+        'op-rollback',
+        repeat('d', 64),
+        'worker-rollback',
+        'lease-rollback'
+    )
+), state_write AS (
+    INSERT INTO protected_state (tenant_scope, resource_key, value)
+    SELECT 'tenant/rollback', 'resource/rollback', 'must-disappear'
+    FROM fence
+    WHERE should_apply
+    RETURNING 1
+)
+INSERT INTO fence_receipts (tenant_scope, resource_key, operation_id)
+SELECT 'tenant/rollback', 'resource/rollback', 'op-rollback'
+FROM fence
+WHERE should_apply;
 ROLLBACK;
 
 DO $test$
@@ -111,11 +136,24 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'rolled-back watermark remained visible';
     END IF;
+    IF EXISTS (
+        SELECT 1 FROM protected_state
+        WHERE tenant_scope = 'tenant/rollback'
+          AND resource_key = 'resource/rollback'
+    ) THEN
+        RAISE EXCEPTION 'rolled-back protected state remained visible';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM fence_receipts
+        WHERE tenant_scope = 'tenant/rollback'
+          AND resource_key = 'resource/rollback'
+    ) THEN
+        RAISE EXCEPTION 'rolled-back receipt remained visible';
+    END IF;
 END;
 $test$;
 
--- Table constraints reject malformed stored state; a caller with direct table
--- access cannot seed a value that the function would later silently repair.
+-- Table constraints reject malformed stored state for normal writes.
 DO $test$
 BEGIN
     BEGIN
@@ -142,6 +180,69 @@ BEGIN
     END;
 END;
 $test$;
+
+-- Simulate a row imported from an old or corrupted source while its check was
+-- disabled. The function must fail closed and leave the malformed authority
+-- byte-for-byte unchanged; a newer token may not silently repair it.
+BEGIN;
+ALTER TABLE ores_locks.fencing_watermarks
+    DROP CONSTRAINT fencing_watermarks_payload_sha256_check;
+INSERT INTO ores_locks.fencing_watermarks (
+    tenant_scope,
+    resource_key,
+    fencing_token,
+    operation_id,
+    payload_sha256,
+    holder,
+    lease_id
+) VALUES (
+    'tenant/corrupt',
+    'resource/legacy-corrupt',
+    7,
+    'op-corrupt',
+    'not-a-digest',
+    'worker-corrupt',
+    'lease-corrupt'
+);
+
+DO $test$
+DECLARE
+    before_row jsonb;
+    after_row jsonb;
+BEGIN
+    SELECT to_jsonb(watermark.*)
+    INTO STRICT before_row
+    FROM ores_locks.fencing_watermarks AS watermark
+    WHERE tenant_scope = 'tenant/corrupt'
+      AND resource_key = 'resource/legacy-corrupt';
+
+    BEGIN
+        PERFORM * FROM ores_locks.try_advance_fence(
+            'tenant/corrupt',
+            'resource/legacy-corrupt',
+            '8',
+            'op-new',
+            repeat('f', 64),
+            'worker-new',
+            'lease-new'
+        );
+        RAISE EXCEPTION 'malformed stored watermark was silently repaired';
+    EXCEPTION WHEN SQLSTATE '22000' THEN
+        NULL;
+    END;
+
+    SELECT to_jsonb(watermark.*)
+    INTO STRICT after_row
+    FROM ores_locks.fencing_watermarks AS watermark
+    WHERE tenant_scope = 'tenant/corrupt'
+      AND resource_key = 'resource/legacy-corrupt';
+
+    IF before_row <> after_row THEN
+        RAISE EXCEPTION 'malformed stored watermark changed after rejection';
+    END IF;
+END;
+$test$;
+ROLLBACK;
 
 -- The entire unsigned range and critical JavaScript/signed-bigint boundaries
 -- are accepted as canonical text without narrowing.
