@@ -25,19 +25,31 @@ psql_db() {
   node "$root/scripts/run-psql.mjs" "$@"
 }
 
+delete_watermark() {
+  psql_db -v ON_ERROR_STOP=1 -q -v tenant="$tenant" <<'SQL'
+DELETE FROM ores_locks.fencing_watermarks
+WHERE tenant_scope = :'tenant';
+SQL
+}
+
+read_final() {
+  psql_db -v ON_ERROR_STOP=1 -qAt \
+    -v tenant="$tenant" -v resource="$resource" <<'SQL'
+SELECT fencing_token::text || '|' || operation_id
+FROM ores_locks.fencing_watermarks
+WHERE tenant_scope = :'tenant'
+  AND resource_key = :'resource';
+SQL
+}
+
 cleanup() {
-  psql_db -v ON_ERROR_STOP=1 -q \
-    -v tenant="$tenant" \
-    -c "DELETE FROM ores_locks.fencing_watermarks WHERE tenant_scope = :'tenant'" \
-    >/dev/null 2>&1 || true
+  delete_watermark >/dev/null 2>&1 || true
   find "$scratch" -depth -delete >/dev/null 2>&1 || true
 }
 trap cleanup EXIT HUP INT TERM
 
 psql_db -v ON_ERROR_STOP=1 -q -f "$here/fencing.sql"
-psql_db -v ON_ERROR_STOP=1 -q \
-  -v tenant="$tenant" \
-  -c "DELETE FROM ores_locks.fencing_watermarks WHERE tenant_scope = :'tenant'"
+delete_watermark
 
 writer() {
   token=$1
@@ -72,9 +84,7 @@ pid_11=$!
 wait "$pid_10"
 wait "$pid_11"
 
-final=$(psql_db -v ON_ERROR_STOP=1 -qAt \
-  -v tenant="$tenant" -v resource="$resource" \
-  -c "SELECT fencing_token::text || '|' || operation_id FROM ores_locks.fencing_watermarks WHERE tenant_scope = :'tenant' AND resource_key = :'resource'")
+final=$(read_final)
 test "$final" = "11|op-11"
 
 # A larger first-write storm must converge to the maximum token regardless of
@@ -88,9 +98,7 @@ for pid in $pids; do
   wait "$pid"
 done
 
-final=$(psql_db -v ON_ERROR_STOP=1 -qAt \
-  -v tenant="$tenant" -v resource="$resource" \
-  -c "SELECT fencing_token::text || '|' || operation_id FROM ores_locks.fencing_watermarks WHERE tenant_scope = :'tenant' AND resource_key = :'resource'")
+final=$(read_final)
 test "$final" = "115|op-115"
 
 # A later advance rolled back by the caller must not change the durable
@@ -104,9 +112,7 @@ SELECT * FROM ores_locks.try_advance_fence(
 );
 ROLLBACK;
 SQL
-final=$(psql_db -v ON_ERROR_STOP=1 -qAt \
-  -v tenant="$tenant" -v resource="$resource" \
-  -c "SELECT fencing_token::text || '|' || operation_id FROM ores_locks.fencing_watermarks WHERE tenant_scope = :'tenant' AND resource_key = :'resource'")
+final=$(read_final)
 test "$final" = "115|op-115"
 
 echo "postgres concurrent fencing checks passed"
