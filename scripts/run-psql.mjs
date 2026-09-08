@@ -32,6 +32,14 @@ const QUERY_ENV = new Map([
   ["target_session_attrs", "PGTARGETSESSIONATTRS"],
   ["tcp_user_timeout", "PGTCPUSER_TIMEOUT"],
 ]);
+const CONNECTION_ENV = new Set([
+  "PGDATABASE",
+  "PGHOST",
+  "PGPASSWORD",
+  "PGPORT",
+  "PGUSER",
+  ...QUERY_ENV.values(),
+]);
 
 function fail(message) {
   console.error(`psql launcher: ${message}`);
@@ -70,18 +78,17 @@ if (url.hash) {
 
 const childEnv = { ...process.env };
 delete childEnv[DATABASE_URL_ENV];
+for (const name of CONNECTION_ENV) {
+  delete childEnv[name];
+}
 childEnv.PGHOST = url.hostname;
 childEnv.PGPORT = url.port || "5432";
 
 if (url.username) {
   childEnv.PGUSER = decodeComponent(url.username, "PostgreSQL user");
-} else {
-  delete childEnv.PGUSER;
 }
 if (url.password) {
   childEnv.PGPASSWORD = decodeComponent(url.password, "PostgreSQL password");
-} else {
-  delete childEnv.PGPASSWORD;
 }
 
 const database = decodeComponent(
@@ -90,8 +97,6 @@ const database = decodeComponent(
 );
 if (database) {
   childEnv.PGDATABASE = database;
-} else {
-  delete childEnv.PGDATABASE;
 }
 
 const seen = new Set();
