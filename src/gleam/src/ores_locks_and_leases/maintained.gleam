@@ -45,16 +45,8 @@ pub fn with_maintained_xact_lock(
     wait,
   ))
   use grant <- result.try(core.acquire_lease(key, wait, opts, lease))
-  let inner = run_transaction(
-    db,
-    key,
-    wait,
-    opts,
-    maintenance,
-    lease,
-    grant,
-    work,
-  )
+  let inner =
+    run_transaction(db, key, wait, opts, maintenance, lease, grant, work)
   core.settle(key, lease, grant, inner)
 }
 
@@ -92,17 +84,9 @@ fn run_transaction(
         core.renew_checked(lease, grant, opts.ttl_ms)
         |> result.map(fn(_) { Nil })
       }
-      case acquire_lock(
-        conn,
-        key,
-        wait,
-        opts,
-        maintenance,
-        lease,
-        grant,
-        0,
-        0,
-      ) {
+      case
+        acquire_lock(conn, key, wait, opts, maintenance, lease, grant, 0, 0)
+      {
         Error(error) -> Error(encode_error(error))
         Ok(Nil) ->
           case work(Guarded(key, grant, conn, maintain)) {
@@ -121,11 +105,7 @@ fn run_transaction(
     Error(pog.TransactionRolledBack(encoded)) ->
       Error(decode_error(key, encoded))
     Error(pog.TransactionQueryError(error)) ->
-      Error(core.database_error(
-        key,
-        core.PgCommit,
-        string.inspect(error),
-      ))
+      Error(core.database_error(key, core.PgCommit, string.inspect(error)))
   }
 }
 
