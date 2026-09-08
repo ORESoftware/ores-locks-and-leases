@@ -26,42 +26,57 @@ final class FiduciaLease implements Lease {
   final String? _refusal;
   final String Function() _generateHolder;
 
-  FiduciaLease._(this._base, this._headers, this._client, this._refusal,
-      this._generateHolder);
+  FiduciaLease._(
+    this._base,
+    this._headers,
+    this._client,
+    this._refusal,
+    this._generateHolder,
+  );
 
   /// The trusted internal hop straight to a fiducia-node.
-  factory FiduciaLease.internal(String baseUrl,
-      {required String secret,
-      required String orgId,
-      http.Client? client,
-      bool allowCleartextInternal = false,
-      String Function()? generateHolder}) {
+  factory FiduciaLease.internal(
+    String baseUrl, {
+    required String secret,
+    required String orgId,
+    http.Client? client,
+    bool allowCleartextInternal = false,
+    String Function()? generateHolder,
+  }) {
     return FiduciaLease._(
       _parseBase(baseUrl),
       {
         'content-type': 'application/json',
         'x-fiducia-internal-auth': secret,
-        'x-fiducia-org-id': orgId
+        'x-fiducia-org-id': orgId,
       },
       client ?? http.Client(),
-      cleartextRefusal(baseUrl,
-          hasCredential: true, allow: allowCleartextInternal),
+      cleartextRefusal(
+        baseUrl,
+        hasCredential: true,
+        allow: allowCleartextInternal,
+      ),
       generateHolder ?? generatedHolder,
     );
   }
 
   /// A public edge or load-balancer endpoint authenticated with an API key.
-  factory FiduciaLease.bearer(String baseUrl,
-      {required String apiKey,
-      http.Client? client,
-      bool allowCleartextInternal = false,
-      String Function()? generateHolder}) {
+  factory FiduciaLease.bearer(
+    String baseUrl, {
+    required String apiKey,
+    http.Client? client,
+    bool allowCleartextInternal = false,
+    String Function()? generateHolder,
+  }) {
     return FiduciaLease._(
       _parseBase(baseUrl),
       {'content-type': 'application/json', 'authorization': 'Bearer $apiKey'},
       client ?? http.Client(),
-      cleartextRefusal(baseUrl,
-          hasCredential: true, allow: allowCleartextInternal),
+      cleartextRefusal(
+        baseUrl,
+        hasCredential: true,
+        allow: allowCleartextInternal,
+      ),
       generateHolder ?? generatedHolder,
     );
   }
@@ -70,8 +85,11 @@ final class FiduciaLease implements Lease {
       Uri.parse(baseUrl.replaceAll(RegExp(r'/+$'), ''));
 
   /// Why a credential must not be sent to [baseUrl], or null when it may be.
-  static String? cleartextRefusal(String baseUrl,
-      {required bool hasCredential, required bool allow}) {
+  static String? cleartextRefusal(
+    String baseUrl, {
+    required bool hasCredential,
+    required bool allow,
+  }) {
     if (!hasCredential || allow || !baseUrl.startsWith('http://')) return null;
     final host = Uri.parse(baseUrl).host;
     const localSuffixes = ['.svc', '.cluster.local', '.internal', '.local'];
@@ -93,13 +111,16 @@ final class FiduciaLease implements Lease {
   }
 
   Future<Map<String, Object?>> _post(
-      String path, Map<String, Object?> body) async {
+    String path,
+    Map<String, Object?> body,
+  ) async {
     if (_refusal != null) throw StateError(_refusal);
     final wireBody = body.map((key, value) {
       if (value is! BigInt) return MapEntry(key, value);
       if (value.isNegative || value > _maxSafeJsonInteger) {
         throw RangeError(
-            'fiducia: fencing token $value cannot be represented exactly by the current numeric JSON wire format');
+          'fiducia: fencing token $value cannot be represented exactly by the current numeric JSON wire format',
+        );
       }
       return MapEntry(key, value.toInt());
     });
@@ -110,7 +131,8 @@ final class FiduciaLease implements Lease {
     );
     if (response.statusCode >= 300) {
       throw http.ClientException(
-          'fiducia: HTTP ${response.statusCode}: ${response.body.trim()}');
+        'fiducia: HTTP ${response.statusCode}: ${response.body.trim()}',
+      );
     }
     if (response.body.isEmpty) return const {};
     final parsed = jsonDecode(response.body);
@@ -134,8 +156,11 @@ final class FiduciaLease implements Lease {
   }
 
   @override
-  Future<LeaseGrant> acquire(LockKey key, AcquireOptions opts,
-      {required bool wait}) async {
+  Future<LeaseGrant> acquire(
+    LockKey key,
+    AcquireOptions opts, {
+    required bool wait,
+  }) async {
     final holder = opts.holder ?? _generateHolder();
     final started = DateTime.now();
     for (;;) {
@@ -144,7 +169,7 @@ final class FiduciaLease implements Lease {
         out = await _post('/v1/locks/acquire', {
           'key': key.value,
           'holder': holder,
-          'ttl_ms': opts.ttl.inMilliseconds
+          'ttl_ms': opts.ttl.inMilliseconds,
         });
       } catch (cause) {
         throw LockError.transport(key, cause);
@@ -153,20 +178,26 @@ final class FiduciaLease implements Lease {
         final token = _uint(out['fencing_token']);
         if (token == null) {
           throw LockError.transport(
-              key, 'fiducia: acquired without a fencing token');
+            key,
+            'fiducia: acquired without a fencing token',
+          );
         }
         return LeaseGrant(
-            key: key,
-            holder: holder,
-            fencingToken: token,
-            leaseExpiresMs: _uint(out['lease_expires_ms'])?.toInt(),
-            ttlMs: opts.ttl.inMilliseconds);
+          key: key,
+          holder: holder,
+          fencingToken: token,
+          leaseExpiresMs: _uint(out['lease_expires_ms'])?.toInt(),
+          ttlMs: opts.ttl.inMilliseconds,
+        );
       }
       if (!wait) throw LockError.contention(key, LockStep.fiduciaTryAcquire);
       final waited = DateTime.now().difference(started);
       if (waited + opts.retryInterval > opts.waitTimeout) {
         throw LockError.timeout(
-            key, LockStep.fiduciaAcquire, waited.inMilliseconds);
+          key,
+          LockStep.fiduciaAcquire,
+          waited.inMilliseconds,
+        );
       }
       await Future<void>.delayed(opts.retryInterval);
     }
@@ -180,7 +211,7 @@ final class FiduciaLease implements Lease {
         'key': grant.key.value,
         'holder': grant.holder,
         'fencing_token': grant.fencingToken,
-        'ttl_ms': ttl.inMilliseconds
+        'ttl_ms': ttl.inMilliseconds,
       });
     } catch (cause) {
       throw LockError.transport(grant.key, cause);
@@ -188,12 +219,16 @@ final class FiduciaLease implements Lease {
     // `renewed: false` is lost fenced authority: fiducia has already reaped
     // the grant and may have promoted another holder.
     if (out['renewed'] != true) {
-      throw LockError(LockErrorKind.lostLease, grant.key,
-          'fiducia: lock renewal lost fenced authority');
+      throw LockError(
+        LockErrorKind.lostLease,
+        grant.key,
+        'fiducia: lock renewal lost fenced authority',
+      );
     }
     return grant.copyWith(
-        ttlMs: ttl.inMilliseconds,
-        leaseExpiresMs: _uint(out['lease_expires_ms'])?.toInt());
+      ttlMs: ttl.inMilliseconds,
+      leaseExpiresMs: _uint(out['lease_expires_ms'])?.toInt(),
+    );
   }
 
   @override
@@ -202,12 +237,15 @@ final class FiduciaLease implements Lease {
       final out = await _post('/v1/locks/release', {
         'key': grant.key.value,
         'holder': grant.holder,
-        'fencing_token': grant.fencingToken
+        'fencing_token': grant.fencingToken,
       });
       return out['released'] == true;
     } catch (cause) {
-      throw LockError.transport(grant.key, cause,
-          step: LockStep.fiduciaRelease);
+      throw LockError.transport(
+        grant.key,
+        cause,
+        step: LockStep.fiduciaRelease,
+      );
     }
   }
 }

@@ -70,11 +70,12 @@ final class LockPlan {
   final bool wait;
   final List<LockStep> steps;
 
-  const LockPlan(
-      {required this.layers,
-      required this.pgScope,
-      required this.wait,
-      required this.steps});
+  const LockPlan({
+    required this.layers,
+    required this.pgScope,
+    required this.wait,
+    required this.steps,
+  });
 }
 
 /// Compute the plan. Pure; identical across every language slice. [wait]
@@ -101,8 +102,9 @@ LockPlan plan(LockLayers layers, PgScope pgScope, bool wait) {
     if (layers.fiducia) LockStep.fiduciaRelease,
   ];
   return LockPlan(
-      layers: layers,
-      pgScope: pgScope,
-      wait: wait,
-      steps: List.unmodifiable(steps));
+    layers: layers,
+    pgScope: pgScope,
+    wait: wait,
+    steps: List.unmodifiable(steps),
+  );
 }
