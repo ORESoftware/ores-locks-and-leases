@@ -19,14 +19,33 @@ cat >"$scratch/psql" <<'FAKE_PSQL'
 #!/usr/bin/env sh
 set -eu
 
-test "${PGHOST:-}" = db.example.test
-test "${PGPORT:-}" = 6543
-test "${PGUSER:-}" = 'user name'
-test "${PGPASSWORD:-}" = 'p@ss'
-test "${PGDATABASE:-}" = 'locks db'
-test "${PGSSLMODE:-}" = require
-test "${PGCONNECT_TIMEOUT:-}" = 7
-test "${PGAPPNAME:-}" = ores-locks
+case ${ORES_PSQL_TEST_MODE:-standard} in
+  standard)
+    test "${PGHOST:-}" = db.example.test
+    test "${PGPORT:-}" = 6543
+    test "${PGUSER:-}" = 'user name'
+    test "${PGPASSWORD:-}" = 'p@ss'
+    test "${PGDATABASE:-}" = 'locks db'
+    test "${PGSSLMODE:-}" = require
+    test "${PGCONNECT_TIMEOUT:-}" = 7
+    test "${PGAPPNAME:-}" = ores-locks
+    ;;
+  ipv6)
+    test "${PGHOST:-}" = '2001:db8::1'
+    test "${PGPORT:-}" = 5432
+    test "${PGUSER:-}" = ipv6-user
+    test -z "${PGPASSWORD:-}"
+    test "${PGDATABASE:-}" = locks
+    test -z "${PGSSLMODE:-}"
+    test -z "${PGCONNECT_TIMEOUT:-}"
+    test -z "${PGAPPNAME:-}"
+    ;;
+  *)
+    echo "unknown launcher test mode" >&2
+    exit 1
+    ;;
+esac
+
 test -z "${PGHOSTADDR:-}"
 test -z "${PGSERVICE:-}"
 test -z "${PGSERVICEFILE:-}"
@@ -60,6 +79,15 @@ ORES_PSQL_TEST_RECEIPT="$scratch/receipt" \
 ORES_LOCKS_TEST_DATABASE_URL="$url" \
   node "$root/scripts/run-psql.mjs" -v ON_ERROR_STOP=1 -c 'SELECT 1'
 test "$(cat "$scratch/receipt")" = passed
+
+PATH="$scratch:$PATH" \
+ORES_PSQL_TEST_MODE=ipv6 \
+PGPASSWORD=stale \
+PGSSLMODE=disable \
+ORES_PSQL_TEST_RECEIPT="$scratch/ipv6-receipt" \
+ORES_LOCKS_TEST_DATABASE_URL='postgres://ipv6-user@[2001:db8::1]/locks' \
+  node "$root/scripts/run-psql.mjs" -v ON_ERROR_STOP=1 -c 'SELECT 1'
+test "$(cat "$scratch/ipv6-receipt")" = passed
 
 expect_failure() {
   name=$1
