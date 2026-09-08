@@ -7,15 +7,15 @@ import 'package:test/test.dart';
 String _repeat(String value, int count) => List.filled(count, value).join();
 
 Map<String, Object?> _valid([Map<String, Object?> overrides = const {}]) => {
-  'tenantScope': 'tenant/acme',
-  'resourceKey': 'example/jobs/rebuild',
-  'fencingToken': maxFencingTokenText,
-  'operationId': 'operation-0001',
-  'payloadSha256': _repeat('a', 64),
-  'holder': 'worker-a',
-  'leaseId': 'lease-a',
-  ...overrides,
-};
+      'tenantScope': 'tenant/acme',
+      'resourceKey': 'example/jobs/rebuild',
+      'fencingToken': maxFencingTokenText,
+      'operationId': 'operation-0001',
+      'payloadSha256': _repeat('a', 64),
+      'holder': 'worker-a',
+      'leaseId': 'lease-a',
+      ...overrides,
+    };
 
 Map<String, dynamic> _map(Object? value) =>
     (value as Map<Object?, Object?>).cast<String, dynamic>();

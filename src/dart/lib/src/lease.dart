@@ -30,12 +30,13 @@ final class AcquireOptions {
     Duration? waitTimeout,
     Duration? retryInterval,
     String? holder,
-  }) => AcquireOptions(
-    ttl: ttl ?? this.ttl,
-    waitTimeout: waitTimeout ?? this.waitTimeout,
-    retryInterval: retryInterval ?? this.retryInterval,
-    holder: holder ?? this.holder,
-  );
+  }) =>
+      AcquireOptions(
+        ttl: ttl ?? this.ttl,
+        waitTimeout: waitTimeout ?? this.waitTimeout,
+        retryInterval: retryInterval ?? this.retryInterval,
+        holder: holder ?? this.holder,
+      );
 }
 
 /// A held grant. The contract's `LeaseGrant`. [fencingToken] is minted on
@@ -60,12 +61,12 @@ final class LeaseGrant {
   });
 
   LeaseGrant copyWith({int? leaseExpiresMs, int? ttlMs}) => LeaseGrant(
-    key: key,
-    holder: holder,
-    fencingToken: fencingToken,
-    leaseExpiresMs: leaseExpiresMs ?? this.leaseExpiresMs,
-    ttlMs: ttlMs ?? this.ttlMs,
-  );
+        key: key,
+        holder: holder,
+        fencingToken: fencingToken,
+        leaseExpiresMs: leaseExpiresMs ?? this.leaseExpiresMs,
+        ttlMs: ttlMs ?? this.ttlMs,
+      );
 }
 
 /// A lease authority: three verbs, fenced. Implementations map native
@@ -165,7 +166,9 @@ final class Outcome<T> {
   final T? value;
   final Object? error;
   final StackTrace? trace;
-  const Outcome.ok(this.value) : error = null, trace = null;
+  const Outcome.ok(this.value)
+      : error = null,
+        trace = null;
   const Outcome.failed(this.error, this.trace) : value = null;
   bool get ok => error == null;
 }

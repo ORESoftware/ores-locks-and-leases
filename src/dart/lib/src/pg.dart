@@ -60,11 +60,11 @@ Future<void> _exec(
 
 /// `SELECT pg_advisory_xact_lock(@k)` on [tx]; released at commit/rollback.
 Future<void> xactLock(TxSession tx, LockKey key) => _exec(
-  tx,
-  key,
-  'SELECT pg_advisory_xact_lock(@k)',
-  LockStep.pgAdvisoryXactLock,
-);
+      tx,
+      key,
+      'SELECT pg_advisory_xact_lock(@k)',
+      LockStep.pgAdvisoryXactLock,
+    );
 
 /// `SELECT pg_try_advisory_xact_lock(@k)`; a held key is `contention`.
 Future<void> tryXactLock(TxSession tx, LockKey key) async {

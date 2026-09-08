@@ -8,8 +8,7 @@ import 'package:http/testing.dart';
 
 List<dynamic> cases(String name) =>
     (jsonDecode(File('../../conformance/cases/$name').readAsStringSync())
-            as Map)['cases']
-        as List;
+        as Map)['cases'] as List;
 
 final class FakeLease implements Lease {
   bool held;

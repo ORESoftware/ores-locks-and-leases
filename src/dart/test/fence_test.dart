@@ -8,14 +8,14 @@ Map<String, dynamic> _map(Object? value) =>
     (value as Map<Object?, Object?>).cast<String, dynamic>();
 
 FencedWriteRequest _request(Map<String, dynamic> value) => FencedWriteRequest(
-  tenantScope: value['tenantScope'] as String,
-  resourceKey: LockKey(value['resourceKey'] as String),
-  fencingToken: FencingTokenText.parse(value['fencingToken'] as String),
-  operationId: value['operationId'] as String,
-  payloadSha256: value['payloadSha256'] as String,
-  holder: value['holder'] as String?,
-  leaseId: value['leaseId'] as String?,
-);
+      tenantScope: value['tenantScope'] as String,
+      resourceKey: LockKey(value['resourceKey'] as String),
+      fencingToken: FencingTokenText.parse(value['fencingToken'] as String),
+      operationId: value['operationId'] as String,
+      payloadSha256: value['payloadSha256'] as String,
+      holder: value['holder'] as String?,
+      leaseId: value['leaseId'] as String?,
+    );
 
 FenceWatermark _watermark(Map<String, dynamic> value) =>
     FenceWatermark.fromRequest(_request(value));

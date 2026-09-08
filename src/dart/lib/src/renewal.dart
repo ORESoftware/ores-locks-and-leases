@@ -93,8 +93,8 @@ final class StopwatchClock {
   final int _originMs;
 
   StopwatchClock({int originMs = 0})
-    : _originMs = originMs,
-      _stopwatch = Stopwatch()..start();
+      : _originMs = originMs,
+        _stopwatch = Stopwatch()..start();
 
   int call() => _originMs + _stopwatch.elapsedMilliseconds;
 }
@@ -113,10 +113,10 @@ final class LeaseRenewalSupervisor {
   RenewalError? _loss;
 
   LeaseRenewalSupervisor(LeaseGrant grant, this.policy, int nowMs)
-    : _grant = grant,
-      _localDeadlineMs = 0,
-      _nextRenewalMs = 0,
-      _lastObservedMs = nowMs {
+      : _grant = grant,
+        _localDeadlineMs = 0,
+        _nextRenewalMs = 0,
+        _lastObservedMs = nowMs {
     _validateGrant(grant);
     _validateClock(nowMs);
     _validateAuthorityDeadline(grant.leaseExpiresMs);

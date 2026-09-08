@@ -11,13 +11,14 @@ LeaseGrant grant({
   BigInt? token,
   int? leaseExpiresMs = 100000,
   int ttlMs = 10000,
-}) => LeaseGrant(
-  key: LockKey('renewal/test/resource'),
-  holder: holder,
-  fencingToken: token ?? maxToken,
-  leaseExpiresMs: leaseExpiresMs,
-  ttlMs: ttlMs,
-);
+}) =>
+    LeaseGrant(
+      key: LockKey('renewal/test/resource'),
+      holder: holder,
+      fencingToken: token ?? maxToken,
+      leaseExpiresMs: leaseExpiresMs,
+      ttlMs: ttlMs,
+    );
 
 const policy = RenewalPolicy(
   renewEvery: Duration(milliseconds: 4000),
@@ -36,7 +37,8 @@ final class FakeLease implements Lease {
     LockKey key,
     AcquireOptions opts, {
     required bool wait,
-  }) async => throw UnsupportedError('unused');
+  }) async =>
+      throw UnsupportedError('unused');
 
   @override
   Future<LeaseGrant> renew(LeaseGrant grant, Duration ttl) async {
