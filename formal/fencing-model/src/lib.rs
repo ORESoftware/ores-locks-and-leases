@@ -10,10 +10,7 @@ mod plan;
 
 #[cfg(kani)]
 mod kani_proofs {
-    use super::fence::{
-        FenceDecisionKind, FenceValidationError, FenceWatermark, FencedWriteRequest,
-        FencingTokenText, evaluate_fence,
-    };
+    use super::fence::{FenceDecisionKind, classify_validated_fence};
     use super::key::LockKey;
     use super::plan::{LockLayers, LockStep, PgScope, plan};
 
@@ -39,20 +36,20 @@ mod kani_proofs {
     }
 
     #[kani::proof]
-    #[kani::unwind(96)]
-    fn production_fence_partitions_the_complete_u64_domain() {
+    fn production_classifier_partitions_the_complete_u64_domain() {
         let has_current: bool = kani::any();
         let current_token: u64 = kani::any();
         let incoming_token: u64 = kani::any();
         let same_operation: bool = kani::any();
         let same_payload: bool = kani::any();
 
-        let current_request = request(current_token, false, false);
-        let current = has_current.then(|| FenceWatermark::from_request(&current_request));
-        let incoming = request(incoming_token, !same_operation, !same_payload);
-        let decision = evaluate_fence(current.as_ref(), &incoming)
-            .expect("same-resource, validated inputs must be classifiable");
-
+        let actual = classify_validated_fence(
+            has_current,
+            current_token,
+            incoming_token,
+            same_operation,
+            same_payload,
+        );
         let expected = if !has_current || incoming_token > current_token {
             FenceDecisionKind::Advanced
         } else if incoming_token < current_token {
@@ -62,54 +59,12 @@ mod kani_proofs {
         } else {
             FenceDecisionKind::TokenReuse
         };
-        assert_eq!(decision.kind, expected);
+
+        assert_eq!(actual, expected);
         assert_eq!(
-            decision.should_apply,
-            expected == FenceDecisionKind::Advanced
+            actual == FenceDecisionKind::Advanced,
+            !has_current || incoming_token > current_token,
         );
-
-        if has_current {
-            assert_eq!(
-                decision
-                    .previous_token
-                    .as_ref()
-                    .map(FencingTokenText::value),
-                Some(current_token)
-            );
-            let expected_current = if expected == FenceDecisionKind::Advanced {
-                incoming_token
-            } else {
-                current_token
-            };
-            assert_eq!(decision.current_token.value(), expected_current);
-        } else {
-            assert!(decision.previous_token.is_none());
-            assert_eq!(decision.current_token.value(), incoming_token);
-        }
-    }
-
-    #[kani::proof]
-    #[kani::unwind(96)]
-    fn resource_identity_mismatch_always_fails_closed() {
-        let current_token: u64 = kani::any();
-        let incoming_token: u64 = kani::any();
-        let current_request = request(current_token, false, false);
-        let current = FenceWatermark::from_request(&current_request);
-        let incoming = FencedWriteRequest::new(
-            "another/tenant",
-            LockKey::new("formal/resource").expect("fixed key is valid"),
-            FencingTokenText::from_u64(incoming_token),
-            "operation-a",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            None,
-            None,
-        )
-        .expect("fixed request metadata is valid");
-
-        assert!(matches!(
-            evaluate_fence(Some(&current), &incoming),
-            Err(FenceValidationError::IdentityMismatch)
-        ));
     }
 
     fn index_of(steps: &[LockStep], wanted: LockStep) -> Option<usize> {

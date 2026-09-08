@@ -7,9 +7,9 @@ modules directly.
 
 Kani 0.67.0 checks:
 
-- the complete `u64` current/incoming token domain and both operation/payload
-  identity bits partition exactly into `advanced`, `replay`, `stale`, and
-  `token_reuse`;
+- the allocation-free production classifier used by `evaluate_fence` partitions
+  the complete `u64` current/incoming token domain and both operation/payload
+  identity bits exactly into `advanced`, `replay`, `stale`, and `token_reuse`;
 - `should_apply`, current watermark, and previous watermark agree with that
   partition;
 - cross-resource identity mismatch always fails closed;

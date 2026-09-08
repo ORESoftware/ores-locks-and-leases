@@ -119,6 +119,29 @@ impl FenceDecisionKind {
     }
 }
 
+/// Classify already-validated fencing identities without allocating.
+///
+/// `evaluate_fence` is the validation and object-construction boundary; this
+/// function is its total branch relation and is small enough for complete
+/// bit-vector verification over every current and incoming `u64` token.
+pub(crate) const fn classify_validated_fence(
+    has_current: bool,
+    current_token: u64,
+    incoming_token: u64,
+    same_operation: bool,
+    same_payload: bool,
+) -> FenceDecisionKind {
+    if !has_current || incoming_token > current_token {
+        FenceDecisionKind::Advanced
+    } else if incoming_token < current_token {
+        FenceDecisionKind::Stale
+    } else if same_operation && same_payload {
+        FenceDecisionKind::Replay
+    } else {
+        FenceDecisionKind::TokenReuse
+    }
+}
+
 /// A write attempt guarded by a Fiducia fencing token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FencedWriteRequest {
@@ -230,61 +253,42 @@ pub fn evaluate_fence(
 ) -> Result<FenceDecision, FenceValidationError> {
     incoming.validate()?;
 
-    let Some(current) = current else {
-        return Ok(FenceDecision {
-            kind: FenceDecisionKind::Advanced,
-            should_apply: true,
-            incoming_token: incoming.fencing_token.clone(),
-            current_token: incoming.fencing_token.clone(),
-            previous_token: None,
-        });
-    };
+    let (kind, current_token, previous_token) = match current {
+        None => {
+            let kind =
+                classify_validated_fence(false, 0, incoming.fencing_token.value(), true, true);
+            (kind, incoming.fencing_token.clone(), None)
+        }
+        Some(current) => {
+            current.validate()?;
+            if current.tenant_scope != incoming.tenant_scope
+                || current.resource_key != incoming.resource_key
+            {
+                return Err(FenceValidationError::IdentityMismatch);
+            }
 
-    current.validate()?;
-    if current.tenant_scope != incoming.tenant_scope
-        || current.resource_key != incoming.resource_key
-    {
-        return Err(FenceValidationError::IdentityMismatch);
-    }
-
-    let previous = Some(current.fencing_token.clone());
-    let incoming_value = incoming.fencing_token.value();
-    let current_value = current.fencing_token.value();
-
-    if incoming_value > current_value {
-        return Ok(FenceDecision {
-            kind: FenceDecisionKind::Advanced,
-            should_apply: true,
-            incoming_token: incoming.fencing_token.clone(),
-            current_token: incoming.fencing_token.clone(),
-            previous_token: previous,
-        });
-    }
-
-    if incoming_value < current_value {
-        return Ok(FenceDecision {
-            kind: FenceDecisionKind::Stale,
-            should_apply: false,
-            incoming_token: incoming.fencing_token.clone(),
-            current_token: current.fencing_token.clone(),
-            previous_token: previous,
-        });
-    }
-
-    let kind = if current.operation_id == incoming.operation_id
-        && current.payload_sha256 == incoming.payload_sha256
-    {
-        FenceDecisionKind::Replay
-    } else {
-        FenceDecisionKind::TokenReuse
+            let kind = classify_validated_fence(
+                true,
+                current.fencing_token.value(),
+                incoming.fencing_token.value(),
+                current.operation_id == incoming.operation_id,
+                current.payload_sha256 == incoming.payload_sha256,
+            );
+            let current_token = if kind == FenceDecisionKind::Advanced {
+                incoming.fencing_token.clone()
+            } else {
+                current.fencing_token.clone()
+            };
+            (kind, current_token, Some(current.fencing_token.clone()))
+        }
     };
 
     Ok(FenceDecision {
         kind,
-        should_apply: false,
+        should_apply: kind == FenceDecisionKind::Advanced,
         incoming_token: incoming.fencing_token.clone(),
-        current_token: current.fencing_token.clone(),
-        previous_token: previous,
+        current_token,
+        previous_token,
     })
 }
 
