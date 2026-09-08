@@ -17,6 +17,12 @@ function grant(overrides = {}) {
   };
 }
 
+function grantWithoutDeadline(overrides = {}) {
+  const value = grant(overrides);
+  delete value.leaseExpiresMs;
+  return value;
+}
+
 const policy = { renewEveryMs: 4_000, safetyMarginMs: 2_000 };
 
 async function corpus() {
@@ -70,15 +76,17 @@ test("successful checkpoint preserves full-width identity and reschedules", asyn
 });
 
 test("identity, token, and authority deadline drift fail closed", () => {
-  for (const [overrides, reason] of [
-    [{ holder: "holder-b", leaseExpiresMs: 110_000 }, "identity_changed"],
-    [{ fencingToken: MAX_TOKEN - 1n, leaseExpiresMs: 110_000 }, "token_changed"],
-    [{ leaseExpiresMs: undefined }, "deadline_missing"],
-    [{ leaseExpiresMs: 100_000 }, "deadline_regressed"],
-  ]) {
+  const cases = [
+    [grant({ holder: "holder-b", leaseExpiresMs: 110_000 }), "identity_changed"],
+    [grant({ fencingToken: MAX_TOKEN - 1n, leaseExpiresMs: 110_000 }), "token_changed"],
+    [grantWithoutDeadline(), "deadline_missing"],
+    [grant({ leaseExpiresMs: 100_000 }), "deadline_regressed"],
+    [grant({ leaseExpiresMs: undefined }), "deadline_invalid"],
+  ];
+  for (const [candidate, reason] of cases) {
     const supervisor = new LeaseRenewalSupervisor(grant(), policy, 1_000);
     assert.throws(
-      () => supervisor.acceptRenewal(5_100, grant(overrides)),
+      () => supervisor.acceptRenewal(5_100, candidate),
       (error) => error instanceof RenewalError && error.reason === reason,
       reason,
     );
@@ -114,4 +122,106 @@ test("renewal completing at the old deadline is rejected", () => {
     () => supervisor.acceptRenewal(11_000, grant({ leaseExpiresMs: 110_000 })),
     (error) => error instanceof RenewalError && error.reason === "completion_after_deadline",
   );
+});
+
+test("constructor snapshots mutable grant and policy authority", () => {
+  const mutableGrant = grant();
+  const mutablePolicy = { ...policy };
+  const supervisor = new LeaseRenewalSupervisor(mutableGrant, mutablePolicy, 1_000);
+
+  mutableGrant.holder = "holder-b";
+  mutableGrant.fencingToken = 1n;
+  mutablePolicy.renewEveryMs = 1;
+  mutablePolicy.safetyMarginMs = 1;
+
+  assert.equal(supervisor.grant.holder, "holder-a");
+  assert.equal(supervisor.grant.fencingToken, MAX_TOKEN);
+  assert.equal(supervisor.nextRenewalMs, 5_000);
+  assert.equal(Object.isFrozen(supervisor.grant), true);
+  assert.throws(() => { supervisor.grant.holder = "holder-c"; }, TypeError);
+});
+
+test("grant admission is closed, own-data-only, and getter-free", () => {
+  assert.throws(
+    () => new LeaseRenewalSupervisor({ ...grant(), extra: true }, policy, 1_000),
+    (error) => error instanceof RenewalError && error.reason === "identity_changed",
+  );
+
+  const inherited = Object.create(grant());
+  assert.throws(
+    () => new LeaseRenewalSupervisor(inherited, policy, 1_000),
+    (error) => error instanceof RenewalError && error.reason === "identity_changed",
+  );
+
+  let getterCalls = 0;
+  const accessor = grant();
+  Object.defineProperty(accessor, "holder", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return "holder-a";
+    },
+  });
+  assert.throws(
+    () => new LeaseRenewalSupervisor(accessor, policy, 1_000),
+    (error) => error instanceof RenewalError && error.reason === "identity_changed",
+  );
+  assert.equal(getterCalls, 0);
+
+  const hostileProxy = new Proxy({}, {
+    ownKeys() {
+      throw new Error("descriptor trap");
+    },
+  });
+  assert.throws(
+    () => new LeaseRenewalSupervisor(hostileProxy, policy, 1_000),
+    (error) =>
+      error instanceof RenewalError &&
+      error.reason === "identity_changed" &&
+      error.cause instanceof Error &&
+      error.cause.message === "descriptor trap",
+  );
+});
+
+test("renewal adapters cannot mutate the supervisor baseline", async () => {
+  const supervisor = new LeaseRenewalSupervisor(grant(), policy, 1_000);
+  let calls = 0;
+  const lease = {
+    async acquire() { throw new Error("unused"); },
+    async renew(previous) {
+      calls += 1;
+      assert.equal(Object.isFrozen(previous), true);
+      previous.fencingToken = 1n;
+      return previous;
+    },
+    async release() { return true; },
+  };
+
+  await assert.rejects(
+    supervisor.checkpoint(lease, () => 5_000),
+    (error) => error instanceof RenewalError && error.reason === "renewal_failed",
+  );
+  assert.equal(calls, 1);
+  assert.equal(supervisor.grant.fencingToken, MAX_TOKEN);
+  assert.equal(supervisor.isLive, false);
+});
+
+test("renewal response accessors are rejected without execution", () => {
+  const supervisor = new LeaseRenewalSupervisor(grant(), policy, 1_000);
+  let getterCalls = 0;
+  const response = grant({ leaseExpiresMs: 110_000 });
+  Object.defineProperty(response, "fencingToken", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return MAX_TOKEN;
+    },
+  });
+
+  assert.throws(
+    () => supervisor.acceptRenewal(5_100, response),
+    (error) => error instanceof RenewalError && error.reason === "identity_changed",
+  );
+  assert.equal(getterCalls, 0);
+  assert.equal(supervisor.isLive, false);
 });

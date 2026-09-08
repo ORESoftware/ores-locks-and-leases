@@ -54,6 +54,21 @@ JavaScript, represents values exactly. Authority-provided `leaseExpiresMs`
 remains absolute metadata: the supervisor checks continuity and strict
 advancement, but does not compare it to the process-relative clock.
 
+## JavaScript authority snapshots
+
+TypeScript `readonly` annotations disappear at runtime. The TypeScript
+supervisor therefore snapshots both the grant and renewal policy into frozen,
+closed objects before retaining them. Required fields must be own data
+properties; inherited fields, accessors, unknown fields, arrays, malformed
+proxies, and explicit `undefined` deadlines are rejected without invoking
+caller getters or coercion hooks. The frozen grant is also the value handed to
+the renewal adapter, so the adapter cannot rewrite the token, holder, or key
+that its response is compared against.
+
+This runtime defense mirrors the renewal contract's
+`unevaluatedProperties: false` boundary. It is not a replacement for validating
+wire JSON before constructing a grant.
+
 ## Release after loss
 
 Release is best-effort cleanup. A successful release after a terminal renewal

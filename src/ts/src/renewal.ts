@@ -6,21 +6,26 @@
  * cannot undo an effect emitted before the checkpoint.
  */
 
+import { lockKey } from "./key.js";
 import type { Lease, LeaseGrant } from "./lease.js";
 
 export const MAX_RENEWAL_CLOCK_MS = 9_007_199_254_740_991;
 /** Largest TTL exactly representable by every runtime duration type. */
 export const MAX_RENEWAL_TTL_MS = 9_223_372_036_854;
 
+const MAX_FENCING_TOKEN = 18_446_744_073_709_551_615n;
+const GRANT_FIELDS = new Set(["key", "holder", "fencingToken", "ttlMs", "leaseExpiresMs"]);
+const POLICY_FIELDS = new Set(["renewEveryMs", "safetyMarginMs"]);
+
 export interface RenewalPolicy {
   readonly renewEveryMs: number;
   readonly safetyMarginMs: number;
 }
 
-export const DEFAULT_RENEWAL_POLICY: RenewalPolicy = {
+export const DEFAULT_RENEWAL_POLICY: RenewalPolicy = Object.freeze({
   renewEveryMs: 20_000,
   safetyMarginMs: 10_000,
-};
+});
 
 export type RenewalLossReason =
   | "invalid_policy"
@@ -66,24 +71,25 @@ export function monotonicNowMs(): number {
 
 export class LeaseRenewalSupervisor {
   #grant: LeaseGrant;
-  readonly #policy: RenewalPolicy;
+  readonly #policy: Readonly<RenewalPolicy>;
   #localDeadlineMs: number;
   #nextRenewalMs: number;
   #lastObservedMs: number;
   #loss: RenewalError | undefined;
 
   constructor(grant: LeaseGrant, policy: RenewalPolicy, nowMs: number) {
-    validateGrant(grant);
+    const grantSnapshot = snapshotGrant(grant);
+    const policySnapshot = snapshotPolicy(policy);
     validateClock(nowMs);
-    validateAuthorityDeadline(grant.leaseExpiresMs);
-    const schedule = makeSchedule(nowMs, grant.ttlMs, policy);
-    this.#grant = grant;
-    this.#policy = policy;
+    const schedule = makeSchedule(nowMs, grantSnapshot.ttlMs, policySnapshot);
+    this.#grant = grantSnapshot;
+    this.#policy = policySnapshot;
     this.#localDeadlineMs = schedule.deadlineMs;
     this.#nextRenewalMs = schedule.nextRenewalMs;
     this.#lastObservedMs = nowMs;
   }
 
+  /** Frozen, closed snapshot; callers and adapters cannot rewrite authority. */
   get grant(): LeaseGrant {
     return this.#grant;
   }
@@ -141,6 +147,9 @@ export class LeaseRenewalSupervisor {
     if (decision.kind === "wait") return decision;
     if (decision.kind === "lost") throw this.#loss;
 
+    // The supervisor owns a frozen, closed snapshot. Passing that snapshot to
+    // the adapter prevents JavaScript aliases from rewriting the baseline that
+    // the renewal response is compared against.
     const previous = this.#grant;
     let renewed: LeaseGrant;
     try {
@@ -159,9 +168,10 @@ export class LeaseRenewalSupervisor {
 
   acceptRenewal(completedMs: number, renewed: LeaseGrant): RenewalCheckpoint {
     if (this.#loss) throw this.#loss;
+    let candidate: LeaseGrant;
     try {
       validateClock(completedMs);
-      validateGrant(renewed);
+      candidate = snapshotGrant(renewed);
     } catch (error) {
       throw this.#fail(asRenewalError(error));
     }
@@ -182,23 +192,23 @@ export class LeaseRenewalSupervisor {
         ),
       );
     }
-    if (renewed.key !== this.#grant.key || renewed.holder !== this.#grant.holder) {
+    if (candidate.key !== this.#grant.key || candidate.holder !== this.#grant.holder) {
       throw this.#fail(
         new RenewalError("identity_changed", "renewal changed the lock key or holder identity"),
       );
     }
-    if (renewed.fencingToken !== this.#grant.fencingToken) {
+    if (candidate.fencingToken !== this.#grant.fencingToken) {
       throw this.#fail(
         new RenewalError(
           "token_changed",
-          `renewal changed fencing token ${this.#grant.fencingToken} to ${renewed.fencingToken}`,
+          `renewal changed fencing token ${this.#grant.fencingToken} to ${candidate.fencingToken}`,
         ),
       );
     }
     try {
-      validateDeadlineProgress(this.#grant.leaseExpiresMs, renewed.leaseExpiresMs);
-      const schedule = makeSchedule(completedMs, renewed.ttlMs, this.#policy);
-      this.#grant = renewed;
+      validateDeadlineProgress(this.#grant.leaseExpiresMs, candidate.leaseExpiresMs);
+      const schedule = makeSchedule(completedMs, candidate.ttlMs, this.#policy);
+      this.#grant = candidate;
       this.#localDeadlineMs = schedule.deadlineMs;
       this.#nextRenewalMs = schedule.nextRenewalMs;
       return { kind: "renewed", checkInMs: schedule.nextRenewalMs - completedMs };
@@ -222,20 +232,111 @@ export class LeaseRenewalSupervisor {
   }
 }
 
-function validateGrant(grant: LeaseGrant): void {
-  if (!grant || typeof grant !== "object") {
-    throw new RenewalError("identity_changed", "renewal response is not a grant object");
+function snapshotGrant(value: unknown): LeaseGrant {
+  const fields = closedOwnDataProperties(
+    value,
+    GRANT_FIELDS,
+    ["key", "holder", "fencingToken", "ttlMs"],
+    "identity_changed",
+    "lease grant",
+  );
+
+  const rawKey = fields.key;
+  let key: LeaseGrant["key"];
+  try {
+    key = lockKey(rawKey as string);
+  } catch (cause) {
+    throw new RenewalError("identity_changed", "grant key must satisfy the lock-key contract", cause);
   }
-  if (typeof grant.key !== "string" || typeof grant.holder !== "string" || grant.holder.length === 0) {
-    throw new RenewalError("identity_changed", "grant key and holder must be non-empty strings");
+
+  const holder = fields.holder;
+  if (typeof holder !== "string" || holder.length === 0) {
+    throw new RenewalError("identity_changed", "grant holder must be a non-empty string");
   }
-  if (typeof grant.fencingToken !== "bigint" || grant.fencingToken < 0n || grant.fencingToken > 18_446_744_073_709_551_615n) {
+
+  const fencingToken = fields.fencingToken;
+  if (typeof fencingToken !== "bigint" || fencingToken < 0n || fencingToken > MAX_FENCING_TOKEN) {
     throw new RenewalError("token_changed", "fencing token must be an unsigned 64-bit bigint");
   }
-  if (!isSafeMillisecond(grant.ttlMs) || grant.ttlMs === 0 || grant.ttlMs > MAX_RENEWAL_TTL_MS) {
+
+  const ttlMs = fields.ttlMs;
+  if (!isSafeMillisecond(ttlMs) || ttlMs === 0 || ttlMs > MAX_RENEWAL_TTL_MS) {
     throw new RenewalError("invalid_ttl", `lease TTL must be within 1..=${MAX_RENEWAL_TTL_MS} ms`);
   }
-  validateAuthorityDeadline(grant.leaseExpiresMs);
+
+  const hasDeadline = Object.hasOwn(fields, "leaseExpiresMs");
+  const leaseExpiresMs = fields.leaseExpiresMs;
+  if (hasDeadline && leaseExpiresMs === undefined) {
+    throw new RenewalError(
+      "deadline_invalid",
+      "authority deadline must be omitted rather than explicitly undefined",
+    );
+  }
+  validateAuthorityDeadline(leaseExpiresMs);
+
+  const snapshot: LeaseGrant = leaseExpiresMs === undefined
+    ? { key, holder, fencingToken, ttlMs }
+    : { key, holder, fencingToken, ttlMs, leaseExpiresMs };
+  return Object.freeze(snapshot);
+}
+
+function snapshotPolicy(value: unknown): Readonly<RenewalPolicy> {
+  const fields = closedOwnDataProperties(
+    value,
+    POLICY_FIELDS,
+    ["renewEveryMs", "safetyMarginMs"],
+    "invalid_policy",
+    "renewal policy",
+  );
+  const snapshot: RenewalPolicy = {
+    renewEveryMs: fields.renewEveryMs as number,
+    safetyMarginMs: fields.safetyMarginMs as number,
+  };
+  if (!isPositiveSafeInteger(snapshot.renewEveryMs) || !isPositiveSafeInteger(snapshot.safetyMarginMs)) {
+    throw new RenewalError(
+      "invalid_policy",
+      "renewal interval and safety margin must both be positive safe integers",
+    );
+  }
+  return Object.freeze(snapshot);
+}
+
+function closedOwnDataProperties(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  required: readonly string[],
+  reason: RenewalLossReason,
+  label: string,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RenewalError(reason, `${label} must be a non-array object`);
+  }
+
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch (cause) {
+    throw new RenewalError(reason, `${label} properties could not be inspected`, cause);
+  }
+
+  const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const name of Reflect.ownKeys(descriptors)) {
+    if (typeof name !== "string" || !allowed.has(name)) {
+      throw new RenewalError(reason, `${label} contains an unknown own property`);
+    }
+    const descriptor = descriptors[name];
+    if (!descriptor || !("value" in descriptor)) {
+      throw new RenewalError(reason, `${label} properties must be own data properties`);
+    }
+    fields[name] = descriptor.value;
+  }
+
+  for (const name of required) {
+    if (!Object.hasOwn(fields, name)) {
+      throw new RenewalError(reason, `${label} is missing required own property ${name}`);
+    }
+  }
+  return fields;
 }
 
 function validateClock(value: number): void {
@@ -247,7 +348,7 @@ function validateClock(value: number): void {
   }
 }
 
-function validateAuthorityDeadline(value: number | undefined): void {
+function validateAuthorityDeadline(value: unknown): asserts value is number | undefined {
   if (value === undefined) return;
   if (!isSafeMillisecond(value) || value === 0) {
     throw new RenewalError("deadline_invalid", "authority deadline must be a positive safe integer when present");
@@ -270,7 +371,11 @@ function validateDeadlineProgress(previous: number | undefined, renewed: number 
   }
 }
 
-function makeSchedule(nowMs: number, ttlMs: number, policy: RenewalPolicy): { deadlineMs: number; nextRenewalMs: number } {
+function makeSchedule(
+  nowMs: number,
+  ttlMs: number,
+  policy: Readonly<RenewalPolicy>,
+): { deadlineMs: number; nextRenewalMs: number } {
   validateClock(nowMs);
   if (!isSafeMillisecond(ttlMs) || ttlMs === 0 || ttlMs > MAX_RENEWAL_TTL_MS) {
     throw new RenewalError("invalid_ttl", `lease TTL must be within 1..=${MAX_RENEWAL_TTL_MS} ms`);
