@@ -13,8 +13,18 @@ export type LockKey = string & { readonly __brand: "LockKey" };
 
 const encoder = new TextEncoder();
 
-/** Validate the contract's length bound and brand the string. */
+function requireKeyString(key: unknown): asserts key is string {
+  // TypeScript annotations disappear at JavaScript and JSON boundaries.
+  // Reject before TextEncoder can stringify numbers, arrays, or caller
+  // objects and invoke their coercion hooks.
+  if (typeof key !== "string") {
+    throw new TypeError("lock key must be a string");
+  }
+}
+
+/** Validate the contract's runtime type and length bound, then brand the key. */
 export function lockKey(key: string): LockKey {
+  requireKeyString(key);
   const bytes = encoder.encode(key).length;
   if (bytes > MAX_LOCK_KEY_BYTES) {
     throw new RangeError(`lock key is ${bytes} bytes; the contract allows at most ${MAX_LOCK_KEY_BYTES}`);
@@ -28,6 +38,7 @@ const MASK64 = (1n << 64n) - 1n;
 
 /** FNV-1a, 64-bit, over the UTF-8 bytes of `key`, as an unsigned bigint. */
 export function fnv1a64(key: string): bigint {
+  requireKeyString(key);
   let hash = FNV_OFFSET_BASIS;
   for (const byte of encoder.encode(key)) {
     hash ^= BigInt(byte);
