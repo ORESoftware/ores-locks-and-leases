@@ -2,8 +2,8 @@
 //!
 //! The legacy [`crate::with_xact_lock`] intentionally preserves its original
 //! acquire/work/commit/release behavior. This module provides an opt-in path
-//! for long-running work: the Fiducia grant is renewed while PostgreSQL lock
-//! acquisition and user work are in flight, then renewed once more as a
+//! for long-running work: the Fiducia grant is renewed while PostgreSQL begin,
+//! lock acquisition, and user work are in flight, then renewed once more as a
 //! mandatory commit-admission check. A failed or malformed renewal rolls the
 //! transaction back, so successful return means the caller still held the
 //! same fenced authority immediately before commit.
@@ -97,7 +97,8 @@ impl LeaseMaintenanceOptions {
 ///
 /// 1. blocking advisory acquisition is implemented as bounded try-lock polling
 ///    so the Fiducia lease can be renewed and loss can interrupt the wait;
-/// 2. the lease is renewed periodically while user work is pending;
+/// 2. the lease is renewed while PostgreSQL begin, lock acquisition, and user
+///    work are pending;
 /// 3. every renewal must preserve key, holder and fencing token; and
 /// 4. a final renewal is required before commit. Any failure rolls back.
 ///
@@ -132,7 +133,28 @@ where
         )
     })?;
 
-    let txn = match db.begin().await {
+    let mut renewals = interval_at(
+        Instant::now() + maintenance.renew_interval,
+        maintenance.renew_interval,
+    );
+    renewals.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    let begin_result = {
+        let begin = db.begin();
+        tokio::pin!(begin);
+        loop {
+            tokio::select! {
+                result = &mut begin => break result,
+                _ = renewals.tick() => {
+                    if let Err(error) = renew_checked(lease, &grant, acquire.ttl).await {
+                        return settle_lease(key, lease, &grant, Err(error)).await;
+                    }
+                }
+            }
+        }
+    };
+
+    let txn = match begin_result {
         Ok(txn) => txn,
         Err(cause) => {
             let inner = LockError::new(LockErrorKind::Database, key, cause.to_string())
@@ -140,12 +162,6 @@ where
             return settle_lease(key, lease, &grant, Err(inner)).await;
         }
     };
-
-    let mut renewals = interval_at(
-        Instant::now() + maintenance.renew_interval,
-        maintenance.renew_interval,
-    );
-    renewals.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     if let Err(error) =
         acquire_transaction_lock(&txn, key, wait, acquire, lease, &grant, &mut renewals).await
