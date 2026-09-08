@@ -9,6 +9,10 @@ slice that disagrees fails.
 - `cases/lock-plan.json` — `(layers, pgScope, wait)` → ordered steps.
 - `cases/fence-decision.json` — the compact reviewed decision corpus used by
   the normal language matrix.
+- `cases/renewal-decision.json` — monotonic-clock and TTL policy → `wait`,
+  `renew_now`, terminal `lost`, or invalid initialization. Every runtime also
+  proves full-width token preservation, identity continuity, deadline
+  progression, and sticky cancellation around this shared scheduling corpus.
 
 The adversarial workflow generates a larger deterministic fencing corpus into
 `target/adversarial/`, then temporarily projects it onto
@@ -28,6 +32,7 @@ node scripts/generate-fence-adversarial.mjs \
   --profile pr \
   --output target/adversarial/fence-decision.json \
   --check
+node scripts/check-renewal-corpus.mjs
 ```
 
 Generate the larger scheduled corpus:

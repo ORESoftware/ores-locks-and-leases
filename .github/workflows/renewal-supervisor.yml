@@ -1,0 +1,150 @@
+name: renewal-supervisor
+
+on:
+  pull_request:
+    paths:
+      - 'src/**/renewal*'
+      - 'src/rust/lib.rs'
+      - 'src/ts/src/index.ts'
+      - 'src/dart/lib/ores_locks_and_leases.dart'
+      - 'src/gleam/src/ores_locks_and_leases/renewal.gleam'
+      - 'conformance/cases/renewal-decision.json'
+      - 'conformance/README.md'
+      - 'contracts/renewal/**'
+      - 'docs/lease-renewal.md'
+      - 'scripts/check-renewal-corpus.mjs'
+      - 'scripts/write-renewal-receipt.mjs'
+      - 'scripts/test-all.sh'
+      - '.github/workflows/renewal-supervisor.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**/renewal*'
+      - 'src/rust/lib.rs'
+      - 'src/ts/src/index.ts'
+      - 'src/dart/lib/ores_locks_and_leases.dart'
+      - 'src/gleam/src/ores_locks_and_leases/renewal.gleam'
+      - 'conformance/cases/renewal-decision.json'
+      - 'conformance/README.md'
+      - 'contracts/renewal/**'
+      - 'docs/lease-renewal.md'
+      - 'scripts/check-renewal-corpus.mjs'
+      - 'scripts/write-renewal-receipt.mjs'
+      - 'scripts/test-all.sh'
+      - '.github/workflows/renewal-supervisor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renewal-supervisor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Verify checked-out revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with: { toolchain: '1.85.1', components: 'rustfmt,clippy' }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.22', cache: false }
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
+
+      - name: Validate the shared decision corpus
+        id: corpus
+        continue-on-error: true
+        run: node scripts/check-renewal-corpus.mjs
+
+      - name: Rust renewal tests
+        id: rust
+        continue-on-error: true
+        run: |
+          cargo fmt --manifest-path src/rust/Cargo.toml --all
+          git diff --exit-code -- src/rust
+          cargo clippy --locked --manifest-path src/rust/Cargo.toml --all-targets --features full -- -D warnings
+          cargo test --locked --manifest-path src/rust/Cargo.toml --all-targets --features full renewal
+
+      - name: Go renewal tests
+        id: go
+        continue-on-error: true
+        working-directory: src/go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./... -run Renewal
+
+      - name: TypeScript renewal tests
+        id: typescript
+        continue-on-error: true
+        working-directory: src/ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Dart renewal tests
+        id: dart
+        continue-on-error: true
+        working-directory: src/dart
+        run: |
+          dart pub get --enforce-lockfile
+          dart format lib test
+          git diff --exit-code -- lib test
+          dart analyze --fatal-infos
+          dart test test/renewal_test.dart
+
+      - name: Gleam renewal tests
+        id: gleam
+        continue-on-error: true
+        working-directory: src/gleam
+        run: |
+          gleam format src test
+          git diff --exit-code -- src test
+          gleam test
+
+      - name: Compare independently authored renewal authorities
+        id: contracts
+        continue-on-error: true
+        run: >-
+          npx --yes
+          --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz
+          ores-contracts check --config contracts/renewal/contracts.config.json
+
+      - name: Write the machine-readable exact-head receipt
+        if: always()
+        env:
+          CORPUS_OUTCOME: ${{ steps.corpus.outcome }}
+          RUST_OUTCOME: ${{ steps.rust.outcome }}
+          GO_OUTCOME: ${{ steps.go.outcome }}
+          TYPESCRIPT_OUTCOME: ${{ steps.typescript.outcome }}
+          DART_OUTCOME: ${{ steps.dart.outcome }}
+          GLEAM_OUTCOME: ${{ steps.gleam.outcome }}
+          CONTRACTS_OUTCOME: ${{ steps.contracts.outcome }}
+        run: node scripts/write-renewal-receipt.mjs
+
+      - name: Retain the exact-head receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: renewal-supervisor-receipt-${{ github.sha }}
+          path: target/renewal-supervisor/receipt.json
+          if-no-files-found: error
+          retention-days: 30

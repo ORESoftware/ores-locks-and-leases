@@ -10,7 +10,7 @@
 /// fiducia.acquire → pg.begin → pg_advisory_xact_lock → work → pg.commit → fiducia.release
 /// ```
 ///
-/// `key`, `plan`, `errors`, `lease`, `fence`, and `fence_wire` are
+/// `key`, `plan`, `errors`, `lease`, `fence`, `fence_wire`, and `renewal` are
 /// dependency-free and safe for Flutter and browser targets (the
 /// `*-pub-lib-core` packages); `pg` needs `package:postgres` and `fiducia`
 /// needs `package:http`.
@@ -24,3 +24,4 @@ export 'src/key.dart';
 export 'src/lease.dart';
 export 'src/pg.dart';
 export 'src/plan.dart';
+export 'src/renewal.dart';

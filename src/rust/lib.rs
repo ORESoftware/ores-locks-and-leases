@@ -26,10 +26,15 @@
 //! live under `persistence/`; every datastore that owns protected state must
 //! enforce its own watermark in the same transaction or script as the write.
 //!
+//! [`RenewalSupervisor`] provides sticky, cooperative lease-loss detection for
+//! long-running work. Callers checkpoint it before every authoritative commit;
+//! datastore fencing remains mandatory because a heartbeat cannot undo an
+//! effect emitted before the checkpoint.
+//!
 //! Nothing here depends on the network or on SeaORM unless the matching
 //! cargo feature is enabled: the core (`key`, `plan`, `error`, `lease`,
-//! `fence`) is dependency-free and is what `zed-lib-core` and friends import
-//! first.
+//! `fence`, `renewal`) is dependency-free and is what `zed-lib-core` and
+//! friends import first.
 //!
 //! ```text
 //! fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► work ─► pg.commit ─► fiducia.release
@@ -40,6 +45,7 @@ pub mod fence;
 pub mod key;
 pub mod lease;
 pub mod plan;
+pub mod renewal;
 
 #[cfg(feature = "pg")]
 pub mod pg;
@@ -59,6 +65,10 @@ pub use fence::{
 pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64};
 pub use lease::{AcquireOptions, FencingToken, Lease, LeaseGrant, NoLease, WorkFuture, with_lease};
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
+pub use renewal::{
+    MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS, MonotonicClock, RenewalCheckpoint,
+    RenewalDecision, RenewalError, RenewalLossReason, RenewalPolicy, RenewalSupervisor,
+};
 
 #[cfg(feature = "pg")]
 pub use coordinated::{Guarded, with_session_lock, with_xact_lock};
