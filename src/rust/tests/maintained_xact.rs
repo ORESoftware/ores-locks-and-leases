@@ -4,15 +4,17 @@
 
 #![cfg(all(feature = "pg", feature = "fiducia"))]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ores_locks_and_leases::{
     AcquireOptions, Lease, LeaseGrant, LeaseMaintenanceOptions, LockError, LockErrorKind, LockKey,
-    LockStep, with_maintained_xact_lock,
+    LockStep, pg, with_maintained_xact_lock,
 };
 use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement, TryGetable,
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement, TransactionTrait,
+    TryGetable,
 };
 
 struct ScriptedLease {
@@ -237,4 +239,56 @@ async fn periodic_lease_loss_cancels_work_and_rolls_back() {
     );
     assert_eq!(row_count(&db, table).await, 0);
     assert_eq!(lease.releases.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn lease_loss_interrupts_live_postgres_advisory_contention() {
+    let Some(url) = database_url() else {
+        eprintln!("skipping: ORES_LOCKS_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let db = Database::connect(ConnectOptions::new(url)).await.unwrap();
+    let key = LockKey::new("ores-locks/test/maintained-contention-loss").unwrap();
+
+    let holder = db.begin().await.unwrap();
+    pg::xact_lock(&holder, &key).await.unwrap();
+
+    let lease = ScriptedLease::fail_on_renewal(1);
+    let acquire = AcquireOptions::default()
+        .ttl(Duration::from_millis(200))
+        .wait_timeout(Duration::from_secs(2))
+        .retry_interval(Duration::from_millis(5));
+    let maintenance = LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(50));
+    let work_ran = Arc::new(AtomicBool::new(false));
+    let marker = Arc::clone(&work_ran);
+
+    let started = tokio::time::Instant::now();
+    let error = with_maintained_xact_lock(
+        &key,
+        true,
+        &acquire,
+        &maintenance,
+        &lease,
+        &db,
+        move |_guarded| {
+            Box::pin(async move {
+                marker.store(true, Ordering::SeqCst);
+                Ok::<_, sea_orm::DbErr>(())
+            })
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind, LockErrorKind::LostLease);
+    assert_eq!(error.step, Some(LockStep::FiduciaRenew));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "lease loss must interrupt PostgreSQL advisory-lock contention"
+    );
+    assert!(!work_ran.load(Ordering::SeqCst));
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), 1);
+    assert_eq!(lease.releases.load(Ordering::SeqCst), 1);
+
+    holder.rollback().await.unwrap();
 }
