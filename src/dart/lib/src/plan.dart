@@ -41,10 +41,12 @@ enum PgScope {
       values.firstWhere((s) => s.wire == value);
 }
 
-/// One action in a plan. [wire] is the contract's `LockStep` value.
+/// One observable action. Maintained routines emit [fiduciaRenew]
+/// dynamically without changing the legacy static plan matrix.
 enum LockStep {
   fiduciaAcquire('fiducia.acquire'),
   fiduciaTryAcquire('fiducia.try_acquire'),
+  fiduciaRenew('fiducia.renew'),
   fiduciaRelease('fiducia.release'),
   pgBegin('pg.begin'),
   pgAdvisoryXactLock('pg.advisory_xact_lock'),
@@ -77,9 +79,10 @@ final class LockPlan {
       required this.steps});
 }
 
-/// Compute the plan. Pure; identical across every language slice. [wait]
-/// blocks each layer up to its budget; `!wait` uses the non-blocking form of
-/// each acquisition and fails fast with `contention`.
+/// Compute the legacy plan. Pure; identical across every language slice.
+/// Maintained routines add renewal events dynamically and therefore do not
+/// change this deterministic matrix. [wait] selects blocking versus
+/// nonblocking acquisition semantics.
 LockPlan plan(LockLayers layers, PgScope pgScope, bool wait) {
   LockStep pick(LockStep blocking, LockStep nonBlocking) =>
       wait ? blocking : nonBlocking;
