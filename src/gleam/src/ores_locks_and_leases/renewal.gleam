@@ -116,7 +116,7 @@ pub fn decision(
         _, True, _ -> lose(supervisor, ClockRegression)
         _, _, True ->
           lose(Supervisor(..supervisor, last_observed_ms: now_ms), Expired)
-        _ -> {
+        _, _, _ -> {
           let next = Supervisor(..supervisor, last_observed_ms: now_ms)
           case now_ms >= next.next_renewal_ms {
             True -> #(next, RenewNow)
@@ -230,7 +230,7 @@ fn schedule(
     _, _, _, False, _, _ -> Error(InvalidPolicy)
     _, _, _, _, False, _ -> Error(DeadlineOverflow)
     _, _, _, _, _, False -> Error(DeadlineOverflow)
-    _ -> {
+    _, _, _, _, _, _ -> {
       let deadline_ms = now_ms + ttl_ms
       let interval_due = now_ms + policy.renew_every_ms
       let margin_due = deadline_ms - policy.safety_margin_ms
