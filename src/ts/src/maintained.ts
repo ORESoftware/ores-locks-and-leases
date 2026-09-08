@@ -30,6 +30,38 @@ export const DEFAULT_LEASE_MAINTENANCE_OPTIONS: LeaseMaintenanceOptions = {
   renewIntervalMs: 20_000,
 };
 
+/** DOM-independent listener options exposed by the maintained guard. */
+export interface LeaseAbortListenerOptions {
+  readonly once?: boolean;
+  readonly capture?: boolean;
+  readonly passive?: boolean;
+}
+
+/** A cancellation callback. No browser `Event` type is required. */
+export type LeaseAbortListener = () => void;
+
+/**
+ * Portable subset of `AbortSignal` used by maintained work.
+ *
+ * The implementation delegates to the platform signal, while generated and
+ * server-only consumers do not need the DOM type library merely to compile
+ * this package's declarations.
+ */
+export interface LeaseAbortSignal {
+  readonly aborted: boolean;
+  readonly reason: unknown;
+  addEventListener(
+    type: "abort",
+    listener: LeaseAbortListener,
+    options?: boolean | LeaseAbortListenerOptions,
+  ): void;
+  removeEventListener(
+    type: "abort",
+    listener: LeaseAbortListener,
+    options?: boolean | LeaseAbortListenerOptions,
+  ): void;
+}
+
 /** What maintained transaction work receives. */
 export interface MaintainedXactGuarded {
   readonly key: LockKey;
@@ -37,7 +69,7 @@ export interface MaintainedXactGuarded {
   /** The checked-out client whose open transaction holds the advisory lock. */
   readonly client: PgQueryable;
   /** Aborted when periodic renewal fails; work should stop promptly. */
-  readonly signal: AbortSignal;
+  readonly signal: LeaseAbortSignal;
 }
 
 /** Validate before acquiring either coordination layer. */
@@ -100,7 +132,7 @@ async function renewChecked(lease: Lease, original: LeaseGrant, ttlMs: number): 
 }
 
 class LeaseMaintainer {
-  readonly signal: AbortSignal;
+  readonly signal: LeaseAbortSignal;
   readonly whenFailed: Promise<LockError>;
 
   #controller = new AbortController();
@@ -116,7 +148,29 @@ class LeaseMaintainer {
     private readonly ttlMs: number,
     private readonly intervalMs: number,
   ) {
-    this.signal = this.#controller.signal;
+    const source = this.#controller.signal;
+    this.signal = Object.freeze({
+      get aborted(): boolean {
+        return source.aborted;
+      },
+      get reason(): unknown {
+        return source.reason;
+      },
+      addEventListener(
+        type: "abort",
+        listener: LeaseAbortListener,
+        options?: boolean | LeaseAbortListenerOptions,
+      ): void {
+        source.addEventListener(type, listener, options);
+      },
+      removeEventListener(
+        type: "abort",
+        listener: LeaseAbortListener,
+        options?: boolean | LeaseAbortListenerOptions,
+      ): void {
+        source.removeEventListener(type, listener, options);
+      },
+    });
     this.whenFailed = new Promise<LockError>((resolve) => {
       this.#resolveFailure = resolve;
     });

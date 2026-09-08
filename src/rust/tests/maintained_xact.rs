@@ -14,7 +14,6 @@ use ores_locks_and_leases::{
 };
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement, TransactionTrait,
-    TryGetable,
 };
 
 struct ScriptedLease {
