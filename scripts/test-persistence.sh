@@ -23,7 +23,7 @@ done
 log() { printf '[persistence] %s\n' "$*"; }
 
 psql_db() {
-  env PGDATABASE="$database_url" psql "$@"
+  node "$root/scripts/run-psql.mjs" "$@"
 }
 
 log "canonical PostgreSQL adapter"
