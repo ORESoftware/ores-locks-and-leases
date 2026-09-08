@@ -8,12 +8,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ores_locks_and_leases::{
-    AcquireOptions, Lease, LeaseGrant, LeaseMaintenanceOptions, LockError, LockErrorKind,
-    LockKey, LockStep, with_maintained_xact_lock,
+    AcquireOptions, Lease, LeaseGrant, LeaseMaintenanceOptions, LockError, LockErrorKind, LockKey,
+    LockStep, with_maintained_xact_lock,
 };
 use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement, TransactionTrait,
-    TryGetable,
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement, TryGetable,
 };
 
 struct ScriptedLease {
@@ -56,11 +55,7 @@ impl Lease for ScriptedLease {
         })
     }
 
-    async fn renew(
-        &self,
-        grant: &LeaseGrant,
-        ttl: Duration,
-    ) -> Result<LeaseGrant, LockError> {
+    async fn renew(&self, grant: &LeaseGrant, ttl: Duration) -> Result<LeaseGrant, LockError> {
         let number = self.renewals.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_renewal == Some(number) {
             return Err(LockError::new(
@@ -127,17 +122,10 @@ async fn periodic_and_final_renewals_admit_commit() {
         .ttl(Duration::from_millis(120))
         .wait_timeout(Duration::from_millis(200))
         .retry_interval(Duration::from_millis(5));
-    let maintenance =
-        LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(20));
+    let maintenance = LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(20));
 
-    let value = with_maintained_xact_lock(
-        &key,
-        true,
-        &acquire,
-        &maintenance,
-        &lease,
-        &db,
-        |guarded| {
+    let value =
+        with_maintained_xact_lock(&key, true, &acquire, &maintenance, &lease, &db, |guarded| {
             Box::pin(async move {
                 let txn = guarded.txn.expect("transaction must be present");
                 txn.execute(Statement::from_string(
@@ -148,10 +136,9 @@ async fn periodic_and_final_renewals_admit_commit() {
                 tokio::time::sleep(Duration::from_millis(75)).await;
                 Ok::<_, sea_orm::DbErr>("committed")
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     assert_eq!(value, "committed");
     assert_eq!(row_count(&db, table).await, 1);
@@ -175,8 +162,7 @@ async fn final_renewal_failure_rolls_back_the_protected_write() {
     let lease = ScriptedLease::fail_on_renewal(1);
     let key = LockKey::new("ores-locks/test/final-renewal-failure").unwrap();
     let acquire = AcquireOptions::default().ttl(Duration::from_secs(2));
-    let maintenance =
-        LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(500));
+    let maintenance = LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(500));
 
     let error = with_maintained_xact_lock(
         &key,
@@ -222,18 +208,11 @@ async fn periodic_lease_loss_cancels_work_and_rolls_back() {
     let lease = ScriptedLease::fail_on_renewal(1);
     let key = LockKey::new("ores-locks/test/periodic-renewal-failure").unwrap();
     let acquire = AcquireOptions::default().ttl(Duration::from_millis(120));
-    let maintenance =
-        LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(20));
+    let maintenance = LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(20));
 
     let started = tokio::time::Instant::now();
-    let error = with_maintained_xact_lock(
-        &key,
-        true,
-        &acquire,
-        &maintenance,
-        &lease,
-        &db,
-        |guarded| {
+    let error =
+        with_maintained_xact_lock(&key, true, &acquire, &maintenance, &lease, &db, |guarded| {
             Box::pin(async move {
                 guarded
                     .txn
@@ -246,10 +225,9 @@ async fn periodic_lease_loss_cancels_work_and_rolls_back() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 Ok::<_, sea_orm::DbErr>(())
             })
-        },
-    )
-    .await
-    .unwrap_err();
+        })
+        .await
+        .unwrap_err();
 
     assert_eq!(error.kind, LockErrorKind::LostLease);
     assert_eq!(error.step, Some(LockStep::FiduciaRenew));
