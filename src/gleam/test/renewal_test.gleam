@@ -139,8 +139,8 @@ pub fn renewal_failure_is_sticky_test() {
       renewal.RenewalPolicy(4000, 2000),
       1000,
     )
-  let renew = fn(old, _ttl_ms) {
-    Error(core.transport_error(old.key, "partition"))
+  let renew = fn(_old, _ttl_ms) {
+    Error(core.transport_error(supervisor.grant.key, "partition"))
   }
   let #(lost, result) = renewal.checkpoint(supervisor, 5000, 5100, renew)
   result |> should.equal(Error(renewal.RenewalFailed))
