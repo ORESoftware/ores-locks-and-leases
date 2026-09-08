@@ -405,7 +405,8 @@ pub fn validate_lease_maintenance_options(
   maintenance: LeaseMaintenanceOptions,
   wait: Bool,
 ) -> Result(Nil, LockError) {
-  case opts.ttl_ms <= 0,
+  case
+    opts.ttl_ms <= 0,
     maintenance.renew_interval_ms <= 0,
     maintenance.renew_interval_ms * 2 > opts.ttl_ms,
     wait && opts.retry_interval_ms <= 0,
