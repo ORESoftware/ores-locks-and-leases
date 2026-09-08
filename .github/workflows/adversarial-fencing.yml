@@ -5,6 +5,8 @@ on:
     paths:
       - 'scripts/generate-fence-adversarial.mjs'
       - 'scripts/test-adversarial-datastores.mjs'
+      - 'scripts/run-psql.mjs'
+      - 'scripts/test-run-psql.sh'
       - 'scripts/test-all.sh'
       - 'scripts/test-persistence.sh'
       - 'src/**/fence*'
@@ -17,6 +19,8 @@ on:
     paths:
       - 'scripts/generate-fence-adversarial.mjs'
       - 'scripts/test-adversarial-datastores.mjs'
+      - 'scripts/run-psql.mjs'
+      - 'scripts/test-run-psql.sh'
       - 'scripts/test-all.sh'
       - 'scripts/test-persistence.sh'
       - 'src/**/fence*'
@@ -104,6 +108,8 @@ jobs:
           fi
           node --check scripts/generate-fence-adversarial.mjs
           node --check scripts/test-adversarial-datastores.mjs
+          node --check scripts/run-psql.mjs
+          sh scripts/test-run-psql.sh
           node scripts/generate-fence-adversarial.mjs \
             --profile "$profile" \
             --output target/adversarial/fence-decision.json \
