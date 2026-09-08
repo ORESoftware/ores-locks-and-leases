@@ -5,7 +5,7 @@
  * to the guarded work.
  *
  * ```text
- * fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work ─► fiducia.renew ─► pg.commit ─► fiducia.release
+ * fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work/renew* ─► fiducia.renew ─► pg.commit ─► fiducia.release
  * ```
  *
  * The TypeScript slice of ORESoftware/ores-locks-and-leases; held to the same
@@ -14,6 +14,7 @@
 
 export { MAX_LOCK_KEY_BYTES, advisoryKey, fnv1a64, lockKey, type LockKey } from "./key.js";
 export * from "./fence.js";
+export * from "./renewal.js";
 export {
   ALL_STEPS,
   LAYERS_BOTH,
@@ -50,6 +51,9 @@ export {
   validateLeaseMaintenanceOptions,
   withMaintainedBoth,
   withMaintainedXactLock,
+  type LeaseAbortListener,
+  type LeaseAbortListenerOptions,
+  type LeaseAbortSignal,
   type LeaseMaintenanceOptions,
   type MaintainedXactGuarded,
 } from "./maintained.js";

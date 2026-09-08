@@ -25,11 +25,12 @@ final class AcquireOptions {
     this.holder,
   });
 
-  AcquireOptions copyWith(
-          {Duration? ttl,
-          Duration? waitTimeout,
-          Duration? retryInterval,
-          String? holder}) =>
+  AcquireOptions copyWith({
+    Duration? ttl,
+    Duration? waitTimeout,
+    Duration? retryInterval,
+    String? holder,
+  }) =>
       AcquireOptions(
         ttl: ttl ?? this.ttl,
         waitTimeout: waitTimeout ?? this.waitTimeout,
@@ -51,19 +52,21 @@ final class LeaseGrant {
   final int? leaseExpiresMs;
   final int ttlMs;
 
-  const LeaseGrant(
-      {required this.key,
-      required this.holder,
-      required this.fencingToken,
-      this.leaseExpiresMs,
-      required this.ttlMs});
+  const LeaseGrant({
+    required this.key,
+    required this.holder,
+    required this.fencingToken,
+    this.leaseExpiresMs,
+    required this.ttlMs,
+  });
 
   LeaseGrant copyWith({int? leaseExpiresMs, int? ttlMs}) => LeaseGrant(
-      key: key,
-      holder: holder,
-      fencingToken: fencingToken,
-      leaseExpiresMs: leaseExpiresMs ?? this.leaseExpiresMs,
-      ttlMs: ttlMs ?? this.ttlMs);
+        key: key,
+        holder: holder,
+        fencingToken: fencingToken,
+        leaseExpiresMs: leaseExpiresMs ?? this.leaseExpiresMs,
+        ttlMs: ttlMs ?? this.ttlMs,
+      );
 }
 
 /// A lease authority: three verbs, fenced. Implementations map native
@@ -71,8 +74,11 @@ final class LeaseGrant {
 abstract interface class Lease {
   /// With [wait], block up to `opts.waitTimeout`; without it, throw
   /// `contention` at once if the key is held.
-  Future<LeaseGrant> acquire(LockKey key, AcquireOptions opts,
-      {required bool wait});
+  Future<LeaseGrant> acquire(
+    LockKey key,
+    AcquireOptions opts, {
+    required bool wait,
+  });
 
   /// Extend a grant without changing its fencing token. A refusal is
   /// `lostLease`, never a warning.
@@ -116,16 +122,22 @@ Future<T> withLease<T>(
   if (!engage) return runWork(key, Guarded(key: key), work);
   if (lease == null) {
     throw LockError.invalidPlan(
-        key, 'layers.fiducia is enabled but no lease authority was supplied');
+      key,
+      'layers.fiducia is enabled but no lease authority was supplied',
+    );
   }
   final grant = await acquireLease(key, wait: wait, opts: opts, lease: lease);
-  final inner =
-      await settled(() => runWork(key, Guarded(key: key, grant: grant), work));
+  final inner = await settled(
+    () => runWork(key, Guarded(key: key, grant: grant), work),
+  );
   return settle(key, lease, grant, inner);
 }
 
 Future<T> runWork<T, G>(
-    LockKey key, G guarded, Future<T> Function(G) work) async {
+  LockKey key,
+  G guarded,
+  Future<T> Function(G) work,
+) async {
   try {
     return await work(guarded);
   } catch (cause) {
@@ -133,15 +145,19 @@ Future<T> runWork<T, G>(
   }
 }
 
-Future<LeaseGrant> acquireLease(LockKey key,
-    {required bool wait,
-    required AcquireOptions opts,
-    required Lease lease}) async {
+Future<LeaseGrant> acquireLease(
+  LockKey key, {
+  required bool wait,
+  required AcquireOptions opts,
+  required Lease lease,
+}) async {
   try {
     return await lease.acquire(key, opts, wait: wait);
   } catch (err) {
     throw tagStep(
-        err, wait ? LockStep.fiduciaAcquire : LockStep.fiduciaTryAcquire);
+      err,
+      wait ? LockStep.fiduciaAcquire : LockStep.fiduciaTryAcquire,
+    );
   }
 }
 
@@ -167,7 +183,11 @@ Future<Outcome<T>> settled<T>(Future<T> Function() run) async {
 
 /// Release the lease and combine its outcome with the inner one.
 Future<T> settle<T>(
-    LockKey key, Lease lease, LeaseGrant grant, Outcome<T> inner) async {
+  LockKey key,
+  Lease lease,
+  LeaseGrant grant,
+  Outcome<T> inner,
+) async {
   final released = await settled(() => lease.release(grant));
   if (!released.ok) {
     final cleanup = tagStep(released.error!, LockStep.fiduciaRelease);

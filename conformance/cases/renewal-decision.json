@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema": "ores.locks.renewal-decision-corpus/v1",
+  "clockDomain": {
+    "minimum": 0,
+    "maximum": 9007199254740991,
+    "unit": "monotonic-milliseconds"
+  },
+  "fencingToken": "18446744073709551615",
+  "cases": [
+    {
+      "name": "wait-until-preferred-interval",
+      "startMs": 1000,
+      "ttlMs": 10000,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 2000,
+      "nowMs": 4999,
+      "expect": {
+        "kind": "wait",
+        "checkInMs": 1,
+        "reason": ""
+      }
+    },
+    {
+      "name": "renew-at-preferred-interval",
+      "startMs": 1000,
+      "ttlMs": 10000,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 2000,
+      "nowMs": 5000,
+      "expect": {
+        "kind": "renew_now",
+        "checkInMs": 0,
+        "reason": ""
+      }
+    },
+    {
+      "name": "safety-margin-precedes-longer-interval",
+      "startMs": 100,
+      "ttlMs": 5000,
+      "renewEveryMs": 4500,
+      "safetyMarginMs": 1000,
+      "nowMs": 4099,
+      "expect": {
+        "kind": "wait",
+        "checkInMs": 1,
+        "reason": ""
+      }
+    },
+    {
+      "name": "renew-at-safety-margin",
+      "startMs": 100,
+      "ttlMs": 5000,
+      "renewEveryMs": 4500,
+      "safetyMarginMs": 1000,
+      "nowMs": 4100,
+      "expect": {
+        "kind": "renew_now",
+        "checkInMs": 0,
+        "reason": ""
+      }
+    },
+    {
+      "name": "deadline-is-expired-not-renewable",
+      "startMs": 1000,
+      "ttlMs": 10000,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 2000,
+      "nowMs": 11000,
+      "expect": {
+        "kind": "lost",
+        "reason": "expired",
+        "checkInMs": 0
+      }
+    },
+    {
+      "name": "monotonic-clock-regression-is-terminal",
+      "startMs": 1000,
+      "ttlMs": 10000,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 2000,
+      "nowMs": 999,
+      "expect": {
+        "kind": "lost",
+        "reason": "clock_regression",
+        "checkInMs": 0
+      }
+    },
+    {
+      "name": "zero-renewal-interval-is-invalid",
+      "startMs": 1000,
+      "ttlMs": 10000,
+      "renewEveryMs": 0,
+      "safetyMarginMs": 2000,
+      "nowMs": 1000,
+      "expect": {
+        "kind": "invalid",
+        "reason": "invalid_policy",
+        "checkInMs": 0
+      }
+    },
+    {
+      "name": "safety-margin-equal-to-ttl-is-invalid",
+      "startMs": 1000,
+      "ttlMs": 10000,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 10000,
+      "nowMs": 1000,
+      "expect": {
+        "kind": "invalid",
+        "reason": "invalid_policy",
+        "checkInMs": 0
+      }
+    },
+    {
+      "name": "zero-ttl-is-invalid",
+      "startMs": 1000,
+      "ttlMs": 0,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 2000,
+      "nowMs": 1000,
+      "expect": {
+        "kind": "invalid",
+        "reason": "invalid_ttl",
+        "checkInMs": 0
+      }
+    },
+    {
+      "name": "ttl-above-common-duration-domain-is-invalid",
+      "startMs": 1000,
+      "ttlMs": 9223372036855,
+      "renewEveryMs": 4000,
+      "safetyMarginMs": 2000,
+      "nowMs": 1000,
+      "expect": {
+        "kind": "invalid",
+        "reason": "invalid_ttl",
+        "checkInMs": 0
+      }
+    },
+    {
+      "name": "deadline-overflow-is-invalid",
+      "startMs": 9007199254740891,
+      "ttlMs": 200,
+      "renewEveryMs": 50,
+      "safetyMarginMs": 50,
+      "nowMs": 9007199254740891,
+      "expect": {
+        "kind": "invalid",
+        "reason": "deadline_overflow",
+        "checkInMs": 0
+      }
+    }
+  ]
+}

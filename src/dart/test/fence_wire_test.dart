@@ -43,43 +43,42 @@ void main() {
       final field = fixture['field'] as String;
       final code = fixture['expectedError'] as String;
       expect(
-        () => fencedWriteRequestFromJsonValue(
-          _valid({field: fixture['value']}),
-        ),
+        () =>
+            fencedWriteRequestFromJsonValue(_valid({field: fixture['value']})),
         throwsA(_code(code)),
         reason: field,
       );
     }
   });
 
-  test('wire decoder rejects non-objects, unknown fields, and trailing JSON',
-      () {
-    for (final value in <Object?>[null, false, 7, 'request', <Object?>[]]) {
+  test(
+    'wire decoder rejects non-objects, unknown fields, and trailing JSON',
+    () {
+      for (final value in <Object?>[null, false, 7, 'request', <Object?>[]]) {
+        expect(
+          () => fencedWriteRequestFromJsonValue(value),
+          throwsA(_code('invalid_type')),
+        );
+      }
       expect(
-        () => fencedWriteRequestFromJsonValue(value),
+        () => fencedWriteRequestFromJsonValue(_valid({'authority': 'forged'})),
+        throwsA(_code('unexpected_field')),
+      );
+      expect(
+        () => decodeFencedWriteRequestJson('${jsonEncode(_valid())} {}'),
         throwsA(_code('invalid_type')),
       );
-    }
-    expect(
-      () => fencedWriteRequestFromJsonValue(
-        _valid({'authority': 'forged'}),
-      ),
-      throwsA(_code('unexpected_field')),
-    );
-    expect(
-      () => decodeFencedWriteRequestJson('${jsonEncode(_valid())} {}'),
-      throwsA(_code('invalid_type')),
-    );
-    expect(
-      () => decodeFencedWriteRequestJson(
-        '{"tenantScope":"tenant/acme","tenantScope":"tenant/other",'
-        '"resourceKey":"example/jobs/rebuild","fencingToken":"1",'
-        '"operationId":"operation-0001",'
-        '"payloadSha256":"${_repeat('a', 64)}"}',
-      ),
-      throwsA(_code('unexpected_field')),
-    );
-  });
+      expect(
+        () => decodeFencedWriteRequestJson(
+          '{"tenantScope":"tenant/acme","tenantScope":"tenant/other",'
+          '"resourceKey":"example/jobs/rebuild","fencingToken":"1",'
+          '"operationId":"operation-0001",'
+          '"payloadSha256":"${_repeat('a', 64)}"}',
+        ),
+        throwsA(_code('unexpected_field')),
+      );
+    },
+  );
 
   test('wire decoder consumes generated UTF-8 and empty-field adversaries', () {
     final accepted = _valid({
@@ -90,10 +89,7 @@ void main() {
       'leaseId': _repeat('é', 128),
       'fencingToken': '1',
     });
-    expect(
-      () => fencedWriteRequestFromJsonValue(accepted),
-      returnsNormally,
-    );
+    expect(() => fencedWriteRequestFromJsonValue(accepted), returnsNormally);
 
     for (final rawCase
         in (corpus['invalidFields'] as List<dynamic>? ?? const [])) {
@@ -101,9 +97,8 @@ void main() {
       final field = fixture['field'] as String;
       final code = fixture['expectedError'] as String;
       expect(
-        () => fencedWriteRequestFromJsonValue(
-          _valid({field: fixture['value']}),
-        ),
+        () =>
+            fencedWriteRequestFromJsonValue(_valid({field: fixture['value']})),
         throwsA(_code(code)),
         reason: fixture['name'] as String,
       );

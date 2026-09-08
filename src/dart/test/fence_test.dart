@@ -21,9 +21,11 @@ FenceWatermark _watermark(Map<String, dynamic> value) =>
     FenceWatermark.fromRequest(_request(value));
 
 void main() {
-  final corpus = _map(jsonDecode(
-    File('../../conformance/cases/fence-decision.json').readAsStringSync(),
-  ));
+  final corpus = _map(
+    jsonDecode(
+      File('../../conformance/cases/fence-decision.json').readAsStringSync(),
+    ),
+  );
 
   for (final rawCase in corpus['cases'] as List<dynamic>) {
     final fixture = _map(rawCase);
@@ -38,8 +40,11 @@ void main() {
         expect(
           () => evaluateFence(current, incoming),
           throwsA(
-            isA<FenceValidationException>()
-                .having((error) => error.code, 'code', expectedError),
+            isA<FenceValidationException>().having(
+              (error) => error.code,
+              'code',
+              expectedError,
+            ),
           ),
         );
         return;
@@ -72,8 +77,9 @@ void main() {
   });
 
   test('full unsigned-64 maximum remains exact', () {
-    final token =
-        FencingTokenText.fromBigInt(BigInt.parse(maxFencingTokenText));
+    final token = FencingTokenText.fromBigInt(
+      BigInt.parse(maxFencingTokenText),
+    );
     expect(token.value, maxFencingTokenText);
     expect(token.numeric, (BigInt.one << 64) - BigInt.one);
   });

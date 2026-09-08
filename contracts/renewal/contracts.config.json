@@ -1,0 +1,14 @@
+{
+  "$comment": "Renewal TypeSpec and JSON Schema are independently authored peer authorities. Generated Schema B is comparison evidence only.",
+  "typespec": "contracts/renewal/typespec/main.tsp",
+  "jsonSchema": "contracts/renewal/json-schema/contract.schema.json",
+  "out": "generated/renewal",
+  "target": "target/ores-contracts-renewal",
+  "artifacts": [
+    "rust/types.rs",
+    "typescript/types.d.ts",
+    "typescript/validate.mjs",
+    "dart/models.dart"
+  ],
+  "tspCompile": true
+}
