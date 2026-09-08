@@ -20,8 +20,8 @@ Map<String, Object?> _valid([Map<String, Object?> overrides = const {}]) => {
 Map<String, dynamic> _map(Object? value) =>
     (value as Map<Object?, Object?>).cast<String, dynamic>();
 
-Matcher _code(String code) => isA<FenceValidationException>()
-    .having((error) => error.code, 'code', code);
+Matcher _code(String code) =>
+    isA<FenceValidationException>().having((error) => error.code, 'code', code);
 
 void main() {
   final corpus = _map(
@@ -52,7 +52,8 @@ void main() {
     }
   });
 
-  test('wire decoder rejects non-objects, unknown fields, and trailing JSON', () {
+  test('wire decoder rejects non-objects, unknown fields, and trailing JSON',
+      () {
     for (final value in <Object?>[null, false, 7, 'request', <Object?>[]]) {
       expect(
         () => fencedWriteRequestFromJsonValue(value),
