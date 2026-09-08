@@ -23,9 +23,8 @@ done
 log() { printf '[persistence] %s\n' "$*"; }
 
 psql_db() {
-  PGDATABASE="$database_url" psql "$@"
+  psql "$database_url" "$@"
 }
-
 
 log "canonical PostgreSQL adapter"
 psql_db -v ON_ERROR_STOP=1 \
