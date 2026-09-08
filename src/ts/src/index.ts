@@ -5,7 +5,7 @@
  * to the guarded work.
  *
  * ```text
- * fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work ─► pg.commit ─► fiducia.release
+ * fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work ─► fiducia.renew ─► pg.commit ─► fiducia.release
  * ```
  *
  * The TypeScript slice of ORESoftware/ores-locks-and-leases; held to the same
@@ -45,4 +45,12 @@ export {
   type SessionGuarded,
   type XactGuarded,
 } from "./pg.js";
+export {
+  DEFAULT_LEASE_MAINTENANCE_OPTIONS,
+  validateLeaseMaintenanceOptions,
+  withMaintainedBoth,
+  withMaintainedXactLock,
+  type LeaseMaintenanceOptions,
+  type MaintainedXactGuarded,
+} from "./maintained.js";
 export { FiduciaLease, cleartextRefusal, generatedHolder, type FetchLike, type FiduciaLeaseOptions } from "./fiducia.js";
