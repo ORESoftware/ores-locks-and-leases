@@ -75,14 +75,19 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --manifest-path src/rust/Cargo.toml --all
-          dart format src/dart/lib src/dart/test
-          gleam format src/gleam/src src/gleam/test
+          dart format \
+            src/dart/lib/src/renewal.dart \
+            src/dart/test/renewal_test.dart
+          gleam format \
+            src/gleam/src/ores_locks_and_leases/renewal.gleam \
+            src/gleam/test/renewal_test.gleam
 
-          # Restore the reviewed exact-head workflow from the feature commit
-          # and remove the temporary, unregistered one-shot formatter probe.
+          # Restore the reviewed exact-head workflow from the feature commit.
+          # Cleanup is idempotent because GitHub may already have removed the
+          # temporary unregistered workflow path.
           git checkout 9d6cc0b570d174bd7ccc34b4c426fc809b192267 -- \
             .github/workflows/renewal-supervisor.yml
-          git rm -- .github/workflows/format-renewal-once.yml
+          git rm --ignore-unmatch -- .github/workflows/format-renewal-once.yml
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
