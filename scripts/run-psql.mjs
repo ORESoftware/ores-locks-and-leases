@@ -7,7 +7,7 @@ const DATABASE_URL_ENV = "ORES_LOCKS_TEST_DATABASE_URL";
 const QUERY_ENV = new Map([
   ["application_name", "PGAPPNAME"],
   ["channel_binding", "PGCHANNELBINDING"],
-  ["connect_timeout", "PGCONNECTTIMEOUT"],
+  ["connect_timeout", "PGCONNECT_TIMEOUT"],
   ["gssencmode", "PGGSSENCMODE"],
   ["hostaddr", "PGHOSTADDR"],
   ["keepalives", "PGKEEPALIVES"],
