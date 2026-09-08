@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/generate-fence-adversarial.mjs'
       - 'scripts/test-adversarial-datastores.mjs'
+      - 'scripts/test-adversarial-runtimes.mjs'
       - 'scripts/run-psql.mjs'
       - 'scripts/test-run-psql.sh'
       - 'scripts/test-all.sh'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'scripts/generate-fence-adversarial.mjs'
       - 'scripts/test-adversarial-datastores.mjs'
+      - 'scripts/test-adversarial-runtimes.mjs'
       - 'scripts/run-psql.mjs'
       - 'scripts/test-run-psql.sh'
       - 'scripts/test-all.sh'
@@ -108,6 +110,7 @@ jobs:
           fi
           node --check scripts/generate-fence-adversarial.mjs
           node --check scripts/test-adversarial-datastores.mjs
+          node --check scripts/test-adversarial-runtimes.mjs
           node --check scripts/run-psql.mjs
           sh scripts/test-run-psql.sh
           node scripts/generate-fence-adversarial.mjs \
@@ -126,32 +129,11 @@ jobs:
             if(c.schema!=="ores.locks-and-leases.fence-corpus/v2" || c.generatedCaseCount<minimum || c.storeSequence.length<128) process.exit(1);
           '
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
-      - name: Rust corpus projection
-        working-directory: src/rust
-        run: cargo test --locked --no-default-features --test fence_conformance --test fence_adversarial
-      - name: Go corpus and wire projection
-        working-directory: src/go
-        run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
-          go test ./...
-      - name: TypeScript corpus and dynamic-input projection
-        working-directory: src/ts
-        run: |
-          npm ci --no-audit --no-fund
-          npm test
-      - name: Dart corpus and dynamic-input projection
-        working-directory: src/dart
-        run: |
-          dart pub get --enforce-lockfile
-          dart format --output=none --set-exit-if-changed lib test
-          dart analyze --fatal-infos
-          dart test
-      - name: Gleam shared-corpus projection
-        working-directory: src/gleam
-        run: |
-          gleam format --check src test
-          gleam test
+      - name: Project one corpus through all five runtimes
+        run: >-
+          node scripts/test-adversarial-runtimes.mjs
+          --corpus conformance/cases/fence-decision.json
+          --receipt target/adversarial/runtime-receipt.json
       - name: PostgreSQL and Redis adversarial persistence
         env:
           ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
@@ -166,6 +148,8 @@ jobs:
           name: adversarial-fencing-${{ steps.corpus.outputs.profile || 'unknown' }}-${{ github.sha }}
           path: |
             target/adversarial/generation-receipt.json
+            target/adversarial/runtime-receipt.json
+            target/adversarial/runtime-*.log
             target/adversarial/store-receipt.json
             target/adversarial/fence-decision.json
           if-no-files-found: error
