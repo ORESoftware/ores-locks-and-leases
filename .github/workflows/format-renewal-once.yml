@@ -1,0 +1,74 @@
+name: format-renewal-once
+
+on:
+  push:
+    branches:
+      - feat/DEN-2045-renewal-supervisor
+    paths:
+      - '.github/workflows/format-renewal-once.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: format-renewal-once
+  cancel-in-progress: false
+
+jobs:
+  format-and-push:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: true
+          show-progress: false
+      - name: Verify exact revision
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.85.1'
+          components: rustfmt
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+        with:
+          sdk: '3.13.3'
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: '27'
+          gleam-version: '1.16.0'
+          rebar3-version: '3'
+      - name: Apply pinned formatters
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path src/rust/Cargo.toml --all
+          dart format src/dart/lib src/dart/test
+          gleam format src/gleam/src src/gleam/test
+      - name: Commit explicit normalized paths and remove this one-shot workflow
+        env:
+          BRANCH: feat/DEN-2045-renewal-supervisor
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            src/rust/lib.rs \
+            src/rust/renewal.rs \
+            src/rust/tests/renewal.rs \
+            src/dart/lib/src/renewal.dart \
+            src/dart/test/renewal_test.dart \
+            src/gleam/src/ores_locks_and_leases/renewal.gleam \
+            src/gleam/test/renewal_test.gleam
+          git rm -- .github/workflows/format-renewal-once.yml
+          git diff --cached --check
+          git diff --cached --quiet && {
+            echo 'formatter produced no changes' >&2
+            exit 1
+          }
+          git commit -m 'style(DEN-2045): apply pinned renewal formatters'
+          git push origin "HEAD:refs/heads/$BRANCH"
