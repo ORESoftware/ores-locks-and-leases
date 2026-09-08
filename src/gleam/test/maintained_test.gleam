@@ -1,5 +1,5 @@
-import gleam/option.{None}
-import gleam/result
+import gleam/list
+import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
 import ores_locks_and_leases as locks
@@ -38,20 +38,9 @@ pub fn renewal_step_round_trips_without_changing_legacy_plan_test() {
   |> should.equal(Ok(locks.FiduciaRenew))
 
   let legacy = locks.plan(locks.layers_both, locks.Transaction, True)
-  result.is_ok(
-    case legacy.steps |> list_contains(locks.FiduciaRenew) {
-      True -> Error(Nil)
-      False -> Ok(Nil)
-    },
-  )
-  |> should.be_true
-}
-
-fn list_contains(items: List(a), wanted: a) -> Bool {
-  case items {
-    [] -> False
-    [first, ..rest] -> first == wanted || list_contains(rest, wanted)
-  }
+  legacy.steps
+  |> list.contains(locks.FiduciaRenew)
+  |> should.be_false
 }
 
 pub fn maintenance_options_are_fail_closed_test() {
@@ -98,9 +87,5 @@ pub fn changed_fencing_token_is_lost_lease_test() {
   })
   let assert Error(error) = locks.renew_checked(lease, original, 90_000)
   error.kind |> should.equal(locks.LostLease)
-  error.step |> should.equal(option_some(locks.FiduciaRenew))
-}
-
-fn option_some(value: a) -> locks.Option(a) {
-  locks.Some(value)
+  error.step |> should.equal(Some(locks.FiduciaRenew))
 }
