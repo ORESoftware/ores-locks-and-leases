@@ -165,7 +165,7 @@ final class _LeaseMaintainer {
       try {
         await _renewChecked(lease, grant, ttl);
       } catch (cause) {
-        final error = _renewalError(grant.key, cause as Object);
+        final error = _renewalError(grant.key, cause);
         failure = error;
         signal._cancel(error);
         if (!_failed.isCompleted) _failed.complete(error);
@@ -322,11 +322,11 @@ Future<T> withMaintainedXactLock<T>(
         if (maintenanceFailure != null) {
           failure = failure == null
               ? maintenanceFailure
-              : cleanupFailure(key, maintenanceFailure, failure!);
+              : cleanupFailure(key, maintenanceFailure, failure);
           failureTrace ??= StackTrace.current;
         }
         if (failure != null) {
-          Error.throwWithStackTrace(failure!, failureTrace!);
+          Error.throwWithStackTrace(failure, failureTrace!);
         }
 
         await _renewChecked(lease, grant, acquire.ttl);
