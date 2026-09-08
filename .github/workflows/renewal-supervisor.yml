@@ -17,9 +17,7 @@ on:
       - 'scripts/test-all.sh'
       - '.github/workflows/renewal-supervisor.yml'
   push:
-    branches:
-      - main
-      - feat/DEN-2045-renewal-supervisor
+    branches: [main]
     paths:
       - 'src/**/renewal*'
       - 'src/rust/lib.rs'
@@ -37,79 +35,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: renewal-supervisor-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  format-and-push:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.actor != 'github-actions[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Check out exact PR head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: true
-          show-progress: false
-      - name: Verify exact PR head
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
-        with: { toolchain: '1.85.1', components: 'rustfmt' }
-      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
-        with: { sdk: '3.13.3' }
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
-        with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
-      - name: Format and commit reviewed source paths
-        env:
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-          cargo fmt --manifest-path src/rust/Cargo.toml --all
-          dart format src/dart/lib src/dart/test
-          gleam format \
-            src/gleam/src/ores_locks_and_leases/renewal.gleam \
-            src/gleam/test/renewal_test.gleam
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- \
-            src/rust/lib.rs \
-            src/rust/renewal.rs \
-            src/rust/tests/renewal.rs \
-            src/dart/lib/ores_locks_and_leases.dart \
-            src/dart/lib/src/errors.dart \
-            src/dart/lib/src/fence.dart \
-            src/dart/lib/src/fence_wire.dart \
-            src/dart/lib/src/fiducia.dart \
-            src/dart/lib/src/key.dart \
-            src/dart/lib/src/lease.dart \
-            src/dart/lib/src/pg.dart \
-            src/dart/lib/src/plan.dart \
-            src/dart/lib/src/renewal.dart \
-            src/dart/test/core_test.dart \
-            src/dart/test/fence_test.dart \
-            src/dart/test/fence_wire_test.dart \
-            src/dart/test/renewal_test.dart \
-            src/gleam/src/ores_locks_and_leases/renewal.gleam \
-            src/gleam/test/renewal_test.gleam
-          git diff --cached --check
-          git diff --cached --quiet && {
-            echo 'pinned formatters produced no source changes' >&2
-            exit 1
-          }
-          git commit -m 'style(DEN-2045): apply pinned renewal formatters'
-          git push origin "HEAD:refs/heads/$BRANCH"
-
   conformance:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
