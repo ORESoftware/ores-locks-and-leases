@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 #![allow(unexpected_cfgs)]
 
-#[path = "../../../src/rust/key.rs"]
-mod key;
 #[path = "../../../src/rust/fence.rs"]
 mod fence;
+#[path = "../../../src/rust/key.rs"]
+mod key;
 #[path = "../../../src/rust/plan.rs"]
 mod plan;
 
@@ -22,7 +22,11 @@ mod kani_proofs {
             "formal/tenant",
             LockKey::new("formal/resource").expect("fixed key is valid"),
             FencingTokenText::from_u64(token),
-            if operation_b { "operation-b" } else { "operation-a" },
+            if operation_b {
+                "operation-b"
+            } else {
+                "operation-a"
+            },
             if payload_b {
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             } else {
@@ -59,11 +63,17 @@ mod kani_proofs {
             FenceDecisionKind::TokenReuse
         };
         assert_eq!(decision.kind, expected);
-        assert_eq!(decision.should_apply, expected == FenceDecisionKind::Advanced);
+        assert_eq!(
+            decision.should_apply,
+            expected == FenceDecisionKind::Advanced
+        );
 
         if has_current {
             assert_eq!(
-                decision.previous_token.as_ref().map(FencingTokenText::value),
+                decision
+                    .previous_token
+                    .as_ref()
+                    .map(FencingTokenText::value),
                 Some(current_token)
             );
             let expected_current = if expected == FenceDecisionKind::Advanced {
@@ -296,7 +306,10 @@ mod model_tests {
 
     fn assert_transition(before: &State, after: &State) {
         if let (Some(old), Some(new)) = (before.watermark, after.watermark) {
-            assert!(new.token >= old.token, "watermark regressed: {old:?} -> {new:?}");
+            assert!(
+                new.token >= old.token,
+                "watermark regressed: {old:?} -> {new:?}"
+            );
         }
         for index in 0..before.applied_by_token.len() {
             assert!(after.applied_by_token[index] >= before.applied_by_token[index]);
@@ -379,12 +392,7 @@ mod model_tests {
                 let candidates = successors(state, actor_index);
                 state = candidates
                     .into_iter()
-                    .find(|candidate| {
-                        !matches!(
-                            candidate.actors[actor_index].phase,
-                            Phase::Start
-                        )
-                    })
+                    .find(|candidate| !matches!(candidate.actors[actor_index].phase, Phase::Start))
                     .expect("a crash-free progress transition exists");
             }
         }
@@ -397,7 +405,12 @@ mod model_tests {
         while let Some(state) = queue.pop_front() {
             assert_state(&state);
             let completed = complete_without_more_crashes(state);
-            assert!(completed.actors.iter().all(|actor| actor.phase == Phase::Done));
+            assert!(
+                completed
+                    .actors
+                    .iter()
+                    .all(|actor| actor.phase == Phase::Done)
+            );
 
             for actor in state.actors {
                 let decision = match actor.phase {
@@ -433,7 +446,13 @@ mod model_tests {
 
         for first in &requests {
             for second in &requests {
-                for initial in [None, Some(Mark { token: 0, identity: 0 })] {
+                for initial in [
+                    None,
+                    Some(Mark {
+                        token: 0,
+                        identity: 0,
+                    }),
+                ] {
                     let mut applied = [0, 0, 0];
                     if let Some(mark) = initial {
                         applied[usize::from(mark.token)] = 1;
