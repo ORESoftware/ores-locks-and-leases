@@ -26,13 +26,18 @@
 //! live under `persistence/`; every datastore that owns protected state must
 //! enforce its own watermark in the same transaction or script as the write.
 //!
+//! With both `pg` and `fiducia` enabled, [`with_maintained_xact_lock`] renews
+//! the outer lease while the inner PostgreSQL transaction is active and
+//! requires one final renewal before commit. It is the fail-closed path for
+//! work that may outlive the initial lease TTL.
+//!
 //! Nothing here depends on the network or on SeaORM unless the matching
 //! cargo feature is enabled: the core (`key`, `plan`, `error`, `lease`,
 //! `fence`) is dependency-free and is what `zed-lib-core` and friends import
 //! first.
 //!
 //! ```text
-//! fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► work ─► pg.commit ─► fiducia.release
+//! fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► work ─► fiducia.renew ─► pg.commit ─► fiducia.release
 //! ```
 
 pub mod error;
@@ -50,6 +55,9 @@ pub mod fiducia;
 #[cfg(feature = "pg")]
 pub mod coordinated;
 
+#[cfg(all(feature = "pg", feature = "fiducia"))]
+pub mod maintained;
+
 pub use error::{LockError, LockErrorKind};
 pub use fence::{
     FenceDecision, FenceDecisionKind, FenceValidationError, FenceWatermark, FencedWriteRequest,
@@ -62,3 +70,8 @@ pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
 
 #[cfg(feature = "pg")]
 pub use coordinated::{Guarded, with_session_lock, with_xact_lock};
+
+#[cfg(all(feature = "pg", feature = "fiducia"))]
+pub use maintained::{
+    LeaseMaintenanceOptions, with_maintained_both, with_maintained_xact_lock,
+};
