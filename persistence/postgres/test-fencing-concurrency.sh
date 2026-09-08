@@ -2,15 +2,18 @@
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$here/../.." && pwd)
 database_url=${ORES_LOCKS_TEST_DATABASE_URL:-}
 if [ -z "$database_url" ]; then
   echo "ORES_LOCKS_TEST_DATABASE_URL is required" >&2
   exit 2
 fi
-if ! command -v psql >/dev/null 2>&1; then
-  echo "psql is required" >&2
-  exit 2
-fi
+for command in node psql; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "$command is required" >&2
+    exit 2
+  fi
+done
 
 tenant="tenant/concurrency-$$"
 resource="resource/concurrency"
@@ -19,7 +22,7 @@ digest_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ores-fence-pg.XXXXXX")
 
 psql_db() {
-  env PGDATABASE="$database_url" psql "$@"
+  node "$root/scripts/run-psql.mjs" "$@"
 }
 
 cleanup() {
