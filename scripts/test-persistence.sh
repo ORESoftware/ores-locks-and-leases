@@ -26,6 +26,10 @@ psql_db() {
   node "$root/scripts/run-psql.mjs" "$@"
 }
 
+log "credential-safe PostgreSQL launcher"
+node --check "$root/scripts/run-psql.mjs"
+sh "$root/scripts/test-run-psql.sh"
+
 log "canonical PostgreSQL adapter"
 psql_db -v ON_ERROR_STOP=1 \
   -f "$root/persistence/postgres/test-fencing.sql"
