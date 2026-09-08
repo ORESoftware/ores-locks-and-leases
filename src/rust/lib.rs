@@ -72,6 +72,4 @@ pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
 pub use coordinated::{Guarded, with_session_lock, with_xact_lock};
 
 #[cfg(all(feature = "pg", feature = "fiducia"))]
-pub use maintained::{
-    LeaseMaintenanceOptions, with_maintained_both, with_maintained_xact_lock,
-};
+pub use maintained::{LeaseMaintenanceOptions, with_maintained_both, with_maintained_xact_lock};
