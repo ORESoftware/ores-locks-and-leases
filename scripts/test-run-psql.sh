@@ -27,6 +27,11 @@ test "${PGDATABASE:-}" = 'locks db'
 test "${PGSSLMODE:-}" = require
 test "${PGCONNECT_TIMEOUT:-}" = 7
 test "${PGAPPNAME:-}" = ores-locks
+test -z "${PGHOSTADDR:-}"
+test -z "${PGSERVICE:-}"
+test -z "${PGSERVICEFILE:-}"
+test -z "${PGPASSFILE:-}"
+test -z "${PGOPTIONS:-}"
 test -z "${ORES_LOCKS_TEST_DATABASE_URL:-}"
 test "$#" -eq 4
 test "$1" = -v
@@ -39,6 +44,18 @@ chmod +x "$scratch/psql"
 
 url='postgresql://user%20name:p%40ss@db.example.test:6543/locks%20db?sslmode=require&connect_timeout=7&application_name=ores-locks'
 PATH="$scratch:$PATH" \
+PGHOST=stale.example.test \
+PGHOSTADDR=192.0.2.10 \
+PGPORT=9999 \
+PGUSER=stale \
+PGPASSWORD=stale \
+PGDATABASE=stale \
+PGSERVICE=stale \
+PGSERVICEFILE=/tmp/stale-service \
+PGPASSFILE=/tmp/stale-passfile \
+PGOPTIONS='-c search_path=forged' \
+PGSSLMODE=disable \
+PGCONNECT_TIMEOUT=99 \
 ORES_PSQL_TEST_RECEIPT="$scratch/receipt" \
 ORES_LOCKS_TEST_DATABASE_URL="$url" \
   node "$root/scripts/run-psql.mjs" -v ON_ERROR_STOP=1 -c 'SELECT 1'
