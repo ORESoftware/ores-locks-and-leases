@@ -61,6 +61,15 @@ func maintainedAcquireOptions() AcquireOptions {
 	return opts
 }
 
+func logContains(log []string, wanted string) bool {
+	for _, entry := range log {
+		if entry == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMaintainedOptionsRejectBeforeAcquisition(t *testing.T) {
 	db, recorder := openRec(t, true, true)
 	defer db.Close()
@@ -122,13 +131,11 @@ func TestMaintainedPeriodicAndFinalRenewalsAdmitCommit(t *testing.T) {
 	if lease.renewalCount() < 2 {
 		t.Fatalf("want periodic renewal plus final admission, got %d", lease.renewalCount())
 	}
-	if recorder.log[len(recorder.log)-1] != "COMMIT" {
+	if !logContains(recorder.log, "COMMIT") {
 		t.Fatalf("transaction was not committed: %v", recorder.log)
 	}
-	for _, entry := range recorder.log {
-		if entry == "ROLLBACK" {
-			t.Fatalf("successful transaction rolled back: %v", recorder.log)
-		}
+	if logContains(recorder.log, "ROLLBACK") {
+		t.Fatalf("successful transaction rolled back: %v", recorder.log)
 	}
 	if lease.held {
 		t.Fatal("lease was not released")
@@ -156,13 +163,11 @@ func TestMaintainedFinalRenewalFailureRollsBack(t *testing.T) {
 	if !errors.As(err, &lockErr) || lockErr.Kind != KindLostLease || lockErr.Step != StepFiduciaRenew {
 		t.Fatalf("want lost_lease at fiducia.renew, got %v", err)
 	}
-	if recorder.log[len(recorder.log)-1] != "ROLLBACK" {
+	if !logContains(recorder.log, "ROLLBACK") {
 		t.Fatalf("failed admission did not roll back: %v", recorder.log)
 	}
-	for _, entry := range recorder.log {
-		if entry == "COMMIT" {
-			t.Fatalf("failed admission committed: %v", recorder.log)
-		}
+	if logContains(recorder.log, "COMMIT") {
+		t.Fatalf("failed admission committed: %v", recorder.log)
 	}
 	if lease.held {
 		t.Fatal("lease was not released")
@@ -199,8 +204,11 @@ func TestMaintainedPeriodicFailureCancelsWork(t *testing.T) {
 	if time.Since(started) >= time.Second {
 		t.Fatalf("cooperative work was not canceled promptly: %s", time.Since(started))
 	}
-	if recorder.log[len(recorder.log)-1] != "ROLLBACK" {
+	if !logContains(recorder.log, "ROLLBACK") {
 		t.Fatalf("periodic failure did not roll back: %v", recorder.log)
+	}
+	if logContains(recorder.log, "COMMIT") {
+		t.Fatalf("periodic failure committed: %v", recorder.log)
 	}
 }
 
@@ -225,8 +233,11 @@ func TestMaintainedRejectsChangedFencingIdentity(t *testing.T) {
 	if !errors.As(err, &lockErr) || lockErr.Kind != KindLostLease || lockErr.Step != StepFiduciaRenew || !strings.Contains(lockErr.Message, "fencing token") {
 		t.Fatalf("want malformed fencing-token renewal rejection, got %v", err)
 	}
-	if recorder.log[len(recorder.log)-1] != "ROLLBACK" {
+	if !logContains(recorder.log, "ROLLBACK") {
 		t.Fatalf("malformed renewal did not roll back: %v", recorder.log)
+	}
+	if logContains(recorder.log, "COMMIT") {
+		t.Fatalf("malformed renewal committed: %v", recorder.log)
 	}
 }
 
@@ -252,7 +263,7 @@ func TestMaintainedContentionReleasesFiducia(t *testing.T) {
 	if !errors.As(err, &lockErr) || lockErr.Kind != KindContention || lockErr.Step != StepPgTryAdvisoryXactLock {
 		t.Fatalf("want PostgreSQL contention, got %v", err)
 	}
-	if recorder.log[len(recorder.log)-1] != "ROLLBACK" || lease.held {
+	if !logContains(recorder.log, "ROLLBACK") || logContains(recorder.log, "COMMIT") || lease.held {
 		t.Fatalf("contention cleanup failed: log=%v held=%v", recorder.log, lease.held)
 	}
 }
