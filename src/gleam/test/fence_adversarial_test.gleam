@@ -241,7 +241,7 @@ pub fn generated_adversarial_corpus_test() {
         }
         previous_token |> should.equal(expected.previous_token)
       }
-      _, _ -> panic as "fixture has neither expected decision nor error",
+      _, _ -> panic as "fixture has neither expected decision nor error"
     }
   })
 
