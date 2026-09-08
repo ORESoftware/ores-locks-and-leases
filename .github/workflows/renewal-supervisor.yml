@@ -69,34 +69,36 @@ jobs:
         with: { sdk: '3.13.3' }
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
-      - name: Format and commit only reviewed renewal paths
+      - name: Format and commit reviewed source paths
         env:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           cargo fmt --manifest-path src/rust/Cargo.toml --all
-          dart format \
-            src/dart/lib/src/renewal.dart \
-            src/dart/test/renewal_test.dart
+          dart format src/dart/lib src/dart/test
           gleam format \
             src/gleam/src/ores_locks_and_leases/renewal.gleam \
             src/gleam/test/renewal_test.gleam
 
-          # Restore the reviewed exact-head workflow from the feature commit.
-          # Cleanup is idempotent because GitHub may already have removed the
-          # temporary unregistered workflow path.
-          git checkout 9d6cc0b570d174bd7ccc34b4c426fc809b192267 -- \
-            .github/workflows/renewal-supervisor.yml
-          git rm --ignore-unmatch -- .github/workflows/format-renewal-once.yml
-
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- \
-            .github/workflows/renewal-supervisor.yml \
             src/rust/lib.rs \
             src/rust/renewal.rs \
             src/rust/tests/renewal.rs \
+            src/dart/lib/ores_locks_and_leases.dart \
+            src/dart/lib/src/errors.dart \
+            src/dart/lib/src/fence.dart \
+            src/dart/lib/src/fence_wire.dart \
+            src/dart/lib/src/fiducia.dart \
+            src/dart/lib/src/key.dart \
+            src/dart/lib/src/lease.dart \
+            src/dart/lib/src/pg.dart \
+            src/dart/lib/src/plan.dart \
             src/dart/lib/src/renewal.dart \
+            src/dart/test/core_test.dart \
+            src/dart/test/fence_test.dart \
+            src/dart/test/fence_wire_test.dart \
             src/dart/test/renewal_test.dart \
             src/gleam/src/ores_locks_and_leases/renewal.gleam \
             src/gleam/test/renewal_test.gleam
