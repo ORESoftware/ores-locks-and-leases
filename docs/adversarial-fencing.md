@@ -15,6 +15,13 @@ subsequent cleanup and formal-model pull requests 15, 18, and 19 were merged.
 The remaining executable item was issue 16: deterministic adversarial property
 tests across runtimes and datastores.
 
+A parallel `feat/DEN-2050-adversarial-fencing-properties` branch appeared while
+that issue was being finalized. Its unique PostgreSQL legacy-row check was
+integrated into the active pull request rather than opening a duplicate or
+discarding the safety work. The active implementation keeps the broader
+cross-runtime corpus, strict Dart boundary, stateful datastore projector, and
+credential-safe PostgreSQL launcher.
+
 ## Deterministic corpus
 
 `scripts/generate-fence-adversarial.mjs` owns the generated
@@ -52,13 +59,32 @@ sequence to PostgreSQL and Redis:
   value after every operation.
 
 The test never puts the PostgreSQL connection string on the `psql` command
-line; the existing environment boundary is passed through libpq's
-`PGDATABASE` variable.
+line. `scripts/run-psql.mjs` parses `ORES_LOCKS_TEST_DATABASE_URL`, removes it
+from the child environment, scrubs inherited libpq connection overrides, and
+passes the decoded host, port, user, password, database, TLS, and timeout values
+through the corresponding `PG*` environment variables. Its self-test uses a
+fake `psql` process to prove that secrets do not appear in argv or diagnostics.
 
 Separate persistence tests cover concurrent first writers, larger writer
 storms, transaction rollback, key aliasing, hash-slot mismatch, orphan state,
 missing state, partial or extra watermark fields, malformed stored tokens and
 digests, and wrong Redis data types.
+
+## Fail-closed PostgreSQL recovery
+
+Table constraints are the normal first line of defense, but old migrations,
+manual DBA work, disabled constraints, logical replication, or a corrupt
+restore can still introduce an invalid durable watermark. After locking an
+existing row, `try_advance_fence` validates every authority field again before
+comparing tokens. A malformed row raises SQLSTATE `22000`; even a higher token
+cannot silently repair it and thereby turn untrusted storage into a grant.
+
+The adversarial SQL temporarily drops the payload-digest constraint inside a
+transaction, inserts malformed legacy state, records the row as JSON, attempts
+a higher-token advance, and proves that the rejection leaves the complete row
+byte-for-byte unchanged. A separate rollback proof advances a watermark and
+writes protected state plus an idempotency receipt in one transaction, then
+verifies that all three effects disappear together.
 
 ## Fail-closed Redis recovery
 
