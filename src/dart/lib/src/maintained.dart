@@ -183,9 +183,8 @@ Future<bool> _tryXactLock(
   LockKey key, {
   required bool wait,
 }) async {
-  final step = wait
-      ? LockStep.pgAdvisoryXactLock
-      : LockStep.pgTryAdvisoryXactLock;
+  final step =
+      wait ? LockStep.pgAdvisoryXactLock : LockStep.pgTryAdvisoryXactLock;
   try {
     final rows = await tx.execute(
       Sql.named('SELECT pg_try_advisory_xact_lock(@k)'),
@@ -247,9 +246,8 @@ Future<void> _acquireMaintainedXactLock(
     }
 
     final remaining = acquire.waitTimeout - elapsed.elapsed;
-    final delay = remaining < acquire.retryInterval
-        ? remaining
-        : acquire.retryInterval;
+    final delay =
+        remaining < acquire.retryInterval ? remaining : acquire.retryInterval;
     await _sleepOrRenewalFailure(delay, maintainer);
   }
 }
