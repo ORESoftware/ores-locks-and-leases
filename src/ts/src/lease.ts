@@ -118,9 +118,13 @@ export async function settled<T>(promise: Promise<T>): Promise<Outcome<T>> {
 
 /** Release the lease and combine its outcome with the inner one. */
 export async function settle<T>(key: LockKey, lease: Lease, grant: LeaseGrant, inner: Outcome<T>): Promise<T> {
-  const released = await settled(lease.release(grant));
+  // Invoke inside the promise boundary: structural adapters may throw synchronously.
+  const released = await settled(Promise.resolve().then(() => lease.release(grant)));
   if (!released.ok) {
-    const cleanup = tagStep(released.error, "fiducia.release");
+    const cleanup = tagStep(
+      released.error instanceof LockError ? released.error : LockError.transport(key, released.error),
+      "fiducia.release",
+    );
     if (!inner.ok) throw cleanupFailure(key, cleanup, inner.error);
     throw cleanup;
   }

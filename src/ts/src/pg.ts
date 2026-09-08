@@ -194,7 +194,10 @@ async function runSession<T>(key: LockKey, wait: boolean, pool: PgPool, grant: L
     else await tryLock(client, key, "SELECT pg_try_advisory_lock($1)", "pg.try_advisory_lock");
 
     const inner = await settled(runWork(key, { key, grant, client }, work));
-    const unlocked = await settled(client.query("SELECT pg_advisory_unlock($1)", [advisoryKey(key).toString()]));
+    // Capture synchronous driver throws too, so every failed unlock poisons the session.
+    const unlocked = await settled(Promise.resolve().then(() =>
+      client.query("SELECT pg_advisory_unlock($1)", [advisoryKey(key).toString()]),
+    ));
     if (!unlocked.ok) {
       poisoned = true;
       const cleanup = LockError.database(key, "pg.advisory_unlock", unlocked.error);
