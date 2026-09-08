@@ -1,0 +1,62 @@
+name: formal lease and fencing model
+
+on:
+  pull_request:
+    paths:
+      - 'formal/**'
+      - 'src/**'
+      - 'persistence/**'
+      - 'contracts/**'
+      - '.github/workflows/formal-model.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'formal/**'
+      - 'src/**'
+      - 'persistence/**'
+      - 'contracts/**'
+      - '.github/workflows/formal-model.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-lease-fencing-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bounded-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+          submodules: false
+
+      - name: Record runtime
+        run: node --version
+
+      - name: Validate manifest identity and refinement boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'repository = "ORESoftware/ores-locks-and-leases"' formal/fm.toml
+          grep -Fq 'issue = "DEN-566"' formal/fm.toml
+          grep -Fq 'claim = "finite-exhaustive-abstraction"' formal/fm.toml
+          grep -Fq 'status = "required"' formal/fm.toml
+          test -f formal/PROCEDURE.md
+
+      - name: Exhaustively check bounded lease and fencing states
+        run: node formal/model.mjs
+
+      - name: Exercise deterministic replay adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          output=$(printf '%s\n' '{"actions":[{"kind":"acquire","client":"a"},{"kind":"write","client":"a","value":1},{"kind":"crash","client":"a"},{"kind":"tick"},{"kind":"tick"},{"kind":"acquire","client":"b"},{"kind":"write","client":"a","value":2},{"kind":"write","client":"b","value":2}]}' | node formal/model.mjs --json-stdin)
+          printf '%s\n' "$output"
+          node -e 'const value=JSON.parse(process.argv[1]); if(!value.ok || value.state.resourceFence !== 2 || value.state.resourceValue !== 2 || value.outcomes[6].accepted !== false){process.exit(1)}' "$output"

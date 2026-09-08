@@ -3,11 +3,37 @@ repository = "ORESoftware/ores-locks-and-leases"
 
 [policy]
 statuses = ["planned", "modeling", "active", "deferred"]
-claim_classes = ["typechecked-specification", "bounded-exhaustive-verification", "implementation-replay", "differential-replay", "symbolic-bitvector-verification"]
-counterexamples = "Retain minimized token, identity, crash, layer-order, SQL, and Redis traces and convert each real defect into a deterministic production regression."
+claim_classes = ["typechecked-specification", "bounded-exhaustive-verification", "implementation-replay", "differential-replay", "symbolic-bitvector-verification", "finite-exhaustive-abstraction"]
+counterexamples = "Retain minimized token, identity, crash, layer-order, SQL, Redis, and abstract-lifecycle traces and convert each real defect into a deterministic production regression."
 
 [[target]]
-id = "application-fencing-watermark"
+id = "independent-lease-fencing-lifecycle"
+risk = "critical"
+status = "active"
+claim_classes = ["finite-exhaustive-abstraction", "implementation-replay"]
+source_paths = [
+  "src/rust/lease.rs",
+  "src/rust/coordinated.rs",
+  "persistence/postgres/fencing.sql",
+  "persistence/redis/fenced-write.lua",
+]
+evidence_paths = [
+  "formal/model.mjs",
+  "formal/fm.toml",
+  "formal/PROCEDURE.md",
+  ".github/workflows/formal-model.yml",
+]
+bounds = [
+  "two clients, two payload values, logical time zero through five, fencing values through four, and lease TTL two",
+  "8126 reachable states and 105638 transitions in the reviewed exact-head run",
+]
+assumptions = [
+  "the JavaScript model is an independent finite abstraction, not the production implementation",
+  "language and datastore adapters replay the JSONL action protocol and retain native integration tests",
+]
+
+[[target]]
+id = "application-fencing-watermark-production-refinement"
 risk = "critical"
 status = "active"
 claim_classes = ["symbolic-bitvector-verification", "bounded-exhaustive-verification", "implementation-replay"]
@@ -24,7 +50,7 @@ evidence_paths = [
 ]
 bounds = [
   "all current and incoming u64 values plus both operation/payload identity bits in Kani",
-  "two holders, token generations zero through two, two identities, one crash per holder, and every actor interleaving in the explicit model",
+  "two holders, token generations zero through two, two identities, one crash per holder, and every actor interleaving in the direct-production explicit model",
 ]
 assumptions = [
   "the datastore classifies, advances the watermark, and applies the protected mutation atomically",
@@ -57,11 +83,11 @@ bounds = ["shared canonical corpus including uint64 maximum, replay, stale, toke
 assumptions = ["language runtime integer/string semantics match the exercised corpus outside provider-specific transport layers"]
 
 [[target]]
-id = "lease-and-cleanup-lifecycle"
+id = "cleanup-error-precedence"
 risk = "critical"
 status = "planned"
 claim_classes = ["bounded-exhaustive-verification"]
-source_paths = ["src/rust/lease.rs", "src/rust/coordinated.rs"]
+source_paths = ["src/rust/coordinated.rs"]
 evidence_paths = []
-bounds = ["two holders, acquire ambiguity, work failure, renewal loss, release failure, PostgreSQL cleanup failure"]
+bounds = ["work failure, renewal loss, Fiducia release failure, PostgreSQL unlock failure, and every pairwise failure combination"]
 assumptions = ["network and database adapters expose the documented typed failure classifications"]

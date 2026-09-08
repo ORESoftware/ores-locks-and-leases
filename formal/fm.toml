@@ -1,0 +1,57 @@
+schema_version = 1
+id = "ores-locks-and-leases-fencing"
+repository = "ORESoftware/ores-locks-and-leases"
+issue = "DEN-566"
+model = "formal/model.mjs"
+runner = "node"
+adapter_protocol = "jsonl-actions/v1"
+command = ["node", "formal/model.mjs"]
+replay_command = ["node", "formal/model.mjs", "--json-stdin"]
+claim = "finite-exhaustive-abstraction"
+timeout_seconds = 30
+
+[limits]
+clients = 2
+payload_values = 2
+max_time = 5
+max_fence = 4
+lease_ttl = 2
+
+[[invariants]]
+id = "exclusive-live-holder"
+description = "At most one client owns the live authority grant for a lock key."
+
+[[invariants]]
+id = "monotonic-fencing-token"
+description = "Every successful acquisition mints exactly one newer fence and persisted resource fences never regress."
+
+[[invariants]]
+id = "renew-preserves-fence"
+description = "Renewal extends only the deadline; it never changes ownership or mints a replacement fencing token."
+
+[[invariants]]
+id = "crash-does-not-release"
+description = "A crashed process cannot make its authority grant available before explicit release or TTL expiry."
+
+[[invariants]]
+id = "stale-writer-rejected"
+description = "A holder with an older fencing token cannot overwrite work committed under a newer token."
+
+[[invariants]]
+id = "idempotent-exact-replay"
+description = "Repeating the same payload under the current token is a committed no-op."
+
+[[invariants]]
+id = "ambiguous-token-reuse-rejected"
+description = "Reusing a token for a different payload fails closed without changing the protected resource."
+
+[refinement]
+status = "required"
+production_paths = [
+  "src/",
+  "persistence/postgres/fencing.sql",
+  "persistence/redis/fenced-write.lua",
+  "contracts/typespec/main.tsp",
+  "contracts/json-schema/contract.schema.json",
+]
+notes = "The model is an independent finite abstraction. Language implementations and persistence backends must replay the JSON-lines traces and retain their native integration tests."
