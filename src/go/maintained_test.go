@@ -12,9 +12,9 @@ import (
 type scriptedMaintenanceLease struct {
 	fakeLease
 
-	renewMu    sync.Mutex
-	renewals  int
-	failAt     int
+	renewMu     sync.Mutex
+	renewals    int
+	failAt      int
 	mutateToken bool
 }
 
