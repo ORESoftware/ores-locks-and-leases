@@ -110,11 +110,7 @@ impl RenewalError {
         }
     }
 
-    fn caused_by(
-        reason: RenewalLossReason,
-        message: impl Into<String>,
-        cause: LockError,
-    ) -> Self {
+    fn caused_by(reason: RenewalLossReason, message: impl Into<String>, cause: LockError) -> Self {
         Self {
             reason,
             message: message.into(),
@@ -126,7 +122,11 @@ impl RenewalError {
 impl fmt::Display for RenewalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.cause {
-            Some(cause) => write!(formatter, "{}: {}; cause: {cause}", self.reason, self.message),
+            Some(cause) => write!(
+                formatter,
+                "{}: {}; cause: {cause}",
+                self.reason, self.message
+            ),
             None => write!(formatter, "{}: {}", self.reason, self.message),
         }
     }
@@ -361,10 +361,9 @@ impl RenewalSupervisor {
                 ),
             )));
         }
-        if let Err(error) = validate_deadline_progress(
-            self.grant.lease_expires_ms,
-            renewed.lease_expires_ms,
-        ) {
+        if let Err(error) =
+            validate_deadline_progress(self.grant.lease_expires_ms, renewed.lease_expires_ms)
+        {
             return Err(self.record(error));
         }
         let (local_deadline_ms, next_renewal_ms) =
@@ -440,11 +439,7 @@ fn validate_deadline_progress(
     }
 }
 
-fn schedule(
-    now_ms: u64,
-    ttl_ms: u64,
-    policy: RenewalPolicy,
-) -> Result<(u64, u64), RenewalError> {
+fn schedule(now_ms: u64, ttl_ms: u64, policy: RenewalPolicy) -> Result<(u64, u64), RenewalError> {
     if ttl_ms == 0 || ttl_ms > MAX_RENEWAL_TTL_MS {
         return Err(RenewalError::new(
             RenewalLossReason::InvalidTtl,

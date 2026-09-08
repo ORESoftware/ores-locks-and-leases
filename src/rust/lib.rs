@@ -66,8 +66,8 @@ pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64};
 pub use lease::{AcquireOptions, FencingToken, Lease, LeaseGrant, NoLease, WorkFuture, with_lease};
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
 pub use renewal::{
-    MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS, MonotonicClock, RenewalCheckpoint,
-    RenewalDecision, RenewalError, RenewalLossReason, RenewalPolicy, RenewalSupervisor,
+    MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS, MonotonicClock, RenewalCheckpoint, RenewalDecision,
+    RenewalError, RenewalLossReason, RenewalPolicy, RenewalSupervisor,
 };
 
 #[cfg(feature = "pg")]

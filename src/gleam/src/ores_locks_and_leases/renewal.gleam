@@ -100,11 +100,16 @@ pub fn new(
   }
 }
 
-pub fn decision(supervisor: Supervisor, now_ms: Int) -> #(Supervisor, Decision) {
+pub fn decision(
+  supervisor: Supervisor,
+  now_ms: Int,
+) -> #(Supervisor, Decision) {
   case supervisor.loss {
     Some(reason) -> #(supervisor, Lost(reason))
     None ->
-      case valid_clock(now_ms), now_ms < supervisor.last_observed_ms,
+      case
+        valid_clock(now_ms),
+        now_ms < supervisor.last_observed_ms,
         now_ms >= supervisor.local_deadline_ms
       {
         False, _, _ -> lose(supervisor, DeadlineOverflow)
@@ -151,12 +156,13 @@ pub fn accept_renewal(
   case supervisor.loss {
     Some(reason) -> #(supervisor, Error(reason))
     None ->
-      case valid_clock(completed_ms),
+      case
+        valid_clock(completed_ms),
         completed_ms < supervisor.last_observed_ms,
         completed_ms >= supervisor.local_deadline_ms,
         core.key_to_string(renewed.key)
-          == core.key_to_string(supervisor.grant.key)
-          && renewed.holder == supervisor.grant.holder,
+        == core.key_to_string(supervisor.grant.key)
+        && renewed.holder == supervisor.grant.holder,
         renewed.fencing_token == supervisor.grant.fencing_token,
         deadline_progress(
           supervisor.grant.lease_expires_ms,
@@ -173,13 +179,14 @@ pub fn accept_renewal(
           case schedule(completed_ms, renewed.ttl_ms, supervisor.policy) {
             Error(reason) -> fail(supervisor, reason)
             Ok(#(deadline_ms, next_renewal_ms)) -> {
-              let next = Supervisor(
-                ..supervisor,
-                grant: renewed,
-                local_deadline_ms: deadline_ms,
-                next_renewal_ms: next_renewal_ms,
-                last_observed_ms: completed_ms,
-              )
+              let next =
+                Supervisor(
+                  ..supervisor,
+                  grant: renewed,
+                  local_deadline_ms: deadline_ms,
+                  next_renewal_ms: next_renewal_ms,
+                  last_observed_ms: completed_ms,
+                )
               #(next, Ok(Renewed(next_renewal_ms - completed_ms)))
             }
           }
@@ -209,7 +216,8 @@ fn schedule(
   ttl_ms: Int,
   policy: RenewalPolicy,
 ) -> Result(#(Int, Int), LossReason) {
-  case valid_clock(now_ms),
+  case
+    valid_clock(now_ms),
     ttl_ms > 0 && ttl_ms <= max_renewal_ttl_ms,
     policy.renew_every_ms > 0 && policy.renew_every_ms < ttl_ms,
     policy.safety_margin_ms > 0 && policy.safety_margin_ms < ttl_ms,

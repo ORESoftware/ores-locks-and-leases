@@ -65,11 +65,12 @@ pub fn renewal_decision_corpus_test() {
       now_ms,
       #(expected_kind, expected_check, expected_reason),
     ) = entry
-    let created = renewal.new(
-      grant(18_446_744_073_709_551_615, ttl_ms, 100_000),
-      renewal.RenewalPolicy(renew_every_ms, safety_margin_ms),
-      start_ms,
-    )
+    let created =
+      renewal.new(
+        grant(18_446_744_073_709_551_615, ttl_ms, 100_000),
+        renewal.RenewalPolicy(renew_every_ms, safety_margin_ms),
+        start_ms,
+      )
     case expected_kind, created {
       "invalid", Error(reason) ->
         renewal.loss_reason_to_string(reason) |> should.equal(expected_reason)
@@ -85,7 +86,8 @@ pub fn renewal_decision_corpus_test() {
           renewal.RenewNow -> expected_kind |> should.equal("renew_now")
           renewal.Lost(reason) -> {
             expected_kind |> should.equal("lost")
-            renewal.loss_reason_to_string(reason) |> should.equal(expected_reason)
+            renewal.loss_reason_to_string(reason)
+            |> should.equal(expected_reason)
           }
         }
       }
@@ -95,49 +97,53 @@ pub fn renewal_decision_corpus_test() {
 }
 
 pub fn successful_renewal_preserves_identity_test() {
-  let assert Ok(supervisor) = renewal.new(
-    grant(18_446_744_073_709_551_615, 10_000, 100_000),
-    renewal.RenewalPolicy(4_000, 2_000),
-    1_000,
-  )
+  let assert Ok(supervisor) =
+    renewal.new(
+      grant(18_446_744_073_709_551_615, 10_000, 100_000),
+      renewal.RenewalPolicy(4000, 2000),
+      1000,
+    )
   let renew = fn(old, _ttl_ms) {
     Ok(core.LeaseGrant(..old, lease_expires_ms: Some(110_000)))
   }
-  let #(next, result) = renewal.checkpoint(supervisor, 5_000, 5_100, renew)
-  result |> should.equal(Ok(renewal.Renewed(4_000)))
+  let #(next, result) = renewal.checkpoint(supervisor, 5000, 5100, renew)
+  result |> should.equal(Ok(renewal.Renewed(4000)))
   next.local_deadline_ms |> should.equal(15_100)
-  next.next_renewal_ms |> should.equal(9_100)
+  next.next_renewal_ms |> should.equal(9100)
   next.grant.fencing_token |> should.equal(18_446_744_073_709_551_615)
 }
 
 pub fn identity_and_token_drift_are_terminal_test() {
-  let assert Ok(supervisor) = renewal.new(
-    grant(7, 10_000, 100_000),
-    renewal.RenewalPolicy(4_000, 2_000),
-    1_000,
-  )
-  let changed_holder = core.LeaseGrant(
-    ..supervisor.grant,
-    holder: "holder-b",
-    lease_expires_ms: Some(110_000),
-  )
-  let #(lost, result) = renewal.accept_renewal(supervisor, 5_100, changed_holder)
+  let assert Ok(supervisor) =
+    renewal.new(
+      grant(7, 10_000, 100_000),
+      renewal.RenewalPolicy(4000, 2000),
+      1000,
+    )
+  let changed_holder =
+    core.LeaseGrant(
+      ..supervisor.grant,
+      holder: "holder-b",
+      lease_expires_ms: Some(110_000),
+    )
+  let #(lost, result) = renewal.accept_renewal(supervisor, 5100, changed_holder)
   result |> should.equal(Error(renewal.IdentityChanged))
-  let #(_, sticky) = renewal.decision(lost, 5_200)
+  let #(_, sticky) = renewal.decision(lost, 5200)
   sticky |> should.equal(renewal.Lost(renewal.IdentityChanged))
 }
 
 pub fn renewal_failure_is_sticky_test() {
-  let assert Ok(supervisor) = renewal.new(
-    grant(7, 10_000, 100_000),
-    renewal.RenewalPolicy(4_000, 2_000),
-    1_000,
-  )
+  let assert Ok(supervisor) =
+    renewal.new(
+      grant(7, 10_000, 100_000),
+      renewal.RenewalPolicy(4000, 2000),
+      1000,
+    )
   let renew = fn(old, _ttl_ms) {
     Error(core.transport_error(old.key, "partition"))
   }
-  let #(lost, result) = renewal.checkpoint(supervisor, 5_000, 5_100, renew)
+  let #(lost, result) = renewal.checkpoint(supervisor, 5000, 5100, renew)
   result |> should.equal(Error(renewal.RenewalFailed))
-  let #(_, second) = renewal.checkpoint(lost, 5_200, 5_300, renew)
+  let #(_, second) = renewal.checkpoint(lost, 5200, 5300, renew)
   second |> should.equal(Error(renewal.RenewalFailed))
 }

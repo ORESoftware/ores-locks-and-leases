@@ -53,11 +53,7 @@ impl Lease for FakeLease {
         Err(LockError::invalid_plan(key, "unused"))
     }
 
-    async fn renew(
-        &self,
-        _grant: &LeaseGrant,
-        _ttl: Duration,
-    ) -> Result<LeaseGrant, LockError> {
+    async fn renew(&self, _grant: &LeaseGrant, _ttl: Duration) -> Result<LeaseGrant, LockError> {
         *self.calls.lock().expect("calls lock") += 1;
         self.response
             .lock()
@@ -156,7 +152,10 @@ fn schedules_at_the_earlier_interval_or_margin() {
 
     let short = RenewalPolicy::new(Duration::from_millis(4_500), Duration::from_millis(1_000));
     let supervisor = RenewalSupervisor::new(
-        LeaseGrant { ttl_ms: 5_000, ..grant(7) },
+        LeaseGrant {
+            ttl_ms: 5_000,
+            ..grant(7)
+        },
         short,
         100,
     )
@@ -197,8 +196,7 @@ fn successful_renewal_preserves_identity_and_full_width_token() {
     };
     let lease = FakeLease::returning(Ok(renewed));
     let clock = SequenceClock::new([5_000, 5_100]);
-    let mut supervisor =
-        RenewalSupervisor::new(grant(u64::MAX), policy(), 1_000).expect("valid");
+    let mut supervisor = RenewalSupervisor::new(grant(u64::MAX), policy(), 1_000).expect("valid");
     assert_eq!(
         block_on(supervisor.checkpoint(&lease, &clock)).expect("renewed"),
         RenewalCheckpoint::Renewed { check_in_ms: 4_000 }
