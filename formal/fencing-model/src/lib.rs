@@ -11,29 +11,7 @@ mod plan;
 #[cfg(kani)]
 mod kani_proofs {
     use super::fence::{FenceDecisionKind, classify_validated_fence};
-    use super::key::LockKey;
     use super::plan::{LockLayers, LockStep, PgScope, plan};
-
-    fn request(token: u64, operation_b: bool, payload_b: bool) -> FencedWriteRequest {
-        FencedWriteRequest::new(
-            "formal/tenant",
-            LockKey::new("formal/resource").expect("fixed key is valid"),
-            FencingTokenText::from_u64(token),
-            if operation_b {
-                "operation-b"
-            } else {
-                "operation-a"
-            },
-            if payload_b {
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            } else {
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            },
-            None,
-            None,
-        )
-        .expect("fixed request metadata is valid")
-    }
 
     #[kani::proof]
     fn production_classifier_partitions_the_complete_u64_domain() {
