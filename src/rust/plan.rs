@@ -72,12 +72,14 @@ impl fmt::Display for PgScope {
     }
 }
 
-/// One action in a [`LockPlan`]. The string forms are the contract's
-/// `LockStep` enum values.
+/// One observable action in a lock routine. The string forms are the
+/// contract's `LockStep` enum values. `FiduciaRenew` is emitted by maintained
+/// transaction routines but is not part of the legacy static lock plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LockStep {
     FiduciaAcquire,
     FiduciaTryAcquire,
+    FiduciaRenew,
     FiduciaRelease,
     PgBegin,
     PgAdvisoryXactLock,
@@ -91,9 +93,10 @@ pub enum LockStep {
 }
 
 impl LockStep {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::FiduciaAcquire,
         Self::FiduciaTryAcquire,
+        Self::FiduciaRenew,
         Self::FiduciaRelease,
         Self::PgBegin,
         Self::PgAdvisoryXactLock,
@@ -110,6 +113,7 @@ impl LockStep {
         match self {
             Self::FiduciaAcquire => "fiducia.acquire",
             Self::FiduciaTryAcquire => "fiducia.try_acquire",
+            Self::FiduciaRenew => "fiducia.renew",
             Self::FiduciaRelease => "fiducia.release",
             Self::PgBegin => "pg.begin",
             Self::PgAdvisoryXactLock => "pg.advisory_xact_lock",
@@ -143,7 +147,9 @@ pub struct LockPlan {
     pub steps: Vec<LockStep>,
 }
 
-/// Compute the plan. Pure; identical across every language slice.
+/// Compute the legacy lock plan. Pure; identical across every language slice.
+/// Maintained transaction routines insert one or more `fiducia.renew` events
+/// dynamically and therefore do not change this deterministic matrix.
 ///
 /// `wait == true` blocks each layer up to its budget; `wait == false` uses the
 /// non-blocking form of each acquisition and fails fast with
@@ -226,6 +232,14 @@ mod tests {
                 FiduciaRelease
             ]
         );
+    }
+
+    #[test]
+    fn maintained_step_is_observable_but_not_in_the_legacy_plan() {
+        assert_eq!(LockStep::parse("fiducia.renew"), Some(FiduciaRenew));
+        assert!(!plan(LockLayers::BOTH, PgScope::Transaction, true)
+            .steps
+            .contains(&FiduciaRenew));
     }
 
     #[test]
