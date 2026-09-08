@@ -237,9 +237,11 @@ mod tests {
     #[test]
     fn maintained_step_is_observable_but_not_in_the_legacy_plan() {
         assert_eq!(LockStep::parse("fiducia.renew"), Some(FiduciaRenew));
-        assert!(!plan(LockLayers::BOTH, PgScope::Transaction, true)
-            .steps
-            .contains(&FiduciaRenew));
+        assert!(
+            !plan(LockLayers::BOTH, PgScope::Transaction, true)
+                .steps
+                .contains(&FiduciaRenew)
+        );
     }
 
     #[test]
