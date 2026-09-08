@@ -81,7 +81,11 @@ delete childEnv[DATABASE_URL_ENV];
 for (const name of CONNECTION_ENV) {
   delete childEnv[name];
 }
-childEnv.PGHOST = url.hostname;
+const hostname =
+  url.hostname.startsWith("[") && url.hostname.endsWith("]")
+    ? url.hostname.slice(1, -1)
+    : url.hostname;
+childEnv.PGHOST = hostname;
 childEnv.PGPORT = url.port || "5432";
 
 if (url.username) {
