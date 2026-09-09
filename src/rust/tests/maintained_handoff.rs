@@ -39,11 +39,7 @@ impl Lease for CountingLease {
         })
     }
 
-    async fn renew(
-        &self,
-        grant: &LeaseGrant,
-        ttl: Duration,
-    ) -> Result<LeaseGrant, LockError> {
+    async fn renew(&self, grant: &LeaseGrant, ttl: Duration) -> Result<LeaseGrant, LockError> {
         self.renewals.fetch_add(1, Ordering::SeqCst);
         let mut renewed = grant.clone();
         renewed.ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
@@ -90,8 +86,7 @@ async fn waiting_holder_renews_then_commits_after_live_postgres_handoff() {
         .ttl(Duration::from_millis(200))
         .wait_timeout(Duration::from_secs(2))
         .retry_interval(Duration::from_millis(5));
-    let maintenance =
-        LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(20));
+    let maintenance = LeaseMaintenanceOptions::default().renew_interval(Duration::from_millis(20));
 
     let waiter = {
         let db = db.clone();
