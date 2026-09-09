@@ -95,6 +95,11 @@ Code that ignores a cooperative signal may continue computing until its work
 function returns, but it cannot make this routine commit after renewal loss.
 All protected SQL must use the transaction/session supplied by the guard.
 
+The TypeScript signal is a package-owned structural interface rather than the
+DOM `AbortSignal` declaration. It supports `aborted`, `reason`, abort listener
+registration, and `throwIfAborted()` while allowing server-only and generated
+consumers to compile without the DOM type library.
+
 ## Rust
 
 ```rust,ignore
@@ -164,6 +169,24 @@ await withMaintainedXactLock(
   },
 );
 ```
+
+## Formal commit-admission model
+
+`formal/maintained-model.mjs` exhaustively enumerates the common maintained
+control flow with up to two periodic renewals and two advisory-lock contention
+retries. The reviewed local run covers 878 reachable states, 889 transitions,
+and 568 terminal outcomes, including begin/lock/work/renew/commit/rollback and
+release failures plus cleanup precedence.
+
+The model proves that authority loss prevents commit, final renewal is
+mandatory, commit and rollback are exclusive, acquired paths release exactly
+once, and cleanup failures remain primary without discarding the earlier
+failure. A negative control removes final renewal and must exhibit an unsafe
+successful commit trace; CI retains the exact-head JSON receipt.
+
+This is a finite exhaustive abstraction, not a transport-liveness or real-clock
+proof. Native runtime tests, live PostgreSQL evidence, and atomic datastore
+fencing remain required.
 
 ## Legacy transaction routine
 

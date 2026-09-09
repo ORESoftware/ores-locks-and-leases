@@ -50,6 +50,8 @@ export type LeaseAbortListener = () => void;
 export interface LeaseAbortSignal {
   readonly aborted: boolean;
   readonly reason: unknown;
+  /** Throw the exact cancellation reason after authority loss. */
+  throwIfAborted(): void;
   addEventListener(
     type: "abort",
     listener: LeaseAbortListener,
@@ -155,6 +157,9 @@ class LeaseMaintainer {
       },
       get reason(): unknown {
         return source.reason;
+      },
+      throwIfAborted(): void {
+        source.throwIfAborted();
       },
       addEventListener(
         type: "abort",
