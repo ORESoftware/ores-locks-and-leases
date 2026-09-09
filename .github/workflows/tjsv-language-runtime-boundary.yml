@@ -1,0 +1,185 @@
+name: tjsv-language-runtime-boundary
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'conformance/**'
+      - 'src/**'
+      - 'scripts/check-tjsv-contracts.sh'
+      - 'scripts/verify-language-runtime-boundaries.mjs'
+      - '.github/workflows/tjsv-language-runtime-boundary.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - 'conformance/**'
+      - 'src/**'
+      - 'scripts/check-tjsv-contracts.sh'
+      - 'scripts/verify-language-runtime-boundaries.mjs'
+      - '.github/workflows/tjsv-language-runtime-boundary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: tjsv-language-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  TJSV_COMMIT: dfc28bfc000faba5a963f23c708171dfd5f8debf
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/dfc28bfc000faba5a963f23c708171dfd5f8debf.tar.gz
+
+jobs:
+  boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: locks
+          POSTGRES_DB: locks
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with: { toolchain: '1.85.1', components: 'rustfmt,clippy' }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.22', cache: false }
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
+
+      - name: Run current TJSV against both independent authority bundles
+        id: contracts
+        continue-on-error: true
+        run: |
+          tmp="scripts/.check-tjsv-contracts-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          trap 'rm -f -- "$tmp"' EXIT
+          sed "s/^validator_commit=.*/validator_commit=$TJSV_COMMIT/" \
+            scripts/check-tjsv-contracts.sh > "$tmp"
+          chmod +x "$tmp"
+          sh "$tmp" all
+
+      - name: Verify Rust projection with live PostgreSQL
+        id: rust
+        continue-on-error: true
+        working-directory: src/rust
+        env:
+          ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --no-default-features
+          cargo clippy --locked --all-targets --features full -- -D warnings
+          cargo test --locked --all-targets --features full
+
+      - name: Verify Go projection
+        id: go
+        continue-on-error: true
+        working-directory: src/go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+
+      - name: Verify TypeScript and Node projection
+        id: typescript
+        continue-on-error: true
+        working-directory: src/ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Verify Dart and Flutter-facing projection
+        id: dart
+        continue-on-error: true
+        working-directory: src/dart
+        run: |
+          dart pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
+          dart analyze --fatal-infos
+          dart test
+
+      - name: Verify Gleam and BEAM projection
+        id: gleam
+        continue-on-error: true
+        working-directory: src/gleam
+        run: |
+          gleam format --check src test
+          gleam test
+
+      - name: Install immutable TJSV language-boundary verifier
+        id: validator
+        if: always()
+        continue-on-error: true
+        run: |
+          rm -rf target/tjsv-language-boundary-package
+          npm install \
+            --prefix target/tjsv-language-boundary-package \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund \
+            "$TJSV_PACKAGE"
+          node -e '
+            const p = require("./target/tjsv-language-boundary-package/node_modules/@oresoftware/typespec-json-schema-validator/package.json");
+            if (p.name !== "@oresoftware/typespec-json-schema-validator") process.exit(1);
+          '
+
+      - name: Verify exact evidence bindings with official TJSV admission
+        id: boundary
+        if: always()
+        continue-on-error: true
+        env:
+          RUST_OUTCOME: ${{ steps.rust.outcome }}
+          GO_OUTCOME: ${{ steps.go.outcome }}
+          TYPESCRIPT_OUTCOME: ${{ steps.typescript.outcome }}
+          DART_OUTCOME: ${{ steps.dart.outcome }}
+          GLEAM_OUTCOME: ${{ steps.gleam.outcome }}
+        run: node scripts/verify-language-runtime-boundaries.mjs
+
+      - name: Retain positive and negative TJSV evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tjsv-language-runtime-boundary-${{ env.EXPECTED_SHA }}
+          path: |
+            target/tjsv/
+            target/contract-runtime-boundary/language-boundary/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce every native and TJSV gate
+        if: always()
+        env:
+          CONTRACTS_OUTCOME: ${{ steps.contracts.outcome }}
+          RUST_OUTCOME: ${{ steps.rust.outcome }}
+          GO_OUTCOME: ${{ steps.go.outcome }}
+          TYPESCRIPT_OUTCOME: ${{ steps.typescript.outcome }}
+          DART_OUTCOME: ${{ steps.dart.outcome }}
+          GLEAM_OUTCOME: ${{ steps.gleam.outcome }}
+          VALIDATOR_OUTCOME: ${{ steps.validator.outcome }}
+          BOUNDARY_OUTCOME: ${{ steps.boundary.outcome }}
+        run: |
+          for name in CONTRACTS RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY; do
+            eval "value=\${${name}_OUTCOME}"
+            printf '%s=%s\n' "$name" "$value"
+            test "$value" = success
+          done
