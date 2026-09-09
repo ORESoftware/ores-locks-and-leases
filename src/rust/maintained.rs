@@ -306,15 +306,14 @@ fn validate_acquired_grant(
     acquire: &AcquireOptions,
     grant: &LeaseGrant,
 ) -> Result<(), LockError> {
+    let holder_mismatch = grant.holder.is_empty()
+        || acquire
+            .holder
+            .as_ref()
+            .is_some_and(|expected| expected != &grant.holder);
     let mismatch = if &grant.key != key {
         Some("key")
-    } else if grant.holder.is_empty() {
-        Some("holder")
-    } else if acquire
-        .holder
-        .as_ref()
-        .is_some_and(|expected| expected != &grant.holder)
-    {
+    } else if holder_mismatch {
         Some("holder")
     } else if grant.ttl_ms != acquire.ttl_ms() {
         Some("TTL")

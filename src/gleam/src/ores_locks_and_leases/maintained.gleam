@@ -1,9 +1,10 @@
 //// Maintained Fiducia + PostgreSQL transaction coordination.
 ////
-//// This module owns the database boundary while the core module owns grant
-//// identity, renewal validation, cleanup precedence, and plan vocabulary.
-//// PostgreSQL acquisition is polled with `pg_try_advisory_xact_lock` so a
-//// failed maintenance checkpoint can interrupt contention.
+//// This module owns the maintained database boundary while the core module
+//// owns grant identity, renewal validation, cleanup precedence, and plan
+//// vocabulary. PostgreSQL acquisition is polled with
+//// `pg_try_advisory_xact_lock` so a failed maintenance checkpoint can
+//// interrupt contention.
 
 import gleam/int
 import gleam/option.{None, Some}
@@ -12,6 +13,7 @@ import gleam/string
 import ores_locks_and_leases as core
 import ores_locks_and_leases/pg
 import ores_locks_and_leases/renewal as renewal_supervisor
+import pog
 
 /// A clock/sleep seam for deterministic maintained-wait tests and runtime
 /// adapters. `now_ms` must be monotonic; `sleep_ms` may return a lock error when
@@ -33,13 +35,13 @@ pub fn scheduler(
 
 /// What maintained Gleam work receives. Because Gleam callbacks are
 /// synchronous, cooperative long-running work explicitly calls
-/// `maintenance_checkpoint` at its own yield points. Final renewal still gates
-/// transaction commit even when work performs no checkpoints.
+/// `maintenance_checkpoint` at its own yield points. Each explicit checkpoint
+/// proves the same grant again; final renewal still gates transaction commit.
 pub type Guarded {
   Guarded(
     key: core.LockKey,
     grant: core.LeaseGrant,
-    transaction: pg.Transaction,
+    transaction: pog.Connection,
     maintenance_checkpoint: fn() -> Result(Nil, core.LockError),
   )
 }
@@ -154,15 +156,16 @@ fn validate_options(
 
 /// Execute one maintained transaction. The scheduler supplies monotonic time
 /// and bounded sleeping while the lease supplies checked renewal. Acquisition
-/// and renewal must preserve the requested effective TTL. Any inner error is
-/// rolled back; release happens on every path after acquisition.
+/// and renewal must preserve the requested effective TTL. Returning an error
+/// from the `pog.transaction` callback rolls the transaction back; release
+/// happens on every path after acquisition.
 pub fn with_maintained_xact_lock(
   key: core.LockKey,
   wait: Bool,
   opts: core.AcquireOptions,
   maintenance: core.LeaseMaintenanceOptions,
   lease: core.Lease,
-  database: pg.Database,
+  database: pog.Connection,
   scheduler: Scheduler,
   work: fn(Guarded) -> Result(t, String),
 ) -> Result(t, core.LockError) {
@@ -196,54 +199,63 @@ fn run_transaction(
   maintenance: core.LeaseMaintenanceOptions,
   lease: core.Lease,
   grant: core.LeaseGrant,
-  database: pg.Database,
+  database: pog.Connection,
   scheduler: Scheduler,
   work: fn(Guarded) -> Result(t, String),
 ) -> Result(t, core.LockError) {
-  use transaction <- result.try(pg.begin(database, key))
   let Scheduler(now_ms: now_ms, sleep_ms: sleep_ms) = scheduler
   let started_ms = now_ms()
   let next_renewal_ms = started_ms + maintenance.renew_interval_ms
 
-  case
-    acquire_lock(
-      transaction,
-      key,
-      wait,
-      opts,
-      maintenance,
-      lease,
-      grant,
-      now_ms,
-      sleep_ms,
-      started_ms,
-      next_renewal_ms,
-    )
-  {
-    Error(error) -> rollback_or_cleanup(transaction, key, error)
-    Ok(next_renewal_ms) -> {
-      let checkpoint = fn() {
-        case now_ms() >= next_renewal_ms {
-          True ->
+  let outcome =
+    pog.transaction(database, fn(transaction) {
+      case
+        acquire_lock(
+          transaction,
+          key,
+          wait,
+          opts,
+          maintenance,
+          lease,
+          grant,
+          now_ms,
+          sleep_ms,
+          started_ms,
+          next_renewal_ms,
+        )
+      {
+        Error(error) -> Error(encode_error(error))
+        Ok(_) -> {
+          let checkpoint = fn() {
             renew_checked(lease, grant, opts.ttl_ms) |> result.replace(Nil)
-          False -> Ok(Nil)
+          }
+          case work(Guarded(key, grant, transaction, checkpoint)) {
+            Error(cause) -> Error(encode_error(core.work_error(key, cause)))
+            Ok(value) ->
+              case renew_checked(lease, grant, opts.ttl_ms) {
+                Error(error) -> Error(encode_error(error))
+                Ok(_) -> Ok(value)
+              }
+          }
         }
       }
-      case work(Guarded(key, grant, transaction, checkpoint)) {
-        Error(cause) ->
-          rollback_or_cleanup(transaction, key, core.work_error(key, cause))
-        Ok(value) ->
-          case renew_checked(lease, grant, opts.ttl_ms) {
-            Error(error) -> rollback_or_cleanup(transaction, key, error)
-            Ok(_) -> pg.commit(transaction, key) |> result.replace(value)
-          }
-      }
-    }
+    })
+
+  case outcome {
+    Ok(value) -> Ok(value)
+    Error(pog.TransactionRolledBack(encoded)) ->
+      Error(decode_error(key, encoded))
+    Error(pog.TransactionQueryError(error)) ->
+      Error(core.database_error(
+        key,
+        core.PgCommit,
+        string.inspect(error),
+      ))
   }
 }
 
 fn acquire_lock(
-  transaction: pg.Transaction,
+  transaction: pog.Connection,
   key: core.LockKey,
   wait: Bool,
   opts: core.AcquireOptions,
@@ -256,55 +268,86 @@ fn acquire_lock(
   next_renewal_ms: Int,
 ) -> Result(Int, core.LockError) {
   case pg.try_xact_lock(transaction, key) {
-    Ok(True) -> Ok(next_renewal_ms)
-    Error(error) -> Error(error)
-    Ok(False) if !wait ->
-      Error(core.contention(key, core.PgTryAdvisoryXactLock))
-    Ok(False) -> {
-      let now = now_ms()
-      case now - started_ms >= opts.wait_timeout_ms {
-        True ->
-          Error(core.timeout(key, core.PgAdvisoryXactLock, opts.wait_timeout_ms))
-        False -> {
-          let next_renewal_ms = case now >= next_renewal_ms {
-            False -> Ok(next_renewal_ms)
+    Ok(Nil) -> Ok(next_renewal_ms)
+    Error(error) ->
+      case wait, error.kind {
+        False, _ -> Error(error)
+        True, core.Contention -> {
+          let now = now_ms()
+          case now - started_ms >= opts.wait_timeout_ms {
             True ->
-              renew_checked(lease, grant, opts.ttl_ms)
-              |> result.replace(now + maintenance.renew_interval_ms)
+              Error(core.timeout(
+                key,
+                core.PgAdvisoryXactLock,
+                opts.wait_timeout_ms,
+              ))
+            False -> {
+              let next_renewal_ms = case now >= next_renewal_ms {
+                False -> Ok(next_renewal_ms)
+                True ->
+                  renew_checked(lease, grant, opts.ttl_ms)
+                  |> result.replace(now + maintenance.renew_interval_ms)
+              }
+              use next_renewal_ms <- result.try(next_renewal_ms)
+              let remaining_ms = opts.wait_timeout_ms - { now - started_ms }
+              let sleep_for = case opts.retry_interval_ms < remaining_ms {
+                True -> opts.retry_interval_ms
+                False -> remaining_ms
+              }
+              use _ <- result.try(sleep_ms(sleep_for))
+              acquire_lock(
+                transaction,
+                key,
+                wait,
+                opts,
+                maintenance,
+                lease,
+                grant,
+                now_ms,
+                sleep_ms,
+                started_ms,
+                next_renewal_ms,
+              )
+            }
           }
-          use next_renewal_ms <- result.try(next_renewal_ms)
-          let remaining_ms = opts.wait_timeout_ms - { now - started_ms }
-          let sleep_for = case opts.retry_interval_ms < remaining_ms {
-            True -> opts.retry_interval_ms
-            False -> remaining_ms
-          }
-          use _ <- result.try(sleep_ms(sleep_for))
-          acquire_lock(
-            transaction,
-            key,
-            wait,
-            opts,
-            maintenance,
-            lease,
-            grant,
-            now_ms,
-            sleep_ms,
-            started_ms,
-            next_renewal_ms,
-          )
         }
+        True, _ -> Error(error)
       }
-    }
   }
 }
 
-fn rollback_or_cleanup(
-  transaction: pg.Transaction,
-  key: core.LockKey,
-  inner: core.LockError,
-) -> Result(t, core.LockError) {
-  case pg.rollback(transaction, key) {
-    Ok(Nil) -> Error(inner)
-    Error(cleanup) -> Error(core.cleanup_failure(cleanup, inner))
+const error_separator = "\u{1F}"
+
+fn encode_error(error: core.LockError) -> String {
+  let step = case error.step {
+    Some(step) -> core.step_to_string(step)
+    None -> ""
+  }
+  core.kind_to_string(error.kind)
+  <> error_separator
+  <> step
+  <> error_separator
+  <> error.message
+}
+
+fn decode_error(key: core.LockKey, encoded: String) -> core.LockError {
+  case string.split(encoded, error_separator) {
+    [kind, step, message] -> {
+      let kind = case kind {
+        "contention" -> core.Contention
+        "timeout" -> core.Timeout
+        "lost_lease" -> core.LostLease
+        "transport" -> core.Transport
+        "database" -> core.Database
+        "work" -> core.WorkFailed
+        _ -> core.InvalidPlan
+      }
+      let step = case core.step_from_string(step) {
+        Ok(step) -> Some(step)
+        Error(Nil) -> None
+      }
+      core.LockError(kind, key, step, message)
+    }
+    _ -> core.database_error(key, core.PgRollback, encoded)
   }
 }
