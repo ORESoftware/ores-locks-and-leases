@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'contracts/**'
+      - 'formal/**'
       - '.github/workflows/peer-authority-validator.yml'
   push:
     branches: [main]
     paths:
       - 'contracts/**'
+      - 'formal/**'
       - '.github/workflows/peer-authority-validator.yml'
   workflow_dispatch:
 
@@ -48,7 +50,7 @@ jobs:
           node --check contracts/mapping-tests/check-stale-mapping-receipt.mjs
 
       - name: Compare independently authored TypeSpec and JSON Schema authorities
-        uses: ORESoftware/typespec-json-schema-validator@6bb5b7c1ee41c8b43741e50a264c33a1165549c4
+        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
@@ -63,7 +65,7 @@ jobs:
       - name: Prove a stale contract mapping stops evaluation
         id: stale_mapping
         continue-on-error: true
-        uses: ORESoftware/typespec-json-schema-validator@6bb5b7c1ee41c8b43741e50a264c33a1165549c4
+        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
