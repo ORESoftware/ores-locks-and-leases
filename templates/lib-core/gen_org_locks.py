@@ -276,7 +276,6 @@ model LockCatalog {{
                 },
                 "LockLayers": {
                     "type": "object",
-                    "additionalProperties": False,
                     "unevaluatedProperties": False,
                     "description": "Whether the fiducia lease and/or the Postgres advisory lock are engaged for an entry.",
                     "properties": {"fiducia": {"type": "boolean"}, "pgAdvisory": {"type": "boolean"}},
@@ -289,7 +288,6 @@ model LockCatalog {{
                 },
                 "LockCatalogEntry": {
                     "type": "object",
-                    "additionalProperties": False,
                     "unevaluatedProperties": False,
                     "description": "One catalog row. `name` may contain {placeholders} callers fill in.",
                     "properties": {
@@ -304,7 +302,6 @@ model LockCatalog {{
                 },
                 "LockCatalog": {
                     "type": "object",
-                    "additionalProperties": False,
                     "unevaluatedProperties": False,
                     "description": "The catalog: `locks/catalog.json` conforms to this.",
                     "properties": {
