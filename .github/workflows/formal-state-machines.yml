@@ -104,10 +104,11 @@ jobs:
           node-version: '22'
       - name: Exhaustively verify maintained transaction commit admission
         env:
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           node --check formal/maintained-model.mjs
           node formal/maintained-model.mjs \
+            --revision "$EXPECTED_SHA" \
             --receipt target/formal-maintained/receipt.json
       - name: Retain maintained transaction model evidence
         if: always()

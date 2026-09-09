@@ -464,13 +464,22 @@ function findNegativeControlWitness(model) {
 }
 
 function parseArgs(argv) {
-  const args = { receipt: null };
+  const args = { receipt: null, revision: null };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--receipt") {
       const path = argv[index + 1];
       if (!path) throw new Error("--receipt requires a path");
       args.receipt = resolve(path);
+      index += 1;
+      continue;
+    }
+    if (value === "--revision") {
+      const revision = argv[index + 1];
+      if (!revision || !/^[0-9a-f]{40}$/u.test(revision)) {
+        throw new Error("--revision requires a lowercase 40-character commit SHA");
+      }
+      args.revision = revision;
       index += 1;
       continue;
     }
@@ -491,7 +500,7 @@ async function main() {
 
   const receipt = {
     schema: "ores.locks.maintained-transaction-model/v1",
-    revision: process.env.GITHUB_SHA ?? null,
+    revision: args.revision ?? process.env.GITHUB_SHA ?? null,
     bounds: {
       maxPeriodicRenewals: MAX_PERIODIC_RENEWALS,
       maxContentionRetries: MAX_CONTENTION_RETRIES,
