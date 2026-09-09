@@ -15,6 +15,7 @@ trap cleanup EXIT HUP INT TERM
 vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
 tjsv_commit=6bb5b7c1ee41c8b43741e50a264c33a1165549c4
 tjsv_package="https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsv_commit}.tar.gz"
+generated_declarations='["Preflight.Locks.LockCatalog","Preflight.Locks.LockCatalogEntry","Preflight.Locks.LockDomain","Preflight.Locks.LockLayers","Preflight.Locks.PgScope"]'
 
 # Reproduce a lib-core whose repository root is a virtual Cargo workspace.
 # Without an explicit workspace in locks/rust/Cargo.toml, Cargo rejects the
@@ -111,13 +112,35 @@ log "TypeSpec and JSON Schema peer authorities"
     --max-probes=128 \
     --quiet
 
-  node - target/tjsv/generated-consumer/report.json <<'NODE'
+  npx --yes --package="$tjsv_package" tjsv verify-ir \
+    --contract-ir=target/tjsv/generated-consumer/contract-ir.json \
+    --parity-receipt=target/tjsv/generated-consumer/report.json \
+    --typespec=contracts/typespec/main.tsp \
+    --generated-schema=target/tjsv/generated-consumer/generated-schema-b/generated-consumer.typespec.generated.schema.json \
+    --schema=contracts/json-schema/contract.schema.json \
+    --expected-declarations="$generated_declarations" \
+    --verification=target/tjsv/generated-consumer/consumer-verification.json \
+    --quiet
+
+  node - \
+    target/tjsv/generated-consumer/report.json \
+    target/tjsv/generated-consumer/contract-ir.json \
+    target/tjsv/generated-consumer/consumer-verification.json \
+    "$generated_declarations" <<'NODE'
 import { readFileSync } from "node:fs";
-const report = JSON.parse(readFileSync(process.argv[2], "utf8"));
+
+const [reportPath, irPath, verificationPath, expectedJson] = process.argv.slice(2);
+const report = JSON.parse(readFileSync(reportPath, "utf8"));
+const contractIr = JSON.parse(readFileSync(irPath, "utf8"));
+const verification = JSON.parse(readFileSync(verificationPath, "utf8"));
+const expected = JSON.parse(expectedJson);
+const digestPattern = /^[0-9a-f]{64}$/u;
 const summary = report.differential?.summary;
+
 if (
   report.status !== "passed" ||
   report.zeroUnexplainedFindings !== true ||
+  !digestPattern.test(report.runId ?? "") ||
   report.differential?.disabled === true ||
   summary === null ||
   typeof summary !== "object" ||
@@ -126,6 +149,37 @@ if (
   summary.refusals !== 0
 ) {
   throw new Error("generated consumer contract did not pass TJSV differential admission");
+}
+
+if (
+  contractIr.status !== "passed" ||
+  contractIr.admissible !== true ||
+  contractIr.role !== "downstream-derived-parity-artifact" ||
+  contractIr.editableAuthority !== false ||
+  !digestPattern.test(contractIr.irId ?? "") ||
+  contractIr.authorities?.typespec !== "independently-authored" ||
+  contractIr.authorities?.jsonSchema !== "independently-authored" ||
+  contractIr.authorities?.generatedJsonSchema !== "comparison-evidence-only" ||
+  contractIr.authorities?.precedence !== "none" ||
+  contractIr.admission?.receipt?.runId !== report.runId ||
+  contractIr.admission?.scope?.complete !== true ||
+  JSON.stringify(contractIr.declarations?.map((entry) => entry.id)) !== JSON.stringify(expected)
+) {
+  throw new Error("generated consumer Contract IR was not admitted over its exact declaration scope");
+}
+
+if (
+  verification.status !== "passed" ||
+  verification.admissible !== true ||
+  !digestPattern.test(verification.verificationId ?? "") ||
+  verification.suppliedIrId !== contractIr.irId ||
+  verification.computedIrId !== contractIr.irId ||
+  verification.expectedIrId !== contractIr.irId ||
+  verification.receiptRunId !== report.runId ||
+  verification.failureCode !== null ||
+  JSON.stringify(verification.declarationIds) !== JSON.stringify(expected)
+) {
+  throw new Error("generated consumer canonical verify-ir receipt was not admissible");
 }
 NODE
 )

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const RUN_ID_PATTERN = /^[0-9a-f]{64}$/u;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const TJSV_COMMIT = "6bb5b7c1ee41c8b43741e50a264c33a1165549c4";
 
 function requireSha(name, value) {
@@ -32,42 +32,98 @@ const required = {
 
 let tjsv;
 try {
-  const reportBytes = await readFile("target/tjsv/renewal/report.json");
-  const contractIrBytes = await readFile("target/tjsv/renewal/contract-ir.json");
+  const [reportBytes, contractIrBytes, verificationBytes] = await Promise.all([
+    readFile("target/tjsv/renewal/report.json"),
+    readFile("target/tjsv/renewal/contract-ir.json"),
+    readFile("target/tjsv/renewal/consumer-verification.json"),
+  ]);
   const report = JSON.parse(reportBytes.toString("utf8"));
+  const contractIr = JSON.parse(contractIrBytes.toString("utf8"));
+  const verification = JSON.parse(verificationBytes.toString("utf8"));
   const differential = report.differential?.summary;
-  const passed =
+
+  const reportPassed =
     report.schema === "ores.typespec-json-schema-validator.report/v1" &&
     report.status === "passed" &&
     report.zeroUnexplainedFindings === true &&
     typeof report.runId === "string" &&
-    RUN_ID_PATTERN.test(report.runId) &&
+    DIGEST_PATTERN.test(report.runId) &&
     report.differential?.disabled !== true &&
     differential !== null &&
     typeof differential === "object" &&
     differential.probesEvaluated > 0 &&
     differential.divergences === 0 &&
     differential.refusals === 0;
+
+  const irPassed =
+    contractIr.schema === "ores.typespec-json-schema-validator.contract-ir/v1" &&
+    contractIr.status === "passed" &&
+    contractIr.admissible === true &&
+    contractIr.role === "downstream-derived-parity-artifact" &&
+    contractIr.editableAuthority === false &&
+    typeof contractIr.irId === "string" &&
+    DIGEST_PATTERN.test(contractIr.irId) &&
+    contractIr.authorities?.typespec === "independently-authored" &&
+    contractIr.authorities?.jsonSchema === "independently-authored" &&
+    contractIr.authorities?.generatedJsonSchema === "comparison-evidence-only" &&
+    contractIr.authorities?.precedence === "none" &&
+    contractIr.admission?.receipt?.runId === report.runId &&
+    contractIr.admission?.receipt?.status === "passed" &&
+    contractIr.admission?.receipt?.zeroUnexplainedFindings === true &&
+    contractIr.admission?.scope?.complete === true &&
+    contractIr.declarations?.length === 9;
+
+  const verificationPassed =
+    verification.schema ===
+      "ores.typespec-json-schema-validator.consumer-verification-receipt/v1" &&
+    verification.status === "passed" &&
+    verification.admissible === true &&
+    typeof verification.verificationId === "string" &&
+    DIGEST_PATTERN.test(verification.verificationId) &&
+    verification.suppliedIrId === contractIr.irId &&
+    verification.computedIrId === contractIr.irId &&
+    verification.expectedIrId === contractIr.irId &&
+    verification.receiptRunId === report.runId &&
+    verification.failureCode === null &&
+    verification.declarationIds?.length === 9;
+
+  const passed = reportPassed && irPassed && verificationPassed;
   tjsv = {
     status: passed ? "passed" : "stopped_for_evaluation",
     runId: typeof report.runId === "string" ? report.runId : null,
+    contractIrId: typeof contractIr.irId === "string" ? contractIr.irId : null,
+    verificationId:
+      typeof verification.verificationId === "string"
+        ? verification.verificationId
+        : null,
     reportSha256: createHash("sha256").update(reportBytes).digest("hex"),
     contractIrSha256: createHash("sha256").update(contractIrBytes).digest("hex"),
-    differential: differential && typeof differential === "object"
-      ? {
-          probesEvaluated: differential.probesEvaluated ?? null,
-          agreements: differential.agreements ?? null,
-          divergences: differential.divergences ?? null,
-          refusals: differential.refusals ?? null,
-        }
+    consumerVerificationSha256: createHash("sha256")
+      .update(verificationBytes)
+      .digest("hex"),
+    declarationCount: Array.isArray(verification.declarationIds)
+      ? verification.declarationIds.length
       : null,
+    differential:
+      differential && typeof differential === "object"
+        ? {
+            probesEvaluated: differential.probesEvaluated ?? null,
+            agreements: differential.agreements ?? null,
+            divergences: differential.divergences ?? null,
+            refusals: differential.refusals ?? null,
+          }
+        : null,
   };
 } catch {
   tjsv = {
     status: "missing_or_invalid",
     runId: null,
+    contractIrId: null,
+    verificationId: null,
     reportSha256: null,
     contractIrSha256: null,
+    consumerVerificationSha256: null,
+    declarationCount: null,
     differential: null,
   };
 }
@@ -103,7 +159,8 @@ const receipt = {
     validator: {
       repository: "ORESoftware/typespec-json-schema-validator",
       commit: TJSV_COMMIT,
-      command: "tjsv check",
+      parityCommand: "tjsv check",
+      consumerVerificationCommand: "tjsv verify-ir",
       evidence: tjsv,
     },
   },
