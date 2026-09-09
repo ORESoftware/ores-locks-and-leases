@@ -68,9 +68,7 @@ impl LeaseMaintenanceOptions {
         if acquire.ttl_ms() > MAX_RENEWAL_TTL_MS {
             return Err(LockError::invalid_plan(
                 key,
-                format!(
-                    "fiducia lease TTL must be no greater than {MAX_RENEWAL_TTL_MS} ms",
-                ),
+                format!("fiducia lease TTL must be no greater than {MAX_RENEWAL_TTL_MS} ms",),
             ));
         }
         if self.renew_interval.is_zero() {
@@ -371,9 +369,7 @@ fn validate_renewed_grant(original: &LeaseGrant, renewed: &LeaseGrant) -> Result
         return Err(LockError::new(
             LockErrorKind::LostLease,
             &original.key,
-            format!(
-                "fiducia renewal changed the grant {field}; fenced authority cannot be proven"
-            ),
+            format!("fiducia renewal changed the grant {field}; fenced authority cannot be proven"),
         )
         .at(LockStep::FiduciaRenew));
     }
@@ -448,9 +444,8 @@ mod tests {
             assert_eq!(error.kind, LockErrorKind::InvalidPlan);
         }
 
-        let too_large = AcquireOptions::default().ttl(Duration::from_millis(
-            MAX_RENEWAL_TTL_MS.saturating_add(1),
-        ));
+        let too_large = AcquireOptions::default()
+            .ttl(Duration::from_millis(MAX_RENEWAL_TTL_MS.saturating_add(1)));
         let error = LeaseMaintenanceOptions::default()
             .validate(&key, &too_large, true)
             .unwrap_err();

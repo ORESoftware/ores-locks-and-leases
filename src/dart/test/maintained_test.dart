@@ -61,7 +61,8 @@ void main() {
     );
   });
 
-  test('acquired grant must preserve requested holder TTL and valid expiry', () {
+  test('acquired grant must preserve requested holder TTL and valid expiry',
+      () {
     final key = LockKey('tests/maintained');
     const acquire = AcquireOptions(
       ttl: Duration(milliseconds: 60000),
@@ -101,7 +102,8 @@ void main() {
     }
   });
 
-  test('renewal must preserve key holder fencing token TTL and valid expiry', () {
+  test('renewal must preserve key holder fencing token TTL and valid expiry',
+      () {
     final original = grant();
     expect(
       () => validateRenewedLeaseGrant(original, grant()),

@@ -113,10 +113,7 @@ pub fn changed_fencing_token_or_ttl_is_lost_lease_test() {
   let original = grant()
   let changed_token =
     lease_with_renew(fn(value, _) {
-      Ok(locks.LeaseGrant(
-        ..value,
-        fencing_token: value.fencing_token + 1,
-      ))
+      Ok(locks.LeaseGrant(..value, fencing_token: value.fencing_token + 1))
     })
   let assert Error(token_error) =
     maintained.renew_checked(changed_token, original, 60_000)

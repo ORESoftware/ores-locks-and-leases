@@ -87,32 +87,24 @@ pub fn validate_acquired_grant(
     None -> True
     Some(expected) -> grant.holder == expected
   }
-  let changed =
-    case
-      core.key_to_string(grant.key) != core.key_to_string(key),
-      string.is_empty(grant.holder),
-      holder_matches,
-      grant.ttl_ms == opts.ttl_ms,
-      valid_expiry(grant)
-    {
-      True, _, _, _, _ -> Some("key")
-      _, True, _, _, _ -> Some("holder")
-      _, _, False, _, _ -> Some("holder")
-      _, _, _, False, _ -> Some("TTL")
-      _, _, _, _, False -> Some("expiry")
-      False, False, True, True, True -> None
-    }
+  let changed = case
+    core.key_to_string(grant.key) != core.key_to_string(key),
+    string.is_empty(grant.holder),
+    holder_matches,
+    grant.ttl_ms == opts.ttl_ms,
+    valid_expiry(grant)
+  {
+    True, _, _, _, _ -> Some("key")
+    _, True, _, _, _ -> Some("holder")
+    _, _, False, _, _ -> Some("holder")
+    _, _, _, False, _ -> Some("TTL")
+    _, _, _, _, False -> Some("expiry")
+    False, False, True, True, True -> None
+  }
   case changed {
     None -> Ok(Nil)
     Some(field) ->
-      Error(
-        lost_authority(
-          key,
-          acquisition_step(wait),
-          field,
-          "acquisition",
-        ),
-      )
+      Error(lost_authority(key, acquisition_step(wait), field, "acquisition"))
   }
 }
 
@@ -132,14 +124,7 @@ pub fn renew_checked(
   case changed {
     None -> Ok(renewed)
     Some(field) ->
-      Error(
-        lost_authority(
-          grant.key,
-          core.FiduciaRenew,
-          field,
-          "renewal",
-        ),
-      )
+      Error(lost_authority(grant.key, core.FiduciaRenew, field, "renewal"))
   }
 }
 
@@ -239,17 +224,14 @@ fn run_transaction(
     Ok(next_renewal_ms) -> {
       let checkpoint = fn() {
         case now_ms() >= next_renewal_ms {
-          True -> renew_checked(lease, grant, opts.ttl_ms) |> result.replace(Nil)
+          True ->
+            renew_checked(lease, grant, opts.ttl_ms) |> result.replace(Nil)
           False -> Ok(Nil)
         }
       }
       case work(Guarded(key, grant, transaction, checkpoint)) {
         Error(cause) ->
-          rollback_or_cleanup(
-            transaction,
-            key,
-            core.work_error(key, cause),
-          )
+          rollback_or_cleanup(transaction, key, core.work_error(key, cause))
         Ok(value) ->
           case renew_checked(lease, grant, opts.ttl_ms) {
             Error(error) -> rollback_or_cleanup(transaction, key, error)
@@ -277,21 +259,12 @@ fn acquire_lock(
     Ok(True) -> Ok(next_renewal_ms)
     Error(error) -> Error(error)
     Ok(False) if !wait ->
-      Error(core.contention(
-        key,
-        core.PgTryAdvisoryXactLock,
-      ))
+      Error(core.contention(key, core.PgTryAdvisoryXactLock))
     Ok(False) -> {
       let now = now_ms()
       case now - started_ms >= opts.wait_timeout_ms {
         True ->
-          Error(
-            core.timeout(
-              key,
-              core.PgAdvisoryXactLock,
-              opts.wait_timeout_ms,
-            ),
-          )
+          Error(core.timeout(key, core.PgAdvisoryXactLock, opts.wait_timeout_ms))
         False -> {
           let next_renewal_ms = case now >= next_renewal_ms {
             False -> Ok(next_renewal_ms)
