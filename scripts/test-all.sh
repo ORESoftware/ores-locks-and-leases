@@ -29,9 +29,10 @@ if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
   run adversarial-corpus sh -c "node --check '$root/scripts/generate-fence-adversarial.mjs' && node --check '$root/scripts/test-adversarial-datastores.mjs' && node --check '$root/scripts/run-psql.mjs' && node '$root/scripts/generate-fence-adversarial.mjs' --profile pr --output '$root/target/adversarial/fence-decision.json' --receipt '$root/target/adversarial/local.json' && node '$root/scripts/generate-fence-adversarial.mjs' --profile pr --output '$root/target/adversarial/fence-decision.json' --check && node '$root/scripts/test-adversarial-datastores.mjs' --corpus '$root/target/adversarial/fence-decision.json' --validate-only --receipt '$root/target/adversarial/store-local.json'"
   run renewal-corpus node "$root/scripts/check-renewal-corpus.mjs"
   run typescript sh -c "cd '$root/src/ts' && npm ci --no-audit --no-fund && npm test"
+  run tjsv-contracts sh "$root/scripts/check-tjsv-contracts.sh" all
   run contracts npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config "$root/contracts/contracts.config.json"
   run renewal-contracts npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config "$root/contracts/renewal/contracts.config.json"
-else echo "== psql-launcher/adversarial-corpus/renewal-corpus/typescript/contracts: skipped (no node/npm)"; fi
+else echo "== psql-launcher/adversarial-corpus/renewal-corpus/typescript/tjsv-contracts/contracts: skipped (no node/npm)"; fi
 
 if command -v dart >/dev/null 2>&1; then
   run dart sh -c "cd '$root/src/dart' && dart pub get --enforce-lockfile && dart format --output=none --set-exit-if-changed lib test && dart analyze --fatal-infos && dart test"

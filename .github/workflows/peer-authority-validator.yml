@@ -20,6 +20,9 @@ concurrency:
   group: peer-authority-validator-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   parity:
     runs-on: ubuntu-24.04
@@ -28,35 +31,39 @@ jobs:
       - name: Check out the exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.EXPECTED_SHA }}
           persist-credentials: false
           fetch-depth: 1
           show-progress: false
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
       - name: Verify checked-out revision and negative verifier syntax
         shell: bash
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           node --check contracts/mapping-tests/check-stale-mapping-receipt.mjs
 
       - name: Compare independently authored TypeSpec and JSON Schema authorities
-        uses: ORESoftware/typespec-json-schema-validator@8584720715e4e90573535e14b16cb3a24c14ca63
+        uses: ORESoftware/typespec-json-schema-validator@6bb5b7c1ee41c8b43741e50a264c33a1165549c4
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
           int64_strategy: number
           report: target/typespec-json-schema-validator/positive/report.json
           sarif: target/typespec-json-schema-validator/positive/report.sarif
+          contract_ir: target/typespec-json-schema-validator/positive/contract-ir.json
           output_dir: target/typespec-json-schema-validator/positive/generated-schema-b
           max_probes: '128'
+          quiet: 'true'
 
       - name: Prove a stale contract mapping stops evaluation
         id: stale_mapping
         continue-on-error: true
-        uses: ORESoftware/typespec-json-schema-validator@8584720715e4e90573535e14b16cb3a24c14ca63
+        uses: ORESoftware/typespec-json-schema-validator@6bb5b7c1ee41c8b43741e50a264c33a1165549c4
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
@@ -64,8 +71,10 @@ jobs:
           int64_strategy: number
           report: target/typespec-json-schema-validator/stale-mapping/report.json
           sarif: target/typespec-json-schema-validator/stale-mapping/report.sarif
+          contract_ir: target/typespec-json-schema-validator/stale-mapping/contract-ir.json
           output_dir: target/typespec-json-schema-validator/stale-mapping/generated-schema-b
           max_probes: '128'
+          quiet: 'true'
 
       - name: Verify attributable mapping evidence and immutable authorities
         shell: bash
@@ -76,6 +85,8 @@ jobs:
           test "$STALE_MAPPING_OUTCOME" = failure
           node contracts/mapping-tests/check-stale-mapping-receipt.mjs \
             target/typespec-json-schema-validator/stale-mapping/report.json
+          test -s target/typespec-json-schema-validator/positive/contract-ir.json
+          test -s target/typespec-json-schema-validator/stale-mapping/contract-ir.json
           git diff --exit-code -- \
             contracts/typespec/main.tsp \
             contracts/json-schema/contract.schema.json \
@@ -85,7 +96,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: peer-authority-evidence-${{ github.sha }}
+          name: peer-authority-evidence-${{ env.EXPECTED_SHA }}
           path: target/typespec-json-schema-validator/
           if-no-files-found: error
           retention-days: 30
