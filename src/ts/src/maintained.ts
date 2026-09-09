@@ -8,7 +8,7 @@
  */
 
 import { LockError, cleanupFailure, tagStep } from "./errors.js";
-import { advisoryKey, type LockKey } from "./key.js";
+import { advisoryKey, lockKey, type LockKey } from "./key.js";
 import {
   acquireLease,
   runWork,
@@ -18,7 +18,14 @@ import {
   type Lease,
   type LeaseGrant,
 } from "./lease.js";
+import type { LockStep } from "./plan.js";
 import type { PgPool, PgPoolClient, PgQueryable } from "./pg.js";
+import { MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS } from "./renewal.js";
+
+const MAX_FENCING_TOKEN = 18_446_744_073_709_551_615n;
+const ACQUIRE_FIELDS = new Set(["ttlMs", "waitTimeoutMs", "retryIntervalMs", "holder"]);
+const MAINTENANCE_FIELDS = new Set(["renewIntervalMs"]);
+const GRANT_FIELDS = new Set(["key", "holder", "fencingToken", "leaseExpiresMs", "ttlMs"]);
 
 /** Renewal cadence for a maintained transaction. */
 export interface LeaseMaintenanceOptions {
@@ -26,9 +33,9 @@ export interface LeaseMaintenanceOptions {
   readonly renewIntervalMs: number;
 }
 
-export const DEFAULT_LEASE_MAINTENANCE_OPTIONS: LeaseMaintenanceOptions = {
+export const DEFAULT_LEASE_MAINTENANCE_OPTIONS: LeaseMaintenanceOptions = Object.freeze({
   renewIntervalMs: 20_000,
-};
+});
 
 /** DOM-independent listener options exposed by the maintained guard. */
 export interface LeaseAbortListenerOptions {
@@ -67,6 +74,7 @@ export interface LeaseAbortSignal {
 /** What maintained transaction work receives. */
 export interface MaintainedXactGuarded {
   readonly key: LockKey;
+  /** Frozen authority snapshot; its token is the datastore fencing input. */
   readonly grant: LeaseGrant;
   /** The checked-out client whose open transaction holds the advisory lock. */
   readonly client: PgQueryable;
@@ -74,31 +82,254 @@ export interface MaintainedXactGuarded {
   readonly signal: LeaseAbortSignal;
 }
 
-/** Validate before acquiring either coordination layer. */
+interface ValidatedInputs {
+  readonly acquire: Readonly<AcquireOptions>;
+  readonly maintenance: Readonly<LeaseMaintenanceOptions>;
+}
+
+/** Validate every runtime input before acquiring either coordination layer. */
 export function validateLeaseMaintenanceOptions(
   key: LockKey,
   acquire: AcquireOptions,
   maintenance: LeaseMaintenanceOptions,
   wait: boolean,
 ): void {
-  requirePositiveInteger(key, acquire.ttlMs, "fiducia lease TTL");
-  requirePositiveInteger(key, maintenance.renewIntervalMs, "fiducia renewal interval");
-  if (maintenance.renewIntervalMs > acquire.ttlMs / 2) {
+  validatedInputs(key, acquire, maintenance, wait);
+}
+
+function validatedInputs(
+  key: LockKey,
+  acquire: AcquireOptions,
+  maintenance: LeaseMaintenanceOptions,
+  wait: boolean,
+): ValidatedInputs {
+  if (typeof wait !== "boolean") {
+    throw LockError.invalidPlan(key, "wait must be a boolean");
+  }
+
+  const acquireSnapshot = snapshotAcquireOptions(key, acquire);
+  const maintenanceSnapshot = snapshotMaintenanceOptions(key, maintenance);
+
+  requirePositiveInteger(key, acquireSnapshot.ttlMs, "fiducia lease TTL");
+  requirePositiveInteger(key, maintenanceSnapshot.renewIntervalMs, "fiducia renewal interval");
+  if (maintenanceSnapshot.renewIntervalMs > acquireSnapshot.ttlMs / 2) {
     throw LockError.invalidPlan(
       key,
-      `fiducia renewal interval ${maintenance.renewIntervalMs} ms is unsafe for TTL ${acquire.ttlMs} ms; it must be no greater than half the TTL`,
+      `fiducia renewal interval ${maintenanceSnapshot.renewIntervalMs} ms is unsafe for TTL ${acquireSnapshot.ttlMs} ms; it must be no greater than half the TTL`,
     );
   }
-  if (!Number.isSafeInteger(acquire.waitTimeoutMs) || acquire.waitTimeoutMs < 0) {
+  if (!Number.isSafeInteger(acquireSnapshot.waitTimeoutMs) || acquireSnapshot.waitTimeoutMs < 0) {
     throw LockError.invalidPlan(key, "PostgreSQL advisory-lock wait timeout must be a non-negative safe integer");
   }
-  if (wait) requirePositiveInteger(key, acquire.retryIntervalMs, "PostgreSQL advisory-lock retry interval");
+  if (!Number.isSafeInteger(acquireSnapshot.retryIntervalMs) || acquireSnapshot.retryIntervalMs < 0) {
+    throw LockError.invalidPlan(key, "PostgreSQL advisory-lock retry interval must be a non-negative safe integer");
+  }
+  if (wait) {
+    requirePositiveInteger(key, acquireSnapshot.retryIntervalMs, "PostgreSQL advisory-lock retry interval");
+  }
+
+  return Object.freeze({
+    acquire: acquireSnapshot,
+    maintenance: maintenanceSnapshot,
+  });
+}
+
+function snapshotAcquireOptions(key: LockKey, value: unknown): Readonly<AcquireOptions> {
+  const fields = closedInputFields(
+    key,
+    value,
+    ACQUIRE_FIELDS,
+    ["ttlMs", "waitTimeoutMs", "retryIntervalMs"],
+    "acquire options",
+  );
+  const hasHolder = Object.hasOwn(fields, "holder");
+  const holder = fields.holder;
+  if (hasHolder && (typeof holder !== "string" || holder.length === 0)) {
+    throw LockError.invalidPlan(key, "acquire option holder must be omitted or a non-empty string");
+  }
+
+  const snapshot: AcquireOptions = hasHolder
+    ? {
+        ttlMs: fields.ttlMs as number,
+        waitTimeoutMs: fields.waitTimeoutMs as number,
+        retryIntervalMs: fields.retryIntervalMs as number,
+        holder: holder as string,
+      }
+    : {
+        ttlMs: fields.ttlMs as number,
+        waitTimeoutMs: fields.waitTimeoutMs as number,
+        retryIntervalMs: fields.retryIntervalMs as number,
+      };
+  return Object.freeze(snapshot);
+}
+
+function snapshotMaintenanceOptions(
+  key: LockKey,
+  value: unknown,
+): Readonly<LeaseMaintenanceOptions> {
+  const fields = closedInputFields(
+    key,
+    value,
+    MAINTENANCE_FIELDS,
+    ["renewIntervalMs"],
+    "maintenance options",
+  );
+  return Object.freeze({ renewIntervalMs: fields.renewIntervalMs as number });
+}
+
+function closedInputFields(
+  key: LockKey,
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  required: readonly string[],
+  label: string,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw LockError.invalidPlan(key, `${label} must be a non-array object`);
+  }
+
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch (cause) {
+    throw new LockError("invalid_plan", key, `${label} properties could not be inspected`, { cause });
+  }
+
+  const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const name of Reflect.ownKeys(descriptors)) {
+    if (typeof name !== "string" || !allowed.has(name)) {
+      throw LockError.invalidPlan(key, `${label} contains an unknown own property`);
+    }
+    const descriptor = descriptors[name];
+    if (!descriptor || !("value" in descriptor)) {
+      throw LockError.invalidPlan(key, `${label} properties must be own data properties`);
+    }
+    fields[name] = descriptor.value;
+  }
+  for (const name of required) {
+    if (!Object.hasOwn(fields, name)) {
+      throw LockError.invalidPlan(key, `${label} is missing required own property ${name}`);
+    }
+  }
+  return fields;
 }
 
 function requirePositiveInteger(key: LockKey, value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw LockError.invalidPlan(key, `${name} must be a positive safe integer number of milliseconds`);
   }
+}
+
+function authorityGrantError(
+  expectedKey: LockKey,
+  step: LockStep,
+  kind: "transport" | "lost_lease",
+  message: string,
+  cause?: unknown,
+): LockError {
+  return new LockError(kind, expectedKey, message, {
+    step,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+function snapshotAuthorityGrant(
+  expectedKey: LockKey,
+  value: unknown,
+  step: LockStep,
+  kind: "transport" | "lost_lease",
+): LeaseGrant {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw authorityGrantError(expectedKey, step, kind, "Fiducia returned a non-object lease grant");
+  }
+
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch (cause) {
+    throw authorityGrantError(
+      expectedKey,
+      step,
+      kind,
+      "Fiducia lease-grant properties could not be inspected",
+      cause,
+    );
+  }
+
+  const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const name of Reflect.ownKeys(descriptors)) {
+    if (typeof name !== "string" || !GRANT_FIELDS.has(name)) {
+      throw authorityGrantError(expectedKey, step, kind, "Fiducia lease grant contains an unknown own property");
+    }
+    const descriptor = descriptors[name];
+    if (!descriptor || !("value" in descriptor)) {
+      throw authorityGrantError(expectedKey, step, kind, "Fiducia lease-grant fields must be own data properties");
+    }
+    fields[name] = descriptor.value;
+  }
+  for (const name of ["key", "holder", "fencingToken", "ttlMs"] as const) {
+    if (!Object.hasOwn(fields, name)) {
+      throw authorityGrantError(expectedKey, step, kind, `Fiducia lease grant is missing ${name}`);
+    }
+  }
+
+  let key: LockKey;
+  try {
+    key = lockKey(fields.key as string);
+  } catch (cause) {
+    throw authorityGrantError(expectedKey, step, kind, "Fiducia lease grant contains an invalid key", cause);
+  }
+  if (key !== expectedKey) {
+    throw authorityGrantError(expectedKey, step, kind, "Fiducia lease grant changed the lock key");
+  }
+
+  const holder = fields.holder;
+  if (typeof holder !== "string" || holder.length === 0) {
+    throw authorityGrantError(expectedKey, step, kind, "Fiducia lease grant holder must be a non-empty string");
+  }
+
+  const fencingToken = fields.fencingToken;
+  if (typeof fencingToken !== "bigint" || fencingToken < 0n || fencingToken > MAX_FENCING_TOKEN) {
+    throw authorityGrantError(expectedKey, step, kind, "Fiducia lease grant token must be an unsigned 64-bit bigint");
+  }
+
+  const ttlMs = fields.ttlMs;
+  if (!Number.isSafeInteger(ttlMs) || (ttlMs as number) <= 0 || (ttlMs as number) > MAX_RENEWAL_TTL_MS) {
+    throw authorityGrantError(
+      expectedKey,
+      step,
+      kind,
+      `Fiducia lease grant TTL must be within 1..=${MAX_RENEWAL_TTL_MS} ms`,
+    );
+  }
+
+  const hasDeadline = Object.hasOwn(fields, "leaseExpiresMs");
+  const leaseExpiresMs = fields.leaseExpiresMs;
+  if (
+    hasDeadline &&
+    (typeof leaseExpiresMs !== "number" ||
+      !Number.isSafeInteger(leaseExpiresMs) ||
+      leaseExpiresMs <= 0 ||
+      leaseExpiresMs > MAX_RENEWAL_CLOCK_MS)
+  ) {
+    throw authorityGrantError(
+      expectedKey,
+      step,
+      kind,
+      "Fiducia lease grant deadline must be omitted or a positive safe integer",
+    );
+  }
+
+  const snapshot: LeaseGrant = hasDeadline
+    ? {
+        key,
+        holder,
+        fencingToken,
+        leaseExpiresMs: leaseExpiresMs as number,
+        ttlMs: ttlMs as number,
+      }
+    : { key, holder, fencingToken, ttlMs: ttlMs as number };
+  return Object.freeze(snapshot);
 }
 
 function renewalError(key: LockKey, cause: unknown): LockError {
@@ -108,20 +339,19 @@ function renewalError(key: LockKey, cause: unknown): LockError {
 }
 
 async function renewChecked(lease: Lease, original: LeaseGrant, ttlMs: number): Promise<LeaseGrant> {
-  let renewed: LeaseGrant;
+  let raw: LeaseGrant;
   try {
-    renewed = await lease.renew(original, ttlMs);
+    raw = await lease.renew(original, ttlMs);
   } catch (cause) {
     throw renewalError(original.key, cause);
   }
 
-  const changed = renewed.key !== original.key
-    ? "key"
-    : renewed.holder !== original.holder
-      ? "holder"
-      : renewed.fencingToken !== original.fencingToken
-        ? "fencing token"
-        : undefined;
+  const renewed = snapshotAuthorityGrant(original.key, raw, "fiducia.renew", "lost_lease");
+  const changed = renewed.holder !== original.holder
+    ? "holder"
+    : renewed.fencingToken !== original.fencingToken
+      ? "fencing token"
+      : undefined;
   if (changed !== undefined) {
     throw new LockError(
       "lost_lease",
@@ -259,7 +489,7 @@ async function acquireMaintainedXactLock(
   client: PgQueryable,
   key: LockKey,
   wait: boolean,
-  acquire: AcquireOptions,
+  acquire: Readonly<AcquireOptions>,
   maintainer: LeaseMaintainer,
 ): Promise<void> {
   const started = Date.now();
@@ -295,8 +525,8 @@ async function rollback(
 async function runMaintainedTransaction<T>(
   key: LockKey,
   wait: boolean,
-  acquire: AcquireOptions,
-  maintenance: LeaseMaintenanceOptions,
+  acquire: Readonly<AcquireOptions>,
+  maintenance: Readonly<LeaseMaintenanceOptions>,
   lease: Lease,
   grant: LeaseGrant,
   pool: PgPool,
@@ -328,7 +558,7 @@ async function runMaintainedTransaction<T>(
         await acquireMaintainedXactLock(client, key, wait, acquire, maintainer);
         value = await runWork(
           key,
-          { key, grant, client, signal: maintainer.signal },
+          Object.freeze({ key, grant, client, signal: maintainer.signal }),
           work,
         );
       } catch (cause) {
@@ -387,10 +617,21 @@ export async function withMaintainedXactLock<T>(
   pool: PgPool,
   work: (guarded: MaintainedXactGuarded) => Promise<T>,
 ): Promise<T> {
-  validateLeaseMaintenanceOptions(key, acquire, maintenance, wait);
-  const grant = await acquireLease(key, wait, acquire, lease);
+  const inputs = validatedInputs(key, acquire, maintenance, wait);
+  const acquireStep: LockStep = wait ? "fiducia.acquire" : "fiducia.try_acquire";
+  const rawGrant = await acquireLease(key, wait, inputs.acquire, lease);
+  const grant = snapshotAuthorityGrant(key, rawGrant, acquireStep, "transport");
   const inner = await settled(
-    runMaintainedTransaction(key, wait, acquire, maintenance, lease, grant, pool, work),
+    runMaintainedTransaction(
+      key,
+      wait,
+      inputs.acquire,
+      inputs.maintenance,
+      lease,
+      grant,
+      pool,
+      work,
+    ),
   );
   return settle(key, lease, grant, inner);
 }
