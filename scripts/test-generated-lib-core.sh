@@ -133,9 +133,25 @@ const [reportPath, irPath, verificationPath, expectedJson] = process.argv.slice(
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
 const contractIr = JSON.parse(readFileSync(irPath, "utf8"));
 const verification = JSON.parse(readFileSync(verificationPath, "utf8"));
-const expected = JSON.parse(expectedJson);
 const digestPattern = /^[0-9a-f]{64}$/u;
 const summary = report.differential?.summary;
+
+function normalizedIds(value, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new Error(`${label} is not a nonempty declaration list`);
+  }
+  const sorted = [...value].sort();
+  if (new Set(sorted).size !== sorted.length) {
+    throw new Error(`${label} contains duplicate declarations`);
+  }
+  return sorted;
+}
+
+const expected = normalizedIds(JSON.parse(expectedJson), "expected generated scope");
 
 if (
   report.status !== "passed" ||
@@ -151,6 +167,10 @@ if (
   throw new Error("generated consumer contract did not pass TJSV differential admission");
 }
 
+const admitted = normalizedIds(
+  contractIr.declarations?.map((entry) => entry.id),
+  "generated Contract IR scope",
+);
 if (
   contractIr.status !== "passed" ||
   contractIr.admissible !== true ||
@@ -163,11 +183,15 @@ if (
   contractIr.authorities?.precedence !== "none" ||
   contractIr.admission?.receipt?.runId !== report.runId ||
   contractIr.admission?.scope?.complete !== true ||
-  JSON.stringify(contractIr.declarations?.map((entry) => entry.id)) !== JSON.stringify(expected)
+  JSON.stringify(admitted) !== JSON.stringify(expected)
 ) {
   throw new Error("generated consumer Contract IR was not admitted over its exact declaration scope");
 }
 
+const verified = normalizedIds(
+  verification.declarationIds,
+  "generated consumer verification scope",
+);
 if (
   verification.status !== "passed" ||
   verification.admissible !== true ||
@@ -177,7 +201,7 @@ if (
   verification.expectedIrId !== contractIr.irId ||
   verification.receiptRunId !== report.runId ||
   verification.failureCode !== null ||
-  JSON.stringify(verification.declarationIds) !== JSON.stringify(expected)
+  JSON.stringify(verified) !== JSON.stringify(expected)
 ) {
   throw new Error("generated consumer canonical verify-ir receipt was not admissible");
 }

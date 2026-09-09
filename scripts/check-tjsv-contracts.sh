@@ -66,8 +66,24 @@ const [reportPath, irPath, verificationPath, expectedJson, bundle] = process.arg
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
 const contractIr = JSON.parse(readFileSync(irPath, "utf8"));
 const verification = JSON.parse(readFileSync(verificationPath, "utf8"));
-const expected = JSON.parse(expectedJson);
 const digestPattern = /^[0-9a-f]{64}$/u;
+
+function normalizedIds(value, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new Error(`${bundle}: ${label} is not a nonempty declaration list`);
+  }
+  const sorted = [...value].sort();
+  if (new Set(sorted).size !== sorted.length) {
+    throw new Error(`${bundle}: ${label} contains duplicate declarations`);
+  }
+  return sorted;
+}
+
+const expected = normalizedIds(JSON.parse(expectedJson), "expected scope");
 
 if (report.schema !== "ores.typespec-json-schema-validator.report/v1") {
   throw new Error(`${bundle}: unexpected TJSV report schema`);
@@ -109,10 +125,18 @@ if (
   throw new Error(`${bundle}: Contract IR is not admissible or receipt-bound`);
 }
 
-const admitted = contractIr.declarations?.map((entry) => entry.id) ?? [];
+const admitted = normalizedIds(
+  contractIr.declarations?.map((entry) => entry.id),
+  "Contract IR scope",
+);
 if (JSON.stringify(admitted) !== JSON.stringify(expected)) {
   throw new Error(`${bundle}: Contract IR declaration scope drifted`);
 }
+
+const verified = normalizedIds(
+  verification.declarationIds,
+  "consumer verification scope",
+);
 if (
   verification.schema !== "ores.typespec-json-schema-validator.consumer-verification-receipt/v1" ||
   verification.status !== "passed" ||
@@ -123,7 +147,7 @@ if (
   verification.expectedIrId !== contractIr.irId ||
   verification.receiptRunId !== report.runId ||
   verification.failureCode !== null ||
-  JSON.stringify(verification.declarationIds) !== JSON.stringify(expected)
+  JSON.stringify(verified) !== JSON.stringify(expected)
 ) {
   throw new Error(`${bundle}: canonical verify-ir admission is incomplete`);
 }
