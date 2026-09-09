@@ -1,0 +1,289 @@
+name: contract-runtime-boundary
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'conformance/**'
+      - 'src/**'
+      - 'templates/**'
+      - 'scripts/check-tjsv-contracts.sh'
+      - 'scripts/test-generated-lib-core.sh'
+      - 'scripts/write-contract-runtime-receipt.mjs'
+      - '.github/workflows/contract-runtime-boundary.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - 'conformance/**'
+      - 'src/**'
+      - 'templates/**'
+      - 'scripts/check-tjsv-contracts.sh'
+      - 'scripts/test-generated-lib-core.sh'
+      - 'scripts/write-contract-runtime-receipt.mjs'
+      - '.github/workflows/contract-runtime-boundary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: contract-runtime-boundary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - name: Prove both independent TypeSpec and JSON Schema authorities converge
+        run: sh scripts/check-tjsv-contracts.sh all
+      - name: Retain TJSV peer-authority evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tjsv-peer-authority-${{ env.EXPECTED_SHA }}
+          path: target/tjsv/
+          if-no-files-found: error
+          retention-days: 30
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: locks
+          POSTGRES_DB: locks
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with: { toolchain: '1.85.1', components: 'rustfmt,clippy' }
+      - name: Verify Rust projection and live maintained transaction behavior
+        working-directory: src/rust
+        env:
+          ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --no-default-features
+          cargo clippy --locked --all-targets --features full -- -D warnings
+          cargo test --locked --all-targets --features full
+
+  rustsec:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Audit the exact Rust dependency graph
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src/rust
+
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.22', cache: false }
+      - name: Verify Go projection
+        working-directory: src/go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+
+  typescript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - name: Verify TypeScript projection and runtime admission
+        working-directory: src/ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+  dart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - name: Verify Dart and Flutter-facing projection
+        working-directory: src/dart
+        run: |
+          dart pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
+          dart analyze --fatal-infos
+          dart test
+
+  gleam:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
+      - name: Verify Gleam projection
+        working-directory: src/gleam
+        run: |
+          gleam format --check src test
+          gleam test
+
+  generated-consumer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with: { toolchain: '1.85.1' }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.22', cache: false }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
+      - name: Install pinned Zed CLI
+        env:
+          ZED_SHA256: f87576bc289e43ed647902527e7be70566445d2f1fd11249f067ab35547d4b8a
+          ZED_URL: https://github.com/zed-pkg/zed-cli/releases/download/v0.3.0/zed-x86_64-unknown-linux-gnu.tar.gz
+        run: |
+          mkdir -p "$RUNNER_TEMP/zed-v0.3.0"
+          curl --fail --location --silent --show-error "$ZED_URL" --output "$RUNNER_TEMP/zed-v0.3.0.tar.gz"
+          echo "$ZED_SHA256  $RUNNER_TEMP/zed-v0.3.0.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/zed-v0.3.0.tar.gz" -C "$RUNNER_TEMP/zed-v0.3.0"
+          echo "$RUNNER_TEMP/zed-v0.3.0" >> "$GITHUB_PATH"
+      - name: Generate and verify the consumer package in every runtime
+        run: scripts/test-generated-lib-core.sh
+
+  receipt:
+    if: always()
+    needs:
+      - contracts
+      - rust
+      - rustsec
+      - go
+      - typescript
+      - dart
+      - gleam
+      - generated-consumer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - name: Recompute TJSV evidence on the receipt runner
+        id: tjsv
+        continue-on-error: true
+        run: sh scripts/check-tjsv-contracts.sh all
+      - name: Write exact-head contract/runtime receipt
+        if: always()
+        env:
+          RUST_OUTCOME: ${{ needs.rust.result }}
+          RUSTSEC_OUTCOME: ${{ needs.rustsec.result }}
+          GO_OUTCOME: ${{ needs.go.result }}
+          TYPESCRIPT_OUTCOME: ${{ needs.typescript.result }}
+          DART_OUTCOME: ${{ needs.dart.result }}
+          GLEAM_OUTCOME: ${{ needs.gleam.result }}
+          CONTRACTS_OUTCOME: ${{ needs.contracts.result }}
+          GENERATED_CONSUMER_OUTCOME: ${{ needs.generated-consumer.result }}
+        run: node scripts/write-contract-runtime-receipt.mjs
+      - name: Retain exact-head boundary receipt and TJSV evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: contract-runtime-boundary-${{ env.EXPECTED_SHA }}
+          path: |
+            target/contract-runtime-boundary/receipt.json
+            target/tjsv/
+          if-no-files-found: error
+          retention-days: 30

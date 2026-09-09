@@ -13,6 +13,8 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
+tjsv_commit=6bb5b7c1ee41c8b43741e50a264c33a1165549c4
+tjsv_package="https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsv_commit}.tar.gz"
 
 # Reproduce a lib-core whose repository root is a virtual Cargo workspace.
 # Without an explicit workspace in locks/rust/Cargo.toml, Cargo rejects the
@@ -87,12 +89,45 @@ log "Gleam"
   gleam test
 )
 
-log "TypeSpec and JSON Schema"
+log "TypeSpec and JSON Schema peer authorities"
 (
   cd "$scratch/locks"
   npx --yes \
     --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz \
     ores-contracts check --config contracts/contracts.config.json
+
+  mkdir -p target/tjsv/generated-consumer/generated-schema-b
+  npx --yes --package="$tjsv_package" tjsv check \
+    --typespec=contracts/typespec/main.tsp \
+    --schema=contracts/json-schema/contract.schema.json \
+    --report=target/tjsv/generated-consumer/report.json \
+    --sarif=target/tjsv/generated-consumer/report.sarif \
+    --contract-ir=target/tjsv/generated-consumer/contract-ir.json \
+    --output-dir=target/tjsv/generated-consumer/generated-schema-b \
+    --bundle-id=generated-consumer.typespec.generated.schema.json \
+    --int64-strategy=number \
+    --seal-object-schemas=true \
+    --probes=true \
+    --max-probes=128 \
+    --quiet
+
+  node - target/tjsv/generated-consumer/report.json <<'NODE'
+import { readFileSync } from "node:fs";
+const report = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const summary = report.differential?.summary;
+if (
+  report.status !== "passed" ||
+  report.zeroUnexplainedFindings !== true ||
+  report.differential?.disabled === true ||
+  summary === null ||
+  typeof summary !== "object" ||
+  summary.probesEvaluated <= 0 ||
+  summary.divergences !== 0 ||
+  summary.refusals !== 0
+) {
+  throw new Error("generated consumer contract did not pass TJSV differential admission");
+}
+NODE
 )
 
 log "all generated runtime, contract, and fencing-asset checks passed"
