@@ -40,8 +40,8 @@ states, 889 transitions, and 568 terminal outcomes. The normal model must prove:
 
 1. Commit requires successful acquire, begin, advisory lock, and work.
 2. Commit requires a successful final same-token renewal.
-3. Renewal failure or token drift prevents commit and leads to rollback when a
-   transaction is open.
+3. Renewal failure, token drift, or rejected effective-TTL drift prevents
+   commit and leads to rollback when a transaction is open.
 4. Commit and rollback are mutually exclusive.
 5. Every acquired terminal path attempts release exactly once; failed
    acquisition never releases a grant it did not receive.
@@ -64,6 +64,29 @@ fiducia.release.success
 
 If that witness disappears, the model is no longer demonstrating that final
 renewal is a real safety obligation and the review must stop.
+
+## Effective-TTL refinement obligation
+
+The maintained implementations use a fixed cadence derived from the requested
+acquisition TTL. The finite model abstracts authority continuity as a renewal
+success/failure choice, so native refinement tests must additionally prove all
+of the following in Rust, Go, TypeScript, Dart, and Gleam:
+
+1. the requested TTL is positive and no greater than the common cross-runtime
+   ceiling of `9223372036854` milliseconds;
+2. the acquired grant reports exactly that requested effective TTL before
+   PostgreSQL is opened;
+3. every periodic and final renewal reports the same effective TTL;
+4. acquisition mismatch is `lost_lease` and releases the grant before opening
+   PostgreSQL; and
+5. renewal mismatch is `lost_lease`, rolls back an open transaction, and never
+   reaches commit.
+
+A changed authority TTL is not accepted merely because it is larger: accepting
+any drift would make fixed-cadence behavior depend on undocumented adapter
+semantics. A future dynamic maintainer may reschedule from a changed TTL only
+through an atomic contract and implementation change across all runtimes,
+models, and conformance tests.
 
 ## Refinement obligation
 

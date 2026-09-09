@@ -5,12 +5,15 @@ LeaseGrant grant({
   String key = 'tests/maintained',
   String holder = 'holder-a',
   int token = 41,
+  int ttlMs = 60000,
+  int? leaseExpiresMs,
 }) =>
     LeaseGrant(
       key: LockKey(key),
       holder: holder,
       fencingToken: BigInt.from(token),
-      ttlMs: 60000,
+      leaseExpiresMs: leaseExpiresMs,
+      ttlMs: ttlMs,
     );
 
 void main() {
@@ -58,7 +61,52 @@ void main() {
     );
   });
 
-  test('renewal must preserve key holder and fencing token', () {
+  test('acquired grant must preserve requested holder TTL and valid expiry', () {
+    final key = LockKey('tests/maintained');
+    const acquire = AcquireOptions(
+      ttl: Duration(milliseconds: 60000),
+      holder: 'holder-a',
+    );
+    expect(
+      () => validateAcquiredLeaseGrant(
+        key,
+        acquire,
+        grant(),
+        wait: true,
+      ),
+      returnsNormally,
+    );
+
+    for (final changed in [
+      grant(holder: 'holder-b'),
+      grant(ttlMs: 59999),
+      grant(leaseExpiresMs: 0),
+    ]) {
+      expect(
+        () => validateAcquiredLeaseGrant(
+          key,
+          acquire,
+          changed,
+          wait: false,
+        ),
+        throwsA(
+          isA<LockError>()
+              .having(
+                (error) => error.kind,
+                'kind',
+                LockErrorKind.lostLease,
+              )
+              .having(
+                (error) => error.step,
+                'step',
+                LockStep.fiduciaTryAcquire,
+              ),
+        ),
+      );
+    }
+  });
+
+  test('renewal must preserve key holder fencing token TTL and valid expiry', () {
     final original = grant();
     expect(
       () => validateRenewedLeaseGrant(original, grant()),
@@ -69,6 +117,8 @@ void main() {
       grant(key: 'tests/other'),
       grant(holder: 'holder-b'),
       grant(token: 42),
+      grant(ttlMs: 59999),
+      grant(leaseExpiresMs: 0),
     ]) {
       expect(
         () => validateRenewedLeaseGrant(original, changed),

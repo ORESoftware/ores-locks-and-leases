@@ -6,6 +6,7 @@ import 'errors.dart';
 import 'key.dart';
 import 'lease.dart';
 import 'plan.dart';
+import 'renewal.dart';
 
 /// Renewal cadence for a maintained Fiducia + PostgreSQL transaction.
 final class LeaseMaintenanceOptions {
@@ -46,6 +47,10 @@ final class MaintainedXactGuarded extends Guarded {
 }
 
 /// Validate timing before either coordination layer is acquired.
+///
+/// The maintained path additionally requires the acquired grant and every
+/// renewal to report exactly [AcquireOptions.ttl]. It uses a fixed cadence and
+/// therefore fails closed rather than guessing after effective-TTL drift.
 void validateLeaseMaintenanceOptions(
   LockKey key,
   AcquireOptions acquire,
@@ -58,6 +63,12 @@ void validateLeaseMaintenanceOptions(
     throw LockError.invalidPlan(
       key,
       'fiducia lease TTL must be greater than zero',
+    );
+  }
+  if (ttlMs > maxRenewalTtlMs) {
+    throw LockError.invalidPlan(
+      key,
+      'fiducia lease TTL must be no greater than $maxRenewalTtlMs ms',
     );
   }
   if (renewMs <= 0) {
@@ -79,6 +90,12 @@ void validateLeaseMaintenanceOptions(
       'PostgreSQL advisory-lock wait timeout must not be negative',
     );
   }
+  if (acquire.retryInterval.isNegative) {
+    throw LockError.invalidPlan(
+      key,
+      'PostgreSQL advisory-lock retry interval must not be negative',
+    );
+  }
   if (wait && acquire.retryInterval.inMilliseconds <= 0) {
     throw LockError.invalidPlan(
       key,
@@ -93,7 +110,41 @@ LockError _renewalError(LockKey key, Object cause) {
   return tagStep(error, LockStep.fiduciaRenew) as LockError;
 }
 
-/// Reject any renewal response that changes fenced grant identity.
+LockStep _acquisitionStep(bool wait) =>
+    wait ? LockStep.fiduciaAcquire : LockStep.fiduciaTryAcquire;
+
+/// Reject an acquired grant that does not match the maintained timing and
+/// caller-selected identity.
+void validateAcquiredLeaseGrant(
+  LockKey key,
+  AcquireOptions acquire,
+  LeaseGrant grant, {
+  required bool wait,
+}) {
+  final changed = grant.key != key
+      ? 'key'
+      : grant.holder.isEmpty
+          ? 'holder'
+          : acquire.holder != null && grant.holder != acquire.holder
+              ? 'holder'
+              : grant.ttlMs != acquire.ttl.inMilliseconds
+                  ? 'TTL'
+                  : grant.leaseExpiresMs != null && grant.leaseExpiresMs! <= 0
+                      ? 'expiry'
+                      : null;
+  if (changed != null) {
+    throw LockError(
+      LockErrorKind.lostLease,
+      key,
+      'fiducia acquisition returned an invalid grant $changed; maintained '
+      'authority cannot be proven',
+      step: _acquisitionStep(wait),
+    );
+  }
+}
+
+/// Reject any renewal response that changes fenced grant identity or the
+/// effective TTL used to schedule the fixed-cadence maintainer.
 void validateRenewedLeaseGrant(
   LeaseGrant original,
   LeaseGrant renewed,
@@ -104,7 +155,12 @@ void validateRenewedLeaseGrant(
           ? 'holder'
           : renewed.fencingToken != original.fencingToken
               ? 'fencing token'
-              : null;
+              : renewed.ttlMs != original.ttlMs
+                  ? 'TTL'
+                  : renewed.leaseExpiresMs != null &&
+                          renewed.leaseExpiresMs! <= 0
+                      ? 'expiry'
+                      : null;
   if (changed != null) {
     throw LockError(
       LockErrorKind.lostLease,
@@ -256,8 +312,9 @@ Future<void> _acquireMaintainedXactLock(
 ///
 /// Waiting uses `pg_try_advisory_xact_lock` polling so lease loss can interrupt
 /// the wait. The outer grant is renewed while lock acquisition and work are
-/// pending. After work settles, one final successful renewal is mandatory
-/// before `runTx` may commit. Throwing before callback return makes
+/// pending. The acquired grant and every renewal must preserve the requested
+/// effective TTL. After work settles, one final successful renewal is
+/// mandatory before `runTx` may commit. Throwing before callback return makes
 /// `package:postgres` roll the transaction back.
 Future<T> withMaintainedXactLock<T>(
   LockKey key, {
@@ -280,6 +337,17 @@ Future<T> withMaintainedXactLock<T>(
     opts: acquire,
     lease: lease,
   );
+
+  try {
+    validateAcquiredLeaseGrant(key, acquire, grant, wait: wait);
+  } catch (error, trace) {
+    return settle<T>(
+      key,
+      lease,
+      grant,
+      Outcome<T>.failed(error, trace),
+    );
+  }
 
   final inner = await settled(() async {
     final maintainer = _LeaseMaintainer(

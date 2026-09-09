@@ -8,6 +8,7 @@ commit admission.
 ```text
 validate
   -> fiducia.acquire
+       \-> require exact key/holder/requested effective TTL
   -> pg.begin
   -> poll pg_try_advisory_xact_lock
        \-> fiducia.renew as needed
@@ -15,6 +16,7 @@ validate
        \-> fiducia.renew as needed
   -> stop the maintainer
   -> fiducia.renew       # mandatory final admission check
+       \-> require same key/holder/token/effective TTL
   -> pg.commit
   -> fiducia.release
 ```
@@ -35,22 +37,41 @@ A successful return proves all of the following:
 
 1. the caller acquired a Fiducia grant before opening the protected PostgreSQL
    transaction;
-2. the transaction acquired the advisory key derived from the same lock key;
-3. every successful renewal returned the same key, holder, and fencing token;
-4. one renewal succeeded after user work completed and immediately before
+2. the acquired grant preserved the requested key, any caller-selected holder,
+   and the exact requested effective TTL;
+3. the transaction acquired the advisory key derived from the same lock key;
+4. every successful renewal returned the same key, holder, fencing token, and
+   effective TTL;
+5. one renewal succeeded after user work completed and immediately before
    commit was attempted;
-5. PostgreSQL accepted the commit; and
-6. Fiducia accepted the release.
+6. PostgreSQL accepted the commit; and
+7. Fiducia accepted the release.
 
 A successful return does **not** prove that an arbitrary external side effect
 was transactional. Publish messages, invoke remote APIs, and write object
 storage through a transactional outbox or another fencing/idempotency boundary.
 
-## Timing
+## Timing and effective TTL
 
 `renewIntervalMs` must be a positive integer and no greater than half of the
-lease `ttlMs`. This is a fail-closed configuration check performed before
-Fiducia or PostgreSQL is touched.
+lease `ttlMs`. All runtimes also enforce the common cross-runtime TTL ceiling
+of `9223372036854` milliseconds before acquisition.
+
+The maintained implementation currently uses a fixed cadence derived from the
+requested acquisition TTL. Consequently, the authority-returned `ttlMs` must
+equal that request on acquisition and every periodic/final renewal. A shorter
+TTL could expire before the next scheduled renewal; silently accepting a
+longer or different TTL would also make adapter behavior ambiguous. Any drift
+is therefore `lost_lease`:
+
+- an acquisition mismatch is released before PostgreSQL is opened;
+- a periodic or final renewal mismatch cancels work, rolls back the open
+  transaction, and prevents commit.
+
+This exact-TTL rule is intentionally stricter than the independent renewal
+supervisor, which can reschedule from a newly validated TTL. A future dynamic
+maintainer may relax the rule only if every runtime, contract, model, and test
+updates atomically.
 
 The default is:
 
@@ -98,7 +119,10 @@ All protected SQL must use the transaction/session supplied by the guard.
 The TypeScript signal is a package-owned structural interface rather than the
 DOM `AbortSignal` declaration. It supports `aborted`, `reason`, abort listener
 registration, and `throwIfAborted()` while allowing server-only and generated
-consumers to compile without the DOM type library.
+consumers to compile without the DOM type library. TypeScript also snapshots
+and freezes acquisition options and grants before the first `await`; accessors,
+unknown fields, malformed proxies, and mutable aliases cannot rewrite commit
+admission state.
 
 ## Rust
 
@@ -181,8 +205,12 @@ release failures plus cleanup precedence.
 The model proves that authority loss prevents commit, final renewal is
 mandatory, commit and rollback are exclusive, acquired paths release exactly
 once, and cleanup failures remain primary without discarding the earlier
-failure. A negative control removes final renewal and must exhibit an unsafe
-successful commit trace; CI retains the exact-head JSON receipt.
+failure. Its refinement assumptions require every runtime to reject acquired
+or renewed effective-TTL drift before commit. Native tests exercise that
+runtime boundary directly.
+
+A negative control removes final renewal and must exhibit an unsafe successful
+commit trace; CI retains the exact-head JSON receipt.
 
 This is a finite exhaustive abstraction, not a transport-liveness or real-clock
 proof. Native runtime tests, live PostgreSQL evidence, and atomic datastore

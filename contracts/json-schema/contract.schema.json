@@ -234,7 +234,7 @@
       "properties": {
         "ttlMs": {
           "type": "integer",
-          "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released."
+          "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released. Fixed-cadence maintained transactions require every authority response to report this exact effective TTL."
         },
         "waitTimeoutMs": {
           "type": "integer",
@@ -258,7 +258,7 @@
     "LeaseMaintenanceOptions": {
       "type": "object",
       "unevaluatedProperties": false,
-      "description": "Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer.",
+      "description": "Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer. The acquired grant and every renewal must preserve the exact acquisition TTL; drift is lost_lease because the fixed cadence cannot safely assume the old duration.",
       "properties": {
         "renewIntervalMs": {
           "type": "integer"
@@ -287,7 +287,8 @@
           "description": "Absolute expiry in Unix milliseconds when the authority reports it."
         },
         "ttlMs": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Effective authority TTL in milliseconds. Fixed-cadence maintained transactions require this to equal the requested acquisition TTL on acquisition and every renewal."
         }
       },
       "required": [

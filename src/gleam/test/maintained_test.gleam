@@ -3,6 +3,7 @@ import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
 import ores_locks_and_leases as locks
+import ores_locks_and_leases/maintained
 
 pub fn main() {
   gleeunit.main()
@@ -70,23 +71,62 @@ pub fn maintenance_options_are_fail_closed_test() {
   error.kind |> should.equal(locks.InvalidPlan)
 }
 
-pub fn renewal_preserves_fenced_identity_test() {
+pub fn acquired_grant_preserves_holder_ttl_and_expiry_test() {
+  let opts =
+    locks.AcquireOptions(
+      ttl_ms: 60_000,
+      wait_timeout_ms: 30_000,
+      retry_interval_ms: 250,
+      holder: Some("holder-a"),
+    )
+  maintained.validate_acquired_grant(key(), True, opts, grant())
+  |> should.equal(Ok(Nil))
+
+  let changed_ttl = locks.LeaseGrant(..grant(), ttl_ms: 59_999)
+  let assert Error(ttl_error) =
+    maintained.validate_acquired_grant(key(), False, opts, changed_ttl)
+  ttl_error.kind |> should.equal(locks.LostLease)
+  ttl_error.step |> should.equal(Some(locks.FiduciaTryAcquire))
+
+  let changed_holder = locks.LeaseGrant(..grant(), holder: "holder-b")
+  let assert Error(holder_error) =
+    maintained.validate_acquired_grant(key(), True, opts, changed_holder)
+  holder_error.kind |> should.equal(locks.LostLease)
+
+  let invalid_expiry =
+    locks.LeaseGrant(..grant(), lease_expires_ms: Some(0))
+  let assert Error(expiry_error) =
+    maintained.validate_acquired_grant(key(), True, opts, invalid_expiry)
+  expiry_error.kind |> should.equal(locks.LostLease)
+}
+
+pub fn maintained_renewal_preserves_identity_and_effective_ttl_test() {
   let original = grant()
   let lease =
     lease_with_renew(fn(value, ttl_ms) {
       Ok(locks.LeaseGrant(..value, ttl_ms: ttl_ms))
     })
-  locks.renew_checked(lease, original, 90_000)
-  |> should.equal(Ok(locks.LeaseGrant(..original, ttl_ms: 90_000)))
+  maintained.renew_checked(lease, original, 60_000)
+  |> should.equal(Ok(original))
 }
 
-pub fn changed_fencing_token_is_lost_lease_test() {
+pub fn changed_fencing_token_or_ttl_is_lost_lease_test() {
   let original = grant()
-  let lease =
+  let changed_token =
     lease_with_renew(fn(value, _) {
       Ok(locks.LeaseGrant(..value, fencing_token: value.fencing_token + 1))
     })
-  let assert Error(error) = locks.renew_checked(lease, original, 90_000)
-  error.kind |> should.equal(locks.LostLease)
-  error.step |> should.equal(Some(locks.FiduciaRenew))
+  let assert Error(token_error) =
+    maintained.renew_checked(changed_token, original, 60_000)
+  token_error.kind |> should.equal(locks.LostLease)
+  token_error.step |> should.equal(Some(locks.FiduciaRenew))
+
+  let changed_ttl =
+    lease_with_renew(fn(value, _) {
+      Ok(locks.LeaseGrant(..value, ttl_ms: 59_999))
+    })
+  let assert Error(ttl_error) =
+    maintained.renew_checked(changed_ttl, original, 60_000)
+  ttl_error.kind |> should.equal(locks.LostLease)
+  ttl_error.step |> should.equal(Some(locks.FiduciaRenew))
 }

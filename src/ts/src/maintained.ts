@@ -87,7 +87,13 @@ interface ValidatedInputs {
   readonly maintenance: Readonly<LeaseMaintenanceOptions>;
 }
 
-/** Validate every runtime input before acquiring either coordination layer. */
+/**
+ * Validate every runtime input before acquiring either coordination layer.
+ *
+ * The maintained path uses a fixed renewal cadence. The acquired grant and
+ * every renewal must therefore report exactly `acquire.ttlMs`; effective-TTL
+ * drift is terminal rather than silently scheduling against stale timing.
+ */
 export function validateLeaseMaintenanceOptions(
   key: LockKey,
   acquire: AcquireOptions,
@@ -111,6 +117,12 @@ function validatedInputs(
   const maintenanceSnapshot = snapshotMaintenanceOptions(key, maintenance);
 
   requirePositiveInteger(key, acquireSnapshot.ttlMs, "fiducia lease TTL");
+  if (acquireSnapshot.ttlMs > MAX_RENEWAL_TTL_MS) {
+    throw LockError.invalidPlan(
+      key,
+      `fiducia lease TTL must be no greater than ${MAX_RENEWAL_TTL_MS} ms`,
+    );
+  }
   requirePositiveInteger(key, maintenanceSnapshot.renewIntervalMs, "fiducia renewal interval");
   if (maintenanceSnapshot.renewIntervalMs > acquireSnapshot.ttlMs / 2) {
     throw LockError.invalidPlan(
@@ -332,6 +344,27 @@ function snapshotAuthorityGrant(
   return Object.freeze(snapshot);
 }
 
+function validateMaintainedAcquiredGrant(
+  key: LockKey,
+  acquire: Readonly<AcquireOptions>,
+  grant: LeaseGrant,
+  step: LockStep,
+): void {
+  const changed = acquire.holder !== undefined && grant.holder !== acquire.holder
+    ? "holder"
+    : grant.ttlMs !== acquire.ttlMs
+      ? "TTL"
+      : undefined;
+  if (changed !== undefined) {
+    throw new LockError(
+      "lost_lease",
+      key,
+      `fiducia acquisition returned an invalid grant ${changed}; maintained authority cannot be proven`,
+      { step },
+    );
+  }
+}
+
 function renewalError(key: LockKey, cause: unknown): LockError {
   const error = cause instanceof LockError ? cause : LockError.transport(key, cause);
   tagStep(error, "fiducia.renew");
@@ -351,7 +384,9 @@ async function renewChecked(lease: Lease, original: LeaseGrant, ttlMs: number): 
     ? "holder"
     : renewed.fencingToken !== original.fencingToken
       ? "fencing token"
-      : undefined;
+      : renewed.ttlMs !== ttlMs
+        ? "TTL"
+        : undefined;
   if (changed !== undefined) {
     throw new LockError(
       "lost_lease",
@@ -605,8 +640,8 @@ async function runMaintainedTransaction<T>(
  *
  * Waiting uses repeated `pg_try_advisory_xact_lock` calls so renewal failure
  * can interrupt the wait. Periodic renewal aborts `guarded.signal`; after work
- * settles, a final successful renewal is mandatory before `COMMIT`. All
- * protected database statements must use `guarded.client`.
+ * settles, a final successful same-token, same-TTL renewal is mandatory before
+ * `COMMIT`. All protected database statements must use `guarded.client`.
  */
 export async function withMaintainedXactLock<T>(
   key: LockKey,
@@ -621,6 +656,11 @@ export async function withMaintainedXactLock<T>(
   const acquireStep: LockStep = wait ? "fiducia.acquire" : "fiducia.try_acquire";
   const rawGrant = await acquireLease(key, wait, inputs.acquire, lease);
   const grant = snapshotAuthorityGrant(key, rawGrant, acquireStep, "transport");
+  try {
+    validateMaintainedAcquiredGrant(key, inputs.acquire, grant, acquireStep);
+  } catch (error) {
+    return settle<T>(key, lease, grant, { ok: false, error });
+  }
   const inner = await settled(
     runMaintainedTransaction(
       key,

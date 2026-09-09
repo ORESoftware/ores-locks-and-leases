@@ -21,12 +21,14 @@ use crate::error::{LockError, LockErrorKind};
 use crate::lease::{AcquireOptions, Lease, LeaseGrant, WorkFuture, release_lost, tag_step};
 use crate::pg;
 use crate::plan::LockStep;
+use crate::renewal::MAX_RENEWAL_TTL_MS;
 
 /// Renewal cadence for [`with_maintained_xact_lock`].
 ///
 /// The interval must be positive and no greater than half of the acquisition
-/// TTL. That leaves at least one full interval of safety margin when one tick
-/// is delayed by runtime scheduling or a transient slow response.
+/// TTL. The acquired grant and every renewal must report that exact effective
+/// TTL; drift is terminal because this fixed-cadence maintainer does not guess
+/// whether an authority shortened the lease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseMaintenanceOptions {
     pub renew_interval: Duration,
@@ -61,6 +63,14 @@ impl LeaseMaintenanceOptions {
             return Err(LockError::invalid_plan(
                 key,
                 "fiducia lease TTL must be greater than zero",
+            ));
+        }
+        if acquire.ttl_ms() > MAX_RENEWAL_TTL_MS {
+            return Err(LockError::invalid_plan(
+                key,
+                format!(
+                    "fiducia lease TTL must be no greater than {MAX_RENEWAL_TTL_MS} ms",
+                ),
             ));
         }
         if self.renew_interval.is_zero() {
@@ -99,7 +109,8 @@ impl LeaseMaintenanceOptions {
 ///    so the Fiducia lease can be renewed and loss can interrupt the wait;
 /// 2. the lease is renewed while PostgreSQL begin, lock acquisition, and user
 ///    work are pending;
-/// 3. every renewal must preserve key, holder and fencing token; and
+/// 3. acquisition and every renewal must preserve key, holder, fencing token,
+///    and the requested effective TTL; and
 /// 4. a final renewal is required before commit. Any failure rolls back.
 ///
 /// The work future is dropped before rollback when a periodic renewal fails.
@@ -132,6 +143,10 @@ where
             },
         )
     })?;
+
+    if let Err(error) = validate_acquired_grant(key, wait, acquire, &grant) {
+        return settle_lease(key, lease, &grant, Err(error)).await;
+    }
 
     let mut renewals = interval_at(
         Instant::now() + maintenance.renew_interval,
@@ -279,6 +294,51 @@ async fn acquire_transaction_lock<L: Lease + Sync>(
     }
 }
 
+fn acquisition_step(wait: bool) -> LockStep {
+    if wait {
+        LockStep::FiduciaAcquire
+    } else {
+        LockStep::FiduciaTryAcquire
+    }
+}
+
+fn validate_acquired_grant(
+    key: &LockKey,
+    wait: bool,
+    acquire: &AcquireOptions,
+    grant: &LeaseGrant,
+) -> Result<(), LockError> {
+    let mismatch = if &grant.key != key {
+        Some("key")
+    } else if grant.holder.is_empty() {
+        Some("holder")
+    } else if acquire
+        .holder
+        .as_ref()
+        .is_some_and(|expected| expected != &grant.holder)
+    {
+        Some("holder")
+    } else if grant.ttl_ms != acquire.ttl_ms() {
+        Some("TTL")
+    } else if matches!(grant.lease_expires_ms, Some(0)) {
+        Some("expiry")
+    } else {
+        None
+    };
+
+    if let Some(field) = mismatch {
+        return Err(LockError::new(
+            LockErrorKind::LostLease,
+            key,
+            format!(
+                "fiducia acquisition returned an invalid grant {field}; maintained authority cannot be proven"
+            ),
+        )
+        .at(acquisition_step(wait)));
+    }
+    Ok(())
+}
+
 async fn renew_checked<L: Lease + Sync>(
     lease: &L,
     original: &LeaseGrant,
@@ -299,6 +359,10 @@ fn validate_renewed_grant(original: &LeaseGrant, renewed: &LeaseGrant) -> Result
         Some("holder")
     } else if renewed.fencing_token != original.fencing_token {
         Some("fencing token")
+    } else if renewed.ttl_ms != original.ttl_ms {
+        Some("TTL")
+    } else if matches!(renewed.lease_expires_ms, Some(0)) {
+        Some("expiry")
     } else {
         None
     };
@@ -381,10 +445,39 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.kind, LockErrorKind::InvalidPlan);
         }
+
+        let too_large = AcquireOptions::default().ttl(Duration::from_millis(
+            MAX_RENEWAL_TTL_MS.saturating_add(1),
+        ));
+        let error = LeaseMaintenanceOptions::default()
+            .validate(&key, &too_large, true)
+            .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
     }
 
     #[test]
-    fn renewal_must_preserve_fenced_identity() {
+    fn acquired_grant_must_match_requested_authority() {
+        let original = grant();
+        let acquire = AcquireOptions::default().holder("holder-a");
+        assert!(validate_acquired_grant(&original.key, true, &acquire, &original).is_ok());
+
+        let mut changed = original.clone();
+        changed.ttl_ms -= 1;
+        let error = validate_acquired_grant(&original.key, false, &acquire, &changed).unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::LostLease);
+        assert_eq!(error.step, Some(LockStep::FiduciaTryAcquire));
+
+        let mut changed = original.clone();
+        changed.holder = "holder-b".into();
+        assert!(validate_acquired_grant(&original.key, true, &acquire, &changed).is_err());
+
+        let mut changed = original.clone();
+        changed.lease_expires_ms = Some(0);
+        assert!(validate_acquired_grant(&original.key, true, &acquire, &changed).is_err());
+    }
+
+    #[test]
+    fn renewal_must_preserve_fenced_identity_and_effective_ttl() {
         let original = grant();
         assert!(validate_renewed_grant(&original, &original).is_ok());
 
@@ -400,6 +493,15 @@ mod tests {
 
         let mut changed = original.clone();
         changed.key = LockKey::new("tests/other").unwrap();
+        assert!(validate_renewed_grant(&original, &changed).is_err());
+
+        let mut changed = original.clone();
+        changed.ttl_ms -= 1;
+        let error = validate_renewed_grant(&original, &changed).unwrap_err();
+        assert!(error.message.contains("TTL"));
+
+        let mut changed = original.clone();
+        changed.lease_expires_ms = Some(0);
         assert!(validate_renewed_grant(&original, &changed).is_err());
     }
 }

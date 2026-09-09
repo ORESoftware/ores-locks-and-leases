@@ -147,7 +147,7 @@ model LockPlan {
 
 @doc("Acquisition tuning shared by every layer.")
 model AcquireOptions {
-  @doc("Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released.")
+  @doc("Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released. Fixed-cadence maintained transactions require every authority response to report this exact effective TTL.")
   ttlMs: int64;
 
   @doc("Time to poll the fiducia authority before giving up, in milliseconds. Maintained PostgreSQL waits use this as their bounded advisory-lock budget; ignored when wait is false.")
@@ -160,7 +160,7 @@ model AcquireOptions {
   holder?: string;
 }
 
-@doc("Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer.")
+@doc("Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer. The acquired grant and every renewal must preserve the exact acquisition TTL; drift is lost_lease because the fixed cadence cannot safely assume the old duration.")
 model LeaseMaintenanceOptions {
   renewIntervalMs: int64;
 }
@@ -172,6 +172,7 @@ model LeaseGrant {
   fencingToken: FencingToken;
   @doc("Absolute expiry in Unix milliseconds when the authority reports it.")
   leaseExpiresMs?: int64;
+  @doc("Effective authority TTL in milliseconds. Fixed-cadence maintained transactions require this to equal the requested acquisition TTL on acquisition and every renewal.")
   ttlMs: int64;
 }
 

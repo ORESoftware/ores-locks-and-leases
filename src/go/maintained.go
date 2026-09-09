@@ -23,10 +23,14 @@ func DefaultLeaseMaintenanceOptions() LeaseMaintenanceOptions {
 }
 
 // Validate rejects unsafe timing before either coordination layer is acquired.
+// The maintained path also requires the acquired and renewed effective TTLMs
+// to equal AcquireOptions.TTL; it does not guess a cadence after TTL drift.
 func (o LeaseMaintenanceOptions) Validate(key LockKey, acquire AcquireOptions, wait bool) error {
 	switch {
 	case acquire.TTL <= 0:
 		return invalidPlan(key, "fiducia lease TTL must be greater than zero")
+	case acquire.TTL.Milliseconds() > MaxRenewalTTLMS:
+		return invalidPlan(key, fmt.Sprintf("fiducia lease TTL must be no greater than %d ms", MaxRenewalTTLMS))
 	case o.RenewInterval <= 0:
 		return invalidPlan(key, "fiducia renewal interval must be greater than zero")
 	case o.RenewInterval > acquire.TTL/2:
@@ -36,6 +40,8 @@ func (o LeaseMaintenanceOptions) Validate(key LockKey, acquire AcquireOptions, w
 		))
 	case acquire.WaitTimeout < 0:
 		return invalidPlan(key, "PostgreSQL advisory-lock wait timeout must not be negative")
+	case acquire.RetryInterval < 0:
+		return invalidPlan(key, "PostgreSQL advisory-lock retry interval must not be negative")
 	case wait && acquire.RetryInterval <= 0:
 		return invalidPlan(key, "PostgreSQL advisory-lock retry interval must be greater than zero when wait is enabled")
 	default:
@@ -57,8 +63,9 @@ type MaintainedXactGuarded struct {
 // Waiting is implemented with pg_try_advisory_xact_lock polling so renewal
 // loss can interrupt the wait. The lease is renewed periodically while lock
 // acquisition and work are pending, and one final renewal is mandatory before
-// Commit. Any failure before commit rolls the transaction back, then releases
-// the outer grant while preserving cleanup-error precedence.
+// Commit. Acquisition and renewal must preserve the requested effective TTL.
+// Any failure before commit rolls the transaction back, then releases the
+// outer grant while preserving cleanup-error precedence.
 func WithMaintainedXactLock(
 	ctx context.Context,
 	key LockKey,
@@ -85,6 +92,9 @@ func WithMaintainedXactLock(
 	grant, err := acquireLease(ctx, key, wait, acquire, lease)
 	if err != nil {
 		return err
+	}
+	if err := validateMaintainedAcquiredGrant(key, wait, acquire, grant); err != nil {
+		return settle(ctx, key, lease, grant, err)
 	}
 	inner := runMaintainedXact(ctx, key, wait, acquire, maintenance, lease, grant, db, work)
 	return settle(ctx, key, lease, grant, inner)
@@ -216,6 +226,44 @@ func acquireMaintainedXactLock(
 	}
 }
 
+func maintainedAcquireStep(wait bool) Step {
+	if wait {
+		return StepFiduciaAcquire
+	}
+	return StepFiduciaTryAcquire
+}
+
+func validateMaintainedAcquiredGrant(
+	key LockKey,
+	wait bool,
+	acquire AcquireOptions,
+	grant LeaseGrant,
+) error {
+	var changed string
+	switch {
+	case grant.Key != key:
+		changed = "key"
+	case grant.Holder == "":
+		changed = "holder"
+	case acquire.Holder != "" && grant.Holder != acquire.Holder:
+		changed = "holder"
+	case grant.TTLMs != acquire.TTL.Milliseconds():
+		changed = "TTL"
+	case grant.LeaseExpiresMs < 0:
+		changed = "expiry"
+	}
+	if changed == "" {
+		return nil
+	}
+	return newError(
+		KindLostLease,
+		key,
+		maintainedAcquireStep(wait),
+		"fiducia acquisition returned an invalid grant "+changed+"; maintained authority cannot be proven",
+		nil,
+	)
+}
+
 func renewChecked(
 	ctx context.Context,
 	lease Lease,
@@ -235,6 +283,10 @@ func renewChecked(
 		changed = "holder"
 	case renewed.FencingToken != original.FencingToken:
 		changed = "fencing token"
+	case renewed.TTLMs != ttl.Milliseconds():
+		changed = "TTL"
+	case renewed.LeaseExpiresMs < 0:
+		changed = "expiry"
 	}
 	if changed != "" {
 		return LeaseGrant{}, newError(
