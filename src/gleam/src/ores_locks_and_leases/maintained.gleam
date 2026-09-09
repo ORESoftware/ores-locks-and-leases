@@ -246,11 +246,7 @@ fn run_transaction(
     Error(pog.TransactionRolledBack(encoded)) ->
       Error(decode_error(key, encoded))
     Error(pog.TransactionQueryError(error)) ->
-      Error(core.database_error(
-        key,
-        core.PgCommit,
-        string.inspect(error),
-      ))
+      Error(core.database_error(key, core.PgCommit, string.inspect(error)))
   }
 }
 
