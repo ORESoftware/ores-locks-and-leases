@@ -1,4 +1,4 @@
-name: Apply generated-contract spelling fix
+name: Apply generated contract spelling fix
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Check out the exact feature branch
+      - name: Check out the feature branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: feat/DEN-2050-maintained-xact-admission
@@ -23,42 +23,17 @@ jobs:
           persist-credentials: true
           show-progress: false
 
-      - name: Remove redundant Draft 2020-12 keyword and add regression probe
+      - name: Apply and verify the deterministic repair
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          generator = Path('templates/lib-core/gen_org_locks.py')
-          text = generator.read_text(encoding='utf-8')
-          old = '                    "additionalProperties": False,\n                    "unevaluatedProperties": False,'
-          count = text.count(old)
-          if count != 3:
-              raise SystemExit(f'expected exactly three redundant object-sealing pairs, found {count}')
-          text = text.replace(old, '                    "unevaluatedProperties": False,')
-          generator.write_text(text, encoding='utf-8')
-
-          safety = Path('scripts/test-generator-safety.sh')
-          text = safety.read_text(encoding='utf-8')
-          marker = '''git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \\
-  | grep -q '^resolver = "3"$'\n'''
-          addition = marker + '''# The authored Draft 2020-12 peer must use the same sealing spelling as\n# TypeSpec Schema B. `additionalProperties: false` is behaviorally redundant\n# beside `unevaluatedProperties: false`, but TJSV intentionally rejects the\n# structural mismatch instead of choosing one authority as the winner.\ngit -C "$fixture" show "$generated_commit:locks/contracts/json-schema/contract.schema.json" \\
-  | python3 "$repo_root/scripts/check-generated-contract-sealing.py" -\n'''
-          if text.count(marker) != 1:
-              raise SystemExit('generator-safety insertion marker drifted')
-          text = text.replace(marker, addition)
-          safety.write_text(text, encoding='utf-8')
-
-          Path('.github/workflows/apply-generated-contract-spelling-fix.yml').unlink()
-          PY
-
+          python3 scripts/apply-generated-contract-spelling-fix.py
           git diff --check
           python3 -m py_compile templates/lib-core/gen_org_locks.py scripts/check-generated-contract-sealing.py
           sh -n scripts/test-generator-safety.sh
           bash scripts/test-generator-safety.sh
 
-      - name: Commit the reviewed deterministic patch
+      - name: Commit the reviewed repair
         shell: bash
         run: |
           set -euo pipefail
@@ -68,6 +43,7 @@ jobs:
             templates/lib-core/gen_org_locks.py \
             scripts/test-generator-safety.sh \
             scripts/check-generated-contract-sealing.py \
+            scripts/apply-generated-contract-spelling-fix.py \
             .github/workflows/apply-generated-contract-spelling-fix.yml
           git commit -m 'fix(DEN-2050): align generated Schema A sealing with TypeSpec'
           git push origin HEAD:feat/DEN-2050-maintained-xact-admission
