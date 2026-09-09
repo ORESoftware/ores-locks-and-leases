@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
-tjsv_commit=6bb5b7c1ee41c8b43741e50a264c33a1165549c4
+tjsv_commit=dfc28bfc000faba5a963f23c708171dfd5f8debf
 tjsv_package="https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsv_commit}.tar.gz"
 generated_declarations='["Preflight.Locks.LockCatalog","Preflight.Locks.LockCatalogEntry","Preflight.Locks.LockDomain","Preflight.Locks.LockLayers","Preflight.Locks.PgScope"]'
 
@@ -109,8 +109,7 @@ log "TypeSpec and JSON Schema peer authorities"
     --int64-strategy=number \
     --seal-object-schemas=true \
     --probes=true \
-    --max-probes=128 \
-    --quiet
+    --max-probes=128
 
   npx --yes --package="$tjsv_package" tjsv verify-ir \
     --contract-ir=target/tjsv/generated-consumer/contract-ir.json \
@@ -119,8 +118,7 @@ log "TypeSpec and JSON Schema peer authorities"
     --generated-schema=target/tjsv/generated-consumer/generated-schema-b/generated-consumer.typespec.generated.schema.json \
     --schema=contracts/json-schema/contract.schema.json \
     --expected-declarations="$generated_declarations" \
-    --verification=target/tjsv/generated-consumer/consumer-verification.json \
-    --quiet
+    --verification=target/tjsv/generated-consumer/consumer-verification.json
 
   node - \
     target/tjsv/generated-consumer/report.json \
