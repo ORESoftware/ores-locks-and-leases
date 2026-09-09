@@ -68,12 +68,7 @@ void main() {
       holder: 'holder-a',
     );
     expect(
-      () => validateAcquiredLeaseGrant(
-        key,
-        acquire,
-        grant(),
-        wait: true,
-      ),
+      () => validateAcquiredLeaseGrant(key, acquire, grant(), wait: true),
       returnsNormally,
     );
 

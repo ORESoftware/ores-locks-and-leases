@@ -371,7 +371,9 @@ fn validate_renewed_grant(original: &LeaseGrant, renewed: &LeaseGrant) -> Result
         return Err(LockError::new(
             LockErrorKind::LostLease,
             &original.key,
-            format!("fiducia renewal changed the grant {field}; fenced authority cannot be proven"),
+            format!(
+                "fiducia renewal changed the grant {field}; fenced authority cannot be proven"
+            ),
         )
         .at(LockStep::FiduciaRenew));
     }

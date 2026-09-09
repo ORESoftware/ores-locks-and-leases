@@ -69,8 +69,8 @@ fn lost_authority(
   )
 }
 
-fn valid_expiry(expires_ms: core.LeaseGrant) -> Bool {
-  case expires_ms.lease_expires_ms {
+fn valid_expiry(grant: core.LeaseGrant) -> Bool {
+  case grant.lease_expires_ms {
     None -> True
     Some(value) -> value > 0
   }
@@ -87,29 +87,32 @@ pub fn validate_acquired_grant(
     None -> True
     Some(expected) -> grant.holder == expected
   }
-  let changed = case
-    core.key_to_string(grant.key) != core.key_to_string(key),
-    string.is_empty(grant.holder),
-    holder_matches,
-    grant.ttl_ms == opts.ttl_ms,
-    valid_expiry(grant)
-  {
-    True, _, _, _, _ -> Some("key")
-    _, True, _, _, _ -> Some("holder")
-    _, _, False, _, _ -> Some("holder")
-    _, _, _, False, _ -> Some("TTL")
-    _, _, _, _, False -> Some("expiry")
-    False, False, True, True, True -> None
-  }
+  let changed =
+    case
+      core.key_to_string(grant.key) != core.key_to_string(key),
+      string.is_empty(grant.holder),
+      holder_matches,
+      grant.ttl_ms == opts.ttl_ms,
+      valid_expiry(grant)
+    {
+      True, _, _, _, _ -> Some("key")
+      _, True, _, _, _ -> Some("holder")
+      _, _, False, _, _ -> Some("holder")
+      _, _, _, False, _ -> Some("TTL")
+      _, _, _, _, False -> Some("expiry")
+      False, False, True, True, True -> None
+    }
   case changed {
     None -> Ok(Nil)
     Some(field) ->
-      Error(lost_authority(
-        key,
-        acquisition_step(wait),
-        field,
-        "acquisition",
-      ))
+      Error(
+        lost_authority(
+          key,
+          acquisition_step(wait),
+          field,
+          "acquisition",
+        ),
+      )
   }
 }
 
@@ -129,12 +132,14 @@ pub fn renew_checked(
   case changed {
     None -> Ok(renewed)
     Some(field) ->
-      Error(lost_authority(
-        grant.key,
-        core.FiduciaRenew,
-        field,
-        "renewal",
-      ))
+      Error(
+        lost_authority(
+          grant.key,
+          core.FiduciaRenew,
+          field,
+          "renewal",
+        ),
+      )
   }
 }
 
@@ -144,9 +149,12 @@ fn validate_options(
   maintenance: core.LeaseMaintenanceOptions,
   wait: Bool,
 ) -> Result(Nil, core.LockError) {
-  use _ <- result.try(
-    core.validate_lease_maintenance_options(key, opts, maintenance, wait),
-  )
+  use _ <- result.try(core.validate_lease_maintenance_options(
+    key,
+    opts,
+    maintenance,
+    wait,
+  ))
   case opts.ttl_ms > renewal_supervisor.max_renewal_ttl_ms {
     True ->
       Error(core.invalid_plan(
@@ -179,17 +187,18 @@ pub fn with_maintained_xact_lock(
   case validate_acquired_grant(key, wait, opts, grant) {
     Error(error) -> core.settle(key, lease, grant, Error(error))
     Ok(Nil) -> {
-      let inner = run_transaction(
-        key,
-        wait,
-        opts,
-        maintenance,
-        lease,
-        grant,
-        database,
-        scheduler,
-        work,
-      )
+      let inner =
+        run_transaction(
+          key,
+          wait,
+          opts,
+          maintenance,
+          lease,
+          grant,
+          database,
+          scheduler,
+          work,
+        )
       core.settle(key, lease, grant, inner)
     }
   }
@@ -211,19 +220,21 @@ fn run_transaction(
   let started_ms = now_ms()
   let next_renewal_ms = started_ms + maintenance.renew_interval_ms
 
-  case acquire_lock(
-    transaction,
-    key,
-    wait,
-    opts,
-    maintenance,
-    lease,
-    grant,
-    now_ms,
-    sleep_ms,
-    started_ms,
-    next_renewal_ms,
-  ) {
+  case
+    acquire_lock(
+      transaction,
+      key,
+      wait,
+      opts,
+      maintenance,
+      lease,
+      grant,
+      now_ms,
+      sleep_ms,
+      started_ms,
+      next_renewal_ms,
+    )
+  {
     Error(error) -> rollback_or_cleanup(transaction, key, error)
     Ok(next_renewal_ms) -> {
       let checkpoint = fn() {
@@ -233,17 +244,16 @@ fn run_transaction(
         }
       }
       case work(Guarded(key, grant, transaction, checkpoint)) {
-        Error(cause) -> rollback_or_cleanup(
-          transaction,
-          key,
-          core.work_error(key, cause),
-        )
+        Error(cause) ->
+          rollback_or_cleanup(
+            transaction,
+            key,
+            core.work_error(key, cause),
+          )
         Ok(value) ->
           case renew_checked(lease, grant, opts.ttl_ms) {
             Error(error) -> rollback_or_cleanup(transaction, key, error)
-            Ok(_) ->
-              pg.commit(transaction, key)
-              |> result.replace(value)
+            Ok(_) -> pg.commit(transaction, key) |> result.replace(value)
           }
       }
     }
@@ -266,18 +276,22 @@ fn acquire_lock(
   case pg.try_xact_lock(transaction, key) {
     Ok(True) -> Ok(next_renewal_ms)
     Error(error) -> Error(error)
-    Ok(False) if !wait -> Error(core.contention(
-      key,
-      core.PgTryAdvisoryXactLock,
-    ))
+    Ok(False) if !wait ->
+      Error(core.contention(
+        key,
+        core.PgTryAdvisoryXactLock,
+      ))
     Ok(False) -> {
       let now = now_ms()
       case now - started_ms >= opts.wait_timeout_ms {
-        True -> Error(core.timeout(
-          key,
-          core.PgAdvisoryXactLock,
-          opts.wait_timeout_ms,
-        ))
+        True ->
+          Error(
+            core.timeout(
+              key,
+              core.PgAdvisoryXactLock,
+              opts.wait_timeout_ms,
+            ),
+          )
         False -> {
           let next_renewal_ms = case now >= next_renewal_ms {
             False -> Ok(next_renewal_ms)

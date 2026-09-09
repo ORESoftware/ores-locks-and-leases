@@ -124,14 +124,14 @@ void validateAcquiredLeaseGrant(
   final changed = grant.key != key
       ? 'key'
       : grant.holder.isEmpty
-          ? 'holder'
-          : acquire.holder != null && grant.holder != acquire.holder
-              ? 'holder'
-              : grant.ttlMs != acquire.ttl.inMilliseconds
-                  ? 'TTL'
-                  : grant.leaseExpiresMs != null && grant.leaseExpiresMs! <= 0
-                      ? 'expiry'
-                      : null;
+      ? 'holder'
+      : acquire.holder != null && grant.holder != acquire.holder
+      ? 'holder'
+      : grant.ttlMs != acquire.ttl.inMilliseconds
+      ? 'TTL'
+      : grant.leaseExpiresMs != null && grant.leaseExpiresMs! <= 0
+      ? 'expiry'
+      : null;
   if (changed != null) {
     throw LockError(
       LockErrorKind.lostLease,
@@ -152,15 +152,14 @@ void validateRenewedLeaseGrant(
   final changed = renewed.key != original.key
       ? 'key'
       : renewed.holder != original.holder
-          ? 'holder'
-          : renewed.fencingToken != original.fencingToken
-              ? 'fencing token'
-              : renewed.ttlMs != original.ttlMs
-                  ? 'TTL'
-                  : renewed.leaseExpiresMs != null &&
-                          renewed.leaseExpiresMs! <= 0
-                      ? 'expiry'
-                      : null;
+      ? 'holder'
+      : renewed.fencingToken != original.fencingToken
+      ? 'fencing token'
+      : renewed.ttlMs != original.ttlMs
+      ? 'TTL'
+      : renewed.leaseExpiresMs != null && renewed.leaseExpiresMs! <= 0
+      ? 'expiry'
+      : null;
   if (changed != null) {
     throw LockError(
       LockErrorKind.lostLease,

@@ -93,8 +93,7 @@ pub fn acquired_grant_preserves_holder_ttl_and_expiry_test() {
     maintained.validate_acquired_grant(key(), True, opts, changed_holder)
   holder_error.kind |> should.equal(locks.LostLease)
 
-  let invalid_expiry =
-    locks.LeaseGrant(..grant(), lease_expires_ms: Some(0))
+  let invalid_expiry = locks.LeaseGrant(..grant(), lease_expires_ms: Some(0))
   let assert Error(expiry_error) =
     maintained.validate_acquired_grant(key(), True, opts, invalid_expiry)
   expiry_error.kind |> should.equal(locks.LostLease)
@@ -114,7 +113,10 @@ pub fn changed_fencing_token_or_ttl_is_lost_lease_test() {
   let original = grant()
   let changed_token =
     lease_with_renew(fn(value, _) {
-      Ok(locks.LeaseGrant(..value, fencing_token: value.fencing_token + 1))
+      Ok(locks.LeaseGrant(
+        ..value,
+        fencing_token: value.fencing_token + 1,
+      ))
     })
   let assert Error(token_error) =
     maintained.renew_checked(changed_token, original, 60_000)
