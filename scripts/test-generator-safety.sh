@@ -6,6 +6,7 @@
 set -eu
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
+python3 "$repo_root/scripts/test-generator-layout.py"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/ores-locks-generator-safety.XXXXXX")
 cleanup() {
   if [ -d "$fixture" ]; then
@@ -59,14 +60,14 @@ git -C "$fixture" show "$generated_commit:.zpkg.toml" | grep -q 'BASE_REF_MANIFE
 # Gleam's formatter sorts imports lexically. A generated module that sorts
 # before gleeunit (as fixture_locks does) catches the fleet-name-dependent
 # formatting failure that shorter preflight package names used to miss.
-git -C "$fixture" show "$generated_commit:locks/gleam/test/fixture_locks_test.gleam" \
+git -C "$fixture" show "$generated_commit:locks/langs/gleam/test/fixture_locks_test.gleam" \
   | head -n 4 \
   | sort -c
 # The nested Rust package must remain independent when a consumer's root
-# Cargo.toml declares a workspace but does not list locks/rust as a member.
-git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \
+# Cargo.toml declares a workspace but does not list locks/langs/rust as a member.
+git -C "$fixture" show "$generated_commit:locks/langs/rust/Cargo.toml" \
   | grep -q '^\[workspace\]$'
-git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \
+git -C "$fixture" show "$generated_commit:locks/langs/rust/Cargo.toml" \
   | grep -q '^resolver = "3"$'
 # The authored Draft 2020-12 peer must use the same sealing spelling as
 # TypeSpec Schema B. `additionalProperties: false` is behaviorally redundant
