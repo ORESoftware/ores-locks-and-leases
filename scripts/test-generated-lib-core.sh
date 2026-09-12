@@ -18,7 +18,7 @@ tjsv_package="https://github.com/ORESoftware/typespec-json-schema-validator/arch
 generated_declarations='["Preflight.Locks.LockCatalog","Preflight.Locks.LockCatalogEntry","Preflight.Locks.LockDomain","Preflight.Locks.LockLayers","Preflight.Locks.PgScope"]'
 
 # Reproduce a lib-core whose repository root is a virtual Cargo workspace.
-# Without an explicit workspace in locks/rust/Cargo.toml, Cargo rejects the
+# Without an explicit workspace in locks/langs/rust/Cargo.toml, Cargo rejects the
 # generated package because it is nested below but absent from `members`.
 printf '%s\n' \
   '[workspace]' \
@@ -64,19 +64,19 @@ sh -n "$scratch/locks/persistence/redis/test-fenced-write.sh"
 test "$(grep -c 'ores-locks-and-leases:fencing-assets:v1' "$scratch/locks/README.md")" -eq 1
 
 log "Rust"
-cargo test --manifest-path "$scratch/locks/rust/Cargo.toml" --all-targets --features full
+cargo test --manifest-path "$scratch/locks/langs/rust/Cargo.toml" --all-targets --features full
 
 log "Go"
-go -C "$scratch/locks/golang" mod tidy
-go -C "$scratch/locks/golang" test ./...
+go -C "$scratch/locks/langs/golang" mod tidy
+go -C "$scratch/locks/langs/golang" test ./...
 
 log "TypeScript"
-npm --prefix "$scratch/locks/typescript" install --no-audit --no-fund
-npm --prefix "$scratch/locks/typescript" test
+npm --prefix "$scratch/locks/langs/typescript" install --no-audit --no-fund
+npm --prefix "$scratch/locks/langs/typescript" test
 
 log "Dart"
 (
-  cd "$scratch/locks/dart"
+  cd "$scratch/locks/langs/dart"
   dart pub get
   dart format --output=none --set-exit-if-changed lib test
   dart analyze --fatal-infos
@@ -85,7 +85,7 @@ log "Dart"
 
 log "Gleam"
 (
-  cd "$scratch/locks/gleam"
+  cd "$scratch/locks/langs/gleam"
   gleam format --check src test
   gleam test
 )

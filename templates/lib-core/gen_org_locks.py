@@ -22,6 +22,10 @@ Two modes:
 Idempotent: running twice produces the same files; the root `.zpkg.toml` gets
 the two dependency lines added once.
 
+Runtime packages live under `locks/langs/`. A legacy `locks/<runtime>` path
+requires a reviewed migration before generation; this tool never removes it
+or creates a competing copy. Commit mode checks the selected base tree only.
+
 Python 3.10+, standard library only (no tomllib: the manifest edit is textual).
 """
 
@@ -41,7 +45,8 @@ SHARED_NAME = "ores-locks-and-leases"
 SHARED_REQ = "=0.1.1"
 SHARED_GIT = "https://github.com/ORESoftware/ores-locks-and-leases.git"
 SHARED_TAG = "v0.1.1"
-VENDOR = "../.vendor/.zed/oresoftware/ores-locks-and-leases/src"
+VENDOR = "../../.vendor/.zed/oresoftware/ores-locks-and-leases/src"
+LEGACY_RUNTIME_PATHS = tuple(f"locks/{name}" for name in ("rust", "typescript", "dart", "gleam", "golang"))
 
 # The catalog every org starts with. Orgs add their own rows to
 # locks/catalog.json; the generator re-emits every runtime from it.
@@ -143,23 +148,23 @@ url = "https://github.com/{org}/{prefix}-lib-core"
 dir = ".vendor/.zed"
 
 [targets.rust]
-dir = "rust"
+dir = "langs/rust"
 adapter = "rust"
 
 [targets.typescript]
-dir = "typescript"
+dir = "langs/typescript"
 adapter = "node"
 
 [targets.dart]
-dir = "dart"
+dir = "langs/dart"
 adapter = "dart"
 
 [targets.gleam]
-dir = "gleam"
+dir = "langs/gleam"
 adapter = "none"
 
 [targets.golang]
-dir = "golang"
+dir = "langs/golang"
 adapter = "none"
 
 [scripts]
@@ -180,11 +185,11 @@ lock catalog. One nested zed package, five runtimes:
 
 | Path | Package |
 | --- | --- |
-| `rust` | `{kebab}-locks` crate |
-| `typescript` | `@{org.lower()}/locks` |
-| `dart` | `{snake}_locks` |
-| `gleam` | `{snake}_locks` |
-| `golang` | `github.com/{org}/{prefix}-lib-core/locks/golang` |
+| `langs/rust` | `{kebab}-locks` crate |
+| `langs/typescript` | `@{org.lower()}/locks` |
+| `langs/dart` | `{snake}_locks` |
+| `langs/gleam` | `{snake}_locks` |
+| `langs/golang` | `github.com/{org}/{prefix}-lib-core/locks/langs/golang` |
 
 Every key this org locks is `{org}/<domain>/<name>`; the prefix is applied
 by `key(domain, name)` in each runtime so two orgs sharing a database cannot
@@ -343,8 +348,8 @@ model LockCatalog {{
     }};'''
         for e in catalog
     )
-    files["locks/rust/Cargo.toml"] = f'''# Keep this generated crate independent when the consumer repository is a
-# Cargo workspace that does not list locks/rust as a member.
+    files["locks/langs/rust/Cargo.toml"] = f'''# Keep this generated crate independent when the consumer repository is a
+# Cargo workspace that does not list locks/langs/rust as a member.
 [workspace]
 resolver = "3"
 
@@ -372,11 +377,11 @@ ores-locks-and-leases = {{ git = "{SHARED_GIT}", tag = "{SHARED_TAG}" }}
 [lints.rust]
 unsafe_code = "forbid"
 '''
-    files["locks/rust/lib.rs"] = f'''//! {org} lock routines.
+    files["locks/langs/rust/lib.rs"] = f'''//! {org} lock routines.
 //!
 //! Re-exports [`ores_locks_and_leases`] and adds the org's key prefix and lock
 //! catalog. Every key this crate builds is `{org}/<domain>/<name>`.
-//! Generated from `../catalog.json` by ores-locks-and-leases'
+//! Generated from `locks/catalog.json` by ores-locks-and-leases'
 //! `templates/lib-core/gen_org_locks.py`; edit the catalog, not this file.
 
 pub use ores_locks_and_leases::*;
@@ -477,7 +482,7 @@ mod tests {{
   {entry_ident(e, 'snake')}: {{ domain: "{e['domain']}", name: "{e['name']}", layers: {{ fiducia: {str(e['layers']['fiducia']).lower()}, pgAdvisory: {str(e['layers']['pgAdvisory']).lower()} }}, pgScope: "{e['pgScope']}", wait: {str(e['wait']).lower()} }}'''
         for e in catalog
     )
-    files["locks/typescript/package.json"] = json.dumps(
+    files["locks/langs/typescript/package.json"] = json.dumps(
         {
             "name": f"@{org.lower()}/locks",
             "version": "0.1.0",
@@ -497,7 +502,7 @@ mod tests {{
         },
         indent=2,
     ) + "\n"
-    files["locks/typescript/tsconfig.json"] = json.dumps(
+    files["locks/langs/typescript/tsconfig.json"] = json.dumps(
         {
             "compilerOptions": {
                 "target": "ES2022",
@@ -514,9 +519,9 @@ mod tests {{
         },
         indent=2,
     ) + "\n"
-    files["locks/typescript/src/index.ts"] = f'''/**
+    files["locks/langs/typescript/src/index.ts"] = f'''/**
  * {org} lock routines. Re-exports `@oresoftware/locks-and-leases` and adds
- * the org's key prefix and lock catalog. Generated from `../catalog.json`
+ * the org's key prefix and lock catalog. Generated from `locks/catalog.json`
  * by ores-locks-and-leases' `templates/lib-core/gen_org_locks.py`.
  */
 import {{ lockKey, plan, type LockKey, type LockLayers, type LockPlan, type PgScope }} from "@oresoftware/locks-and-leases";
@@ -560,7 +565,7 @@ export const catalog = {{
 {ts_entries},
 }} as const satisfies Record<string, Entry>;
 '''
-    files["locks/typescript/test/catalog.test.mjs"] = f'''import assert from "node:assert/strict";
+    files["locks/langs/typescript/test/catalog.test.mjs"] = f'''import assert from "node:assert/strict";
 import {{ test }} from "node:test";
 import {{ ORG, catalog, entryKey, entryPlan, key }} from "../dist/index.js";
 
@@ -588,7 +593,7 @@ test("placeholders are filled in order and every entry plans", () => {{
   );'''
         for e in catalog
     )
-    files["locks/dart/pubspec.yaml"] = f'''name: {snake}_locks
+    files["locks/langs/dart/pubspec.yaml"] = f'''name: {snake}_locks
 description: "{org} lock routines: ores_locks_and_leases with the {org} key prefix and lock catalog."
 version: 0.1.0
 repository: https://github.com/{org}/{prefix}-lib-core
@@ -605,9 +610,9 @@ dev_dependencies:
   lints: ^4.0.0
   test: ^1.25.0
 '''
-    files["locks/dart/analysis_options.yaml"] = "include: package:lints/recommended.yaml\n"
-    files[f"locks/dart/lib/{snake}_locks.dart"] = f'''/// {org} lock routines. Re-exports `ores_locks_and_leases` and adds the
-/// org's key prefix and lock catalog. Generated from `../catalog.json` by
+    files["locks/langs/dart/analysis_options.yaml"] = "include: package:lints/recommended.yaml\n"
+    files[f"locks/langs/dart/lib/{snake}_locks.dart"] = f'''/// {org} lock routines. Re-exports `ores_locks_and_leases` and adds the
+/// org's key prefix and lock catalog. Generated from `locks/catalog.json` by
 /// ores-locks-and-leases' `templates/lib-core/gen_org_locks.py`.
 library;
 
@@ -669,7 +674,7 @@ abstract final class Catalog {{
 {dart_entries}
 }}
 '''
-    files["locks/dart/test/catalog_test.dart"] = f'''import 'package:{snake}_locks/{snake}_locks.dart';
+    files["locks/langs/dart/test/catalog_test.dart"] = f'''import 'package:{snake}_locks/{snake}_locks.dart';
 import 'package:test/test.dart';
 
 void main() {{
@@ -705,7 +710,7 @@ pub const {entry_ident(e, 'snake')} = Entry(
 )'''
         for e in catalog
     )
-    files["locks/gleam/gleam.toml"] = f'''name = "{snake}_locks"
+    files["locks/langs/gleam/gleam.toml"] = f'''name = "{snake}_locks"
 version = "0.1.0"
 description = "{org} lock routines: ores_locks_and_leases with the {org} key prefix and lock catalog."
 licences = ["MIT"]
@@ -720,8 +725,8 @@ ores_locks_and_leases = {{ path = "{VENDOR}/gleam" }}
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
 '''
-    files[f"locks/gleam/src/{snake}_locks.gleam"] = f'''//// {org} lock routines: `ores_locks_and_leases` with the org's key prefix
-//// and lock catalog. Generated from `../catalog.json` by
+    files[f"locks/langs/gleam/src/{snake}_locks.gleam"] = f'''//// {org} lock routines: `ores_locks_and_leases` with the org's key prefix
+//// and lock catalog. Generated from `locks/catalog.json` by
 //// ores-locks-and-leases' `templates/lib-core/gen_org_locks.py`.
 
 import gleam/list
@@ -811,7 +816,7 @@ pub fn catalog_is_well_formed() -> Bool {{
         "import ores_locks_and_leases as locks",
         f"import {snake}_locks as org_locks",
     ]))
-    files[f"locks/gleam/test/{snake}_locks_test.gleam"] = f'''{gleam_test_imports}
+    files[f"locks/langs/gleam/test/{snake}_locks_test.gleam"] = f'''{gleam_test_imports}
 
 pub fn main() {{
   gleeunit.main()
@@ -845,7 +850,7 @@ pub fn placeholders_are_filled_in_order_test() {{
 \t{entry_ident(e, 'pascal')} = Entry{{Domain: Domain{ident(e['domain'], 'pascal')}, Name: "{e['name']}", Layers: oreslocks.Layers{{Fiducia: {str(e['layers']['fiducia']).lower()}, PgAdvisory: {str(e['layers']['pgAdvisory']).lower()}}}, PgScope: oreslocks.{'ScopeTransaction' if e['pgScope'] == 'transaction' else 'ScopeSession'}, Wait: {str(e['wait']).lower()}}}'''
         for e in catalog
     )
-    files["locks/golang/go.mod"] = f'''module github.com/{org}/{prefix}-lib-core/locks/golang
+    files["locks/langs/golang/go.mod"] = f'''module github.com/{org}/{prefix}-lib-core/locks/langs/golang
 
 go 1.22
 
@@ -854,11 +859,11 @@ require github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1
     # Pin the immutable nested-module release. This keeps generated consumers
     # reproducible even while a freshly published version is still propagating
     # through proxy.golang.org and sum.golang.org caches.
-    files["locks/golang/go.sum"] = '''github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1 h1:J9deNEFJnPIsV6e9XJFP4U6OlrqwaMIlbMhyYiDAggE=
+    files["locks/langs/golang/go.sum"] = '''github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1 h1:J9deNEFJnPIsV6e9XJFP4U6OlrqwaMIlbMhyYiDAggE=
 github.com/ORESoftware/ores-locks-and-leases/src/go v0.1.1/go.mod h1:L5hcHZjI6AjJa0swONnyu5lMQwNp74krvEyoKSUN66g=
 '''
-    files["locks/golang/locks.go"] = f'''// Package {snake}locks wraps ORESoftware/ores-locks-and-leases with the {org}
-// key prefix and lock catalog. Generated from ../catalog.json by
+    files["locks/langs/golang/locks.go"] = f'''// Package {snake}locks wraps ORESoftware/ores-locks-and-leases with the {org}
+// key prefix and lock catalog. Generated from locks/catalog.json by
 // ores-locks-and-leases' templates/lib-core/gen_org_locks.py.
 package {snake}locks
 
@@ -917,7 +922,7 @@ var (
 {go_entries}
 )
 '''
-    files["locks/golang/locks_test.go"] = f'''package {snake}locks
+    files["locks/langs/golang/locks_test.go"] = f'''package {snake}locks
 
 import (
 \t"testing"
@@ -1018,6 +1023,22 @@ def ref_file(repo: pathlib.Path, ref: str, path: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def require_canonical_layout(repo: pathlib.Path, base_ref: str | None) -> None:
+    """Refuse legacy paths without deleting or duplicating their unique work."""
+    if base_ref is not None:
+        legacy = git(repo, "ls-tree", "-z", "--name-only", base_ref, "--", *LEGACY_RUNTIME_PATHS)
+        present = [path for path in legacy.split("\0") if path]
+    else:
+        # lexists also catches a dangling symlink before a write follows it.
+        present = [path for path in LEGACY_RUNTIME_PATHS if os.path.lexists(repo / path)]
+    if present:
+        raise SystemExit(
+            "legacy runtime paths require a reviewed migration to locks/langs before generation: "
+            + ", ".join(present)
+            + "; preserve unique source and update consumer paths in that migration"
+        )
+
+
 def commit_without_touching_worktree(
     repo: pathlib.Path,
     files: dict[str, str],
@@ -1067,6 +1088,16 @@ def main() -> int:
     args = ap.parse_args()
 
     repo = pathlib.Path(args.repo).expanduser().resolve()
+    if args.commit:
+        if not (repo / ".git").exists():
+            raise SystemExit(f"{repo} is not a git repository")
+        if not re.search(r"(?:^|/)DEN-[0-9]+(?:/|$)", args.branch, re.IGNORECASE):
+            raise SystemExit("--branch must contain a Linear identifier such as DEN-123")
+        # Bind the layout, authored inputs, and commit parent to one base even
+        # when another writer advances the named branch during generation.
+        args.base_ref = git(repo, "rev-parse", "--verify", f"{args.base_ref}^{{commit}}").strip()
+    if not args.stdout:
+        require_canonical_layout(repo, args.base_ref if args.commit else None)
     interfaces_name = args.interfaces or f"{args.prefix}-interfaces"
     catalog_text = ref_file(repo, args.base_ref, "locks/catalog.json") if args.commit else (
         (repo / "locks/catalog.json").read_text() if (repo / "locks/catalog.json").exists() else None
@@ -1095,10 +1126,6 @@ def main() -> int:
         "Claude-Session: https://claude.ai/code/session_01P6vFcfS49sFvXjKFeWf2Kz"
     )
     if args.commit:
-        if not (repo / ".git").exists():
-            raise SystemExit(f"{repo} is not a git repository")
-        if not re.search(r"(?:^|/)DEN-[0-9]+(?:/|$)", args.branch, re.IGNORECASE):
-            raise SystemExit("--branch must contain a Linear identifier such as DEN-123")
         commit_without_touching_worktree(repo, files, args.branch, args.base_ref, message)
         return 0
 
