@@ -8,10 +8,15 @@ on:
       - 'src/rust/plan.rs'
       - 'src/rust/lease.rs'
       - 'src/rust/coordinated.rs'
+      - 'src/rust/maintained.rs'
       - 'src/go/fence.go'
+      - 'src/go/maintained.go'
       - 'src/ts/src/fence.ts'
+      - 'src/ts/src/maintained.ts'
       - 'src/dart/lib/src/fence.dart'
+      - 'src/dart/lib/src/maintained.dart'
       - 'src/gleam/src/ores_locks_and_leases/fence.gleam'
+      - 'src/gleam/src/ores_locks_and_leases/maintained.gleam'
       - 'persistence/**'
       - 'conformance/cases/fence-decision.json'
       - 'conformance/cases/lock-plan.json'
@@ -25,10 +30,15 @@ on:
       - 'src/rust/plan.rs'
       - 'src/rust/lease.rs'
       - 'src/rust/coordinated.rs'
+      - 'src/rust/maintained.rs'
       - 'src/go/fence.go'
+      - 'src/go/maintained.go'
       - 'src/ts/src/fence.ts'
+      - 'src/ts/src/maintained.ts'
       - 'src/dart/lib/src/fence.dart'
+      - 'src/dart/lib/src/maintained.dart'
       - 'src/gleam/src/ores_locks_and_leases/fence.gleam'
+      - 'src/gleam/src/ores_locks_and_leases/maintained.gleam'
       - 'persistence/**'
       - 'conformance/cases/fence-decision.json'
       - 'conformance/cases/lock-plan.json'
@@ -73,6 +83,41 @@ jobs:
         run: cargo fmt --manifest-path formal/fencing-model/Cargo.toml -- --check
       - name: Exhaustively explore the finite lock-plan matrix and two-holder crash/retry model
         run: cargo test --locked --manifest-path formal/fencing-model/Cargo.toml
+
+  maintained-transaction-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Verify checked-out revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Exhaustively verify maintained transaction commit admission
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --check formal/maintained-model.mjs
+          node formal/maintained-model.mjs \
+            --revision "$EXPECTED_SHA" \
+            --receipt target/formal-maintained/receipt.json
+      - name: Retain maintained transaction model evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maintained-transaction-model-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/formal-maintained/receipt.json
+          if-no-files-found: error
+          retention-days: 30
 
   kani-fencing:
     runs-on: ubuntu-24.04

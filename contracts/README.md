@@ -1,33 +1,85 @@
 # Locks and leases contract authorities
 
-The TypeSpec file at `typespec/main.tsp` and the JSON Schema Draft 2020-12 file
-at `json-schema/contract.schema.json` are independently authored, top-level
-peer authorities. Neither file is generated from, copied over, or allowed to
-replace the other.
+The TypeSpec files under `contracts/**/typespec/` and the JSON Schema Draft
+2020-12 files under `contracts/**/json-schema/` are independently authored,
+top-level peer authorities. Neither authority is generated from, copied over,
+or allowed to replace the other.
 
-The validation sequence is deliberately bidirectional:
+## Required TJSV admission
 
-1. inventory and compare top-level declarations in TypeSpec and authored JSON
-   Schema A;
+`ORESoftware/typespec-json-schema-validator` (TJSV) is the fail-closed
+peer-authority validator for this repository. The admitted revision is pinned to
+commit `6bb5b7c1ee41c8b43741e50a264c33a1165549c4`; floating branches and tags are
+not accepted as merge evidence.
+
+For each contract bundle, TJSV must:
+
+1. inventory the independently authored TypeSpec and JSON Schema declarations;
 2. compile TypeSpec into generated JSON Schema B as disposable comparison
    evidence;
-3. normalize and compare authored Schema A with generated Schema B;
-4. fail closed on missing declarations, incompatible shapes, unsupported
-   semantics, generator failure, or an indeterminate comparison; and
-5. retain the JSON, SARIF, and generated-schema evidence for review.
+3. validate authored Schema A and generated Schema B as Draft 2020-12 resource
+   graphs;
+4. normalize and recursively compare declaration shapes and constraints;
+5. differentially execute both authorities over a non-empty deterministic probe
+   corpus;
+6. stop evaluation on missing declarations, unsupported semantics, generator
+   failure, stale or contradictory mappings, divergence, refusal, or an
+   indeterminate result; and
+7. retain JSON, SARIF, Contract IR, and generated-schema evidence under
+   `target/` without modifying either authored authority.
 
-`.github/workflows/peer-authority-validator.yml` executes the immutable
-`ORESoftware/typespec-json-schema-validator` action at merge commit
-`8584720715e4e90573535e14b16cb3a24c14ca63`. That revision preserves the
-Draft 2020-12 runtime resource graph during differential validation, uses
-comparison-only normalization for peer-authority evidence, and fails closed on
-stale, ambiguous, duplicate, or contradictory mappings and ignore lists.
-Generated Schema B is written under `target/` and must never overwrite the
-authored JSON Schema.
+Generated Schema B is comparison evidence only. It must never overwrite or
+become the source for the authored JSON Schema.
+
+Run both maintained bundles locally with:
+
+```sh
+sh scripts/check-tjsv-contracts.sh all
+```
+
+`sh scripts/test-all.sh` includes that command whenever Node.js and npm are
+available.
+
+## Exact-head cross-runtime enforcement
+
+`.github/workflows/contract-runtime-boundary.yml` binds the two TJSV receipts to
+one exact pull-request head and to successful Rust, Go, TypeScript/Node.js,
+Dart/Flutter-facing, and Gleam test lanes, RustSec, and a freshly generated
+zed-pkg `*-lib-core` consumer. Its final receipt fails unless:
+
+- the checked-out revision equals the pull-request head;
+- both TJSV runs report zero unexplained findings;
+- differential execution is enabled and evaluates at least one probe;
+- divergences and refusals are both zero;
+- every language/runtime lane succeeds; and
+- the generated consumer compiles and passes its own TJSV contract admission.
+
+`.github/workflows/renewal-supervisor.yml` applies the same TJSV and exact-head
+requirements specifically to the independent renewal contract and its shared
+polyglot conformance corpus.
+
+## Mapping-integrity canary
+
+`.github/workflows/peer-authority-validator.yml` executes the same immutable
+TJSV revision and retains a deliberate negative test.
+`mapping-tests/stale.mapping.json` names absent TypeSpec declaration
+`Ores.LocksAndLeases.MissingLeaseGrant` while targeting real JSON Schema
+resources. The workflow must:
+
+- return the expected stopped-for-evaluation result;
+- emit the attributable missing-declaration finding with a stable fingerprint;
+- emit no generic or unrelated finding;
+- leave both authored authorities and the mapping fixture byte-identical; and
+- retain positive and negative JSON, SARIF, Contract IR, and generated-schema
+  evidence separately.
+
+A negative lane that unexpectedly passes, produces the wrong rule, cannot write
+its receipt, or mutates an authored input fails the workflow.
 
 ## Application-fencing declarations
 
-Both authorities independently declare the datastore-facing fencing boundary:
+Both main authorities independently declare the datastore-facing fencing
+boundary:
 
 - `FencingTokenText`: canonical unsigned-64 decimal text, never a lossy JSON
   number;
@@ -42,35 +94,18 @@ Both authorities independently declare the datastore-facing fencing boundary:
 The runtime helpers and `conformance/cases/fence-decision.json` must agree with
 these declarations. PostgreSQL and Redis persistence adapters enforce the same
 state machine atomically in the datastore; contract parity alone is not a
-substitute for that atomicity.
+substitute for datastore fencing.
 
-## Negative mapping-integrity canary
+## Complementary generated-artifact validation
 
-`mapping-tests/stale.mapping.json` deliberately names absent TypeSpec
-declaration `Ores.LocksAndLeases.MissingLeaseGrant` while targeting the real
-`LockPlan` declarations in both JSON Schema lanes. The exact-head workflow must:
+The pinned `ores-contracts` gate remains because it validates this repository's
+existing Rust, TypeScript, Dart, and generated-package configuration. It is
+complementary rather than authoritative over TJSV:
 
-- return exit code 2 through a `continue-on-error` step;
-- retain report status `stopped_for_evaluation` rather than `failed`;
-- emit exactly one `mapping-typespec-declaration-missing` finding with a stable
-  fingerprint;
-- emit no generic `run-failed` or unrelated target-collision finding;
-- leave both authored authorities and the mapping fixture byte-identical; and
-- retain positive and negative JSON, SARIF, and generated-schema evidence in
-  separate directories.
+- TJSV proves independent TypeSpec/JSON Schema declaration, structural, and
+  differential parity and emits digest-bound Contract IR.
+- `ores-contracts` continues to exercise the existing multi-language projection
+  and artifact configuration.
 
-The verifier script is intentionally independent from the validator package. A
-negative lane that unexpectedly passes, cannot write its receipt, produces the
-wrong rule, or mutates an authored input fails the workflow.
-
-The existing `ores-contracts` gate remains in the main CI workflow because it
-also validates this repository's generated Rust, TypeScript, and Dart artifact
-configuration. The two gates are complementary: the peer-authority validator
-establishes independent declaration/shape parity and mapping integrity, while
-`ores-contracts` continues to exercise the existing multi-language generation
-contract.
-
-After changing either authority, run the existing local contract check and
-inspect the hosted positive and negative peer-authority evidence before merging.
-A mergeable pull request, skipped workflow, or job that failed before checkout
-is not passing contract evidence.
+A mergeable pull request, skipped workflow, green synthetic merge commit, or
+job that failed before exact-head checkout is not passing contract evidence.

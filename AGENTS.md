@@ -26,11 +26,20 @@ changes every org, so:
   compile with `rustc lib.rs` alone; SeaORM and the fiducia client are
   optional features. Keep it that way so `*-pub-lib-core` packages can use
   the key/plan logic on clients.
-* **Contracts are dual-authored.** `contracts/typespec/main.tsp` and
-  `contracts/json-schema/contract.schema.json` are peers; run
-  `npx ores-contracts check --config contracts/contracts.config.json` after
-  touching either. Neither is generated from the other.
-* Toolchains: Rust 1.85+, Go 1.22+, Node 18+, Dart 3.3+, Gleam 1.6+.
+* **Contracts are independent peer authorities.** TypeSpec and JSON Schema
+  Draft 2020-12 under `contracts/` are human-authored peers with no precedence.
+  Run `sh scripts/check-tjsv-contracts.sh all` after touching either authority.
+  TJSV is pinned at commit
+  `6bb5b7c1ee41c8b43741e50a264c33a1165549c4`; generated Schema B is disposable
+  comparison evidence only and must never replace authored Schema A. Also run
+  the pinned `ores-contracts` checks because they exercise the existing
+  multi-language projection configuration.
+* **Contract changes are exact-head, cross-runtime changes.** The
+  `contract-runtime-boundary` receipt must bind successful TJSV structural and
+  differential parity to Rust, Go, TypeScript/Node.js, Dart/Flutter-facing,
+  Gleam, RustSec, and freshly generated zed-pkg consumer evidence. A green
+  synthetic merge commit, skipped lane, or stale receipt is not admission.
+* Toolchains: Rust 1.85+, Go 1.22+, Node 22+, Dart 3.13+, Gleam 1.16+.
   `sh scripts/test-all.sh` runs what is installed.
 
 <!-- BEGIN ores-agents-pointer: managed by ORESoftware/my-ai; edit there, not here -->

@@ -26,10 +26,11 @@ export const LAYERS_BOTH: LockLayers = { fiducia: true, pgAdvisory: true };
  */
 export type PgScope = "transaction" | "session";
 
-/** One action in a plan. The contract's `LockStep` enum. */
+/** One observable action. Maintained routines emit `fiducia.renew` dynamically. */
 export type LockStep =
   | "fiducia.acquire"
   | "fiducia.try_acquire"
+  | "fiducia.renew"
   | "fiducia.release"
   | "pg.begin"
   | "pg.advisory_xact_lock"
@@ -44,6 +45,7 @@ export type LockStep =
 export const ALL_STEPS: readonly LockStep[] = [
   "fiducia.acquire",
   "fiducia.try_acquire",
+  "fiducia.renew",
   "fiducia.release",
   "pg.begin",
   "pg.advisory_xact_lock",
@@ -64,9 +66,9 @@ export interface LockPlan {
 }
 
 /**
- * Compute the plan. Pure; identical across every language slice. `wait`
- * blocks each layer up to its budget; `!wait` uses the non-blocking form of
- * each acquisition and fails fast with `contention`.
+ * Compute the legacy plan. Pure; identical across every language slice.
+ * Maintained routines add renewal events dynamically and therefore do not
+ * change this deterministic matrix.
  */
 export function plan(layers: LockLayers, pgScope: PgScope, wait: boolean): LockPlan {
   const steps: LockStep[] = [];

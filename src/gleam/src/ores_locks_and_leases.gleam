@@ -3,10 +3,11 @@
 ////
 //// Two layers, each individually switchable through `Layers`: an outer
 //// fiducia-cloud lease (cross-host, TTL-bounded, fenced) and an inner
-//// Postgres advisory lock (transaction- or session-scoped). The order is the
-//// contract's and the same in every language slice:
+//// Postgres advisory lock (transaction- or session-scoped). The maintained
+//// transaction path renews Fiducia while waiting and immediately before
+//// commit:
 ////
-////     fiducia.acquire -> pg.begin -> pg.advisory_xact_lock -> work -> pg.commit -> fiducia.release
+////     fiducia.acquire -> pg.begin -> pg.try_advisory_xact_lock -> work -> fiducia.renew -> pg.commit -> fiducia.release
 ////
 //// This module is the dependency-free core: keys, the plan, errors, the
 //// `Lease` seam and `with_lease` (fiducia only / neither). The adapters live
@@ -136,10 +137,12 @@ pub fn pg_scope_from_string(value: String) -> Result(PgScope, Nil) {
   }
 }
 
-/// One action in a plan. The string forms are the contract's `LockStep`.
+/// One observable action. `FiduciaRenew` is emitted dynamically by maintained
+/// transactions and is intentionally absent from the legacy static plan.
 pub type Step {
   FiduciaAcquire
   FiduciaTryAcquire
+  FiduciaRenew
   FiduciaRelease
   PgBegin
   PgAdvisoryXactLock
@@ -155,6 +158,7 @@ pub type Step {
 pub const all_steps = [
   FiduciaAcquire,
   FiduciaTryAcquire,
+  FiduciaRenew,
   FiduciaRelease,
   PgBegin,
   PgAdvisoryXactLock,
@@ -171,6 +175,7 @@ pub fn step_to_string(step: Step) -> String {
   case step {
     FiduciaAcquire -> "fiducia.acquire"
     FiduciaTryAcquire -> "fiducia.try_acquire"
+    FiduciaRenew -> "fiducia.renew"
     FiduciaRelease -> "fiducia.release"
     PgBegin -> "pg.begin"
     PgAdvisoryXactLock -> "pg.advisory_xact_lock"
@@ -193,9 +198,9 @@ pub type Plan {
   Plan(layers: Layers, pg_scope: PgScope, wait: Bool, steps: List(Step))
 }
 
-/// Compute the plan. Pure; identical across every language slice. `wait`
-/// blocks each layer up to its budget; otherwise the non-blocking form of
-/// each acquisition is used and the routine fails fast with `Contention`.
+/// Compute the legacy plan. Pure; identical across every language slice.
+/// Maintained routines add renewal events dynamically without changing this
+/// deterministic matrix. `wait` selects blocking versus fail-fast semantics.
 pub fn plan(layers: Layers, pg_scope: PgScope, wait: Bool) -> Plan {
   let pick = fn(blocking: Step, non_blocking: Step) -> Step {
     case wait {
@@ -365,7 +370,8 @@ pub type AcquireOptions {
     ttl_ms: Int,
     /// Total time to keep waiting, in ms. Ignored when `wait` is `False`.
     wait_timeout_ms: Int,
-    /// Poll interval while waiting on the fiducia layer, in ms.
+    /// Poll interval while waiting on the fiducia and maintained PostgreSQL
+    /// advisory-lock layers, in ms.
     retry_interval_ms: Int,
     /// Caller identity for the fiducia layer; also the release key. `None`
     /// lets the adapter generate an unguessable id.
@@ -381,6 +387,55 @@ pub fn default_acquire_options() -> AcquireOptions {
     retry_interval_ms: 250,
     holder: None,
   )
+}
+
+/// Renewal cadence for a maintained Fiducia + PostgreSQL transaction.
+pub type LeaseMaintenanceOptions {
+  LeaseMaintenanceOptions(renew_interval_ms: Int)
+}
+
+pub fn default_lease_maintenance_options() -> LeaseMaintenanceOptions {
+  LeaseMaintenanceOptions(renew_interval_ms: 20_000)
+}
+
+/// Reject unsafe timing before either coordination layer is acquired.
+pub fn validate_lease_maintenance_options(
+  key: LockKey,
+  opts: AcquireOptions,
+  maintenance: LeaseMaintenanceOptions,
+  wait: Bool,
+) -> Result(Nil, LockError) {
+  case
+    opts.ttl_ms <= 0,
+    maintenance.renew_interval_ms <= 0,
+    maintenance.renew_interval_ms * 2 > opts.ttl_ms,
+    wait && opts.retry_interval_ms <= 0,
+    opts.wait_timeout_ms < 0
+  {
+    True, _, _, _, _ ->
+      Error(invalid_plan(key, "fiducia lease TTL must be greater than zero"))
+    _, True, _, _, _ ->
+      Error(invalid_plan(
+        key,
+        "fiducia renewal interval must be greater than zero",
+      ))
+    _, _, True, _, _ ->
+      Error(invalid_plan(
+        key,
+        "fiducia renewal interval must be no greater than half the TTL",
+      ))
+    _, _, _, True, _ ->
+      Error(invalid_plan(
+        key,
+        "PostgreSQL advisory-lock retry interval must be greater than zero when wait is enabled",
+      ))
+    _, _, _, _, True ->
+      Error(invalid_plan(
+        key,
+        "PostgreSQL advisory-lock wait timeout must not be negative",
+      ))
+    False, False, False, False, False -> Ok(Nil)
+  }
 }
 
 /// A held grant. The contract's `LeaseGrant`. `fencing_token` is minted on
@@ -451,6 +506,41 @@ pub fn acquire_lease(
     False -> FiduciaTryAcquire
   }
   lease.acquire(key, opts, wait) |> result.map_error(tag_step(_, step))
+}
+
+/// Renew and prove the authority returned the same key, holder, and fencing
+/// token. Any changed identity is `LostLease` at `fiducia.renew`.
+pub fn renew_checked(
+  lease: Lease,
+  grant: LeaseGrant,
+  ttl_ms: Int,
+) -> Result(LeaseGrant, LockError) {
+  use renewed <- result.try(
+    lease.renew(grant, ttl_ms)
+    |> result.map_error(tag_step(_, FiduciaRenew)),
+  )
+  let changed = case
+    key_to_string(renewed.key) != key_to_string(grant.key),
+    renewed.holder != grant.holder,
+    renewed.fencing_token != grant.fencing_token
+  {
+    True, _, _ -> Some("key")
+    _, True, _ -> Some("holder")
+    _, _, True -> Some("fencing token")
+    False, False, False -> None
+  }
+  case changed {
+    None -> Ok(renewed)
+    Some(field) ->
+      Error(LockError(
+        LostLease,
+        grant.key,
+        Some(FiduciaRenew),
+        "fiducia renewal changed the grant "
+          <> field
+          <> "; fenced authority cannot be proven",
+      ))
+  }
 }
 
 /// Release the lease and combine its outcome with the inner one.

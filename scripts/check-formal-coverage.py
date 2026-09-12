@@ -88,12 +88,17 @@ def main() -> int:
         "src/rust/plan.rs",
         "src/rust/lease.rs",
         "src/rust/coordinated.rs",
+        "src/rust/maintained.rs",
         "persistence/postgres/fencing.sql",
         "persistence/redis/fenced-write.lua",
         "src/go/fence.go",
+        "src/go/maintained.go",
         "src/ts/src/fence.ts",
+        "src/ts/src/maintained.ts",
         "src/dart/lib/src/fence.dart",
+        "src/dart/lib/src/maintained.dart",
         "src/gleam/src/ores_locks_and_leases/fence.gleam",
+        "src/gleam/src/ores_locks_and_leases/maintained.gleam",
     }
     for source in sorted(required_sources - classified_sources):
         errors.append(f"critical source has no formal classification: {source}")

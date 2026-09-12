@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/**/renewal*'
+      - 'src/**/maintained*'
       - 'src/rust/lib.rs'
       - 'src/ts/src/index.ts'
       - 'src/dart/lib/ores_locks_and_leases.dart'
@@ -13,6 +14,7 @@ on:
       - 'contracts/renewal/**'
       - 'docs/lease-renewal.md'
       - 'scripts/check-renewal-corpus.mjs'
+      - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/write-renewal-receipt.mjs'
       - 'scripts/test-all.sh'
       - '.github/workflows/renewal-supervisor.yml'
@@ -20,6 +22,7 @@ on:
     branches: [main]
     paths:
       - 'src/**/renewal*'
+      - 'src/**/maintained*'
       - 'src/rust/lib.rs'
       - 'src/ts/src/index.ts'
       - 'src/dart/lib/ores_locks_and_leases.dart'
@@ -29,6 +32,7 @@ on:
       - 'contracts/renewal/**'
       - 'docs/lease-renewal.md'
       - 'scripts/check-renewal-corpus.mjs'
+      - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/write-renewal-receipt.mjs'
       - 'scripts/test-all.sh'
       - '.github/workflows/renewal-supervisor.yml'
@@ -41,6 +45,9 @@ concurrency:
   group: renewal-supervisor-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   conformance:
     runs-on: ubuntu-24.04
@@ -49,14 +56,12 @@ jobs:
       - name: Check out the exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.EXPECTED_SHA }}
           persist-credentials: false
           fetch-depth: 1
           show-progress: false
 
       - name: Verify checked-out revision
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -120,13 +125,10 @@ jobs:
           git diff --exit-code -- src test
           gleam test
 
-      - name: Compare independently authored renewal authorities
+      - name: Enforce the independent renewal authorities with TJSV
         id: contracts
         continue-on-error: true
-        run: >-
-          npx --yes
-          --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz
-          ores-contracts check --config contracts/renewal/contracts.config.json
+        run: sh scripts/check-tjsv-contracts.sh renewal
 
       - name: Write the machine-readable exact-head receipt
         if: always()
@@ -140,11 +142,13 @@ jobs:
           CONTRACTS_OUTCOME: ${{ steps.contracts.outcome }}
         run: node scripts/write-renewal-receipt.mjs
 
-      - name: Retain the exact-head receipt
+      - name: Retain the exact-head receipt and TJSV evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: renewal-supervisor-receipt-${{ github.sha }}
-          path: target/renewal-supervisor/receipt.json
+          name: renewal-supervisor-receipt-${{ env.EXPECTED_SHA }}
+          path: |
+            target/renewal-supervisor/receipt.json
+            target/tjsv/renewal/
           if-no-files-found: error
           retention-days: 30

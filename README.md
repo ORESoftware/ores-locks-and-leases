@@ -6,7 +6,7 @@ switchable, plus **application-side fencing** that prevents an expired holder
 from overwriting work committed by a newer holder.
 
 ```text
-fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► fenced work ─► pg.commit ─► fiducia.release
+fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► fenced work ─► fiducia.renew ─► pg.commit ─► fiducia.release
 ```
 
 One zed package ships five runtime slices—Rust, Go, TypeScript, Dart/Flutter,
@@ -32,24 +32,49 @@ coordination or fencing rules.
 
 ## Lock routines
 
-Every runtime exposes the same three routines:
+Every runtime exposes the same coordination families:
 
+- **`with_maintained_xact_lock`**: a Fiducia lease around a PostgreSQL
+  transaction-scoped advisory lock, with renewal while lock acquisition and
+  work are pending and one final renewal required before commit. Use this for
+  PostgreSQL mutations that can approach or exceed the initial lease TTL.
 - **`with_xact_lock`**: optional Fiducia lease around
   `pg_advisory_xact_lock`, inside a transaction opened around the caller's
-  work. This is the default for PostgreSQL mutations.
+  work. This compatibility path does not maintain the outer lease; use it only
+  for tightly bounded work that is guaranteed to finish well inside the TTL.
 - **`with_session_lock`**: optional Fiducia lease around
   `pg_advisory_lock`/`pg_advisory_unlock` on one dedicated physical
   connection. No transaction is opened automatically.
 - **`with_lease`**: Fiducia only, for non-PostgreSQL work or callers that own
   their transaction boundary.
 
-Each routine accepts switchable `LockLayers`, a transaction/session scope, and
-blocking versus fail-fast acquisition. Fiducia is always outermost; the
-database lock sits inside it; work is innermost.
+Fiducia is always outermost; the database lock sits inside it; work is
+innermost. The maintained transaction path uses bounded
+`pg_try_advisory_xact_lock` polling so lease loss can interrupt lock contention
+instead of waiting indefinitely inside one database call.
 
-Lease renewal is explicit. Work approaching the configured TTL must renew
-before expiry and stop producing effects when renewal fails. A successful
-renewal keeps the same fencing token. A new grant receives a larger token.
+### Maintained transaction admission
+
+`LeaseMaintenanceOptions.renewIntervalMs` must be positive and no greater than
+half of the configured Fiducia TTL. Implementations reject unsafe timing before
+acquiring either layer.
+
+Every maintained renewal must return the same lock key, holder, and fencing
+token. A changed field means the caller can no longer prove it owns the same
+fenced grant and the transaction is rolled back. After work settles, one final
+synchronous renewal is mandatory before PostgreSQL commit. A timeout,
+transport ambiguity, rejected renewal, changed grant identity, cancellation,
+or work failure prevents commit and releases the outer grant after rollback.
+
+Rust drops the pending work future on renewal loss. Go cancels the work
+`context.Context`; TypeScript aborts `guarded.signal`; Dart completes
+`guarded.signal.whenCancelled`. Long-running work should cooperate with the
+runtime's cancellation signal and must execute protected SQL through the
+transaction supplied by the guard. External side effects are not transactional
+and should use an outbox or another fenced/idempotent boundary.
+
+See [`docs/maintained-xact-locks.md`](docs/maintained-xact-locks.md) for the
+state machine, timing rules, and runtime examples.
 
 ## Fencing is mandatory for guarded writes
 

@@ -68,6 +68,12 @@ git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \
   | grep -q '^\[workspace\]$'
 git -C "$fixture" show "$generated_commit:locks/rust/Cargo.toml" \
   | grep -q '^resolver = "3"$'
+# The authored Draft 2020-12 peer must use the same sealing spelling as
+# TypeSpec Schema B. `additionalProperties: false` is behaviorally redundant
+# beside `unevaluatedProperties: false`, but TJSV intentionally rejects the
+# structural mismatch instead of choosing one authority as the winner.
+git -C "$fixture" show "$generated_commit:locks/contracts/json-schema/contract.schema.json" \
+  | python3 "$repo_root/scripts/check-generated-contract-sealing.py" -
 if git -C "$fixture" show "$generated_commit:.zpkg.toml" | grep -q 'PARKED_BRANCH_MANIFEST'; then
   echo "generated branch inherited the parked checkout instead of --base-ref" >&2
   exit 1

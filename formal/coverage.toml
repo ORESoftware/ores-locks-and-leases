@@ -4,7 +4,7 @@ repository = "ORESoftware/ores-locks-and-leases"
 [policy]
 statuses = ["planned", "modeling", "active", "deferred"]
 claim_classes = ["typechecked-specification", "bounded-exhaustive-verification", "implementation-replay", "differential-replay", "symbolic-bitvector-verification", "finite-exhaustive-abstraction"]
-counterexamples = "Retain minimized token, identity, crash, layer-order, SQL, Redis, and abstract-lifecycle traces and convert each real defect into a deterministic production regression."
+counterexamples = "Retain minimized token, identity, crash, layer-order, SQL, Redis, TTL-continuity, and abstract-lifecycle traces and convert each real defect into a deterministic production regression."
 
 [[target]]
 id = "independent-lease-fencing-lifecycle"
@@ -81,6 +81,36 @@ source_paths = [
 evidence_paths = ["conformance/cases/fence-decision.json", "scripts/test-all.sh"]
 bounds = ["shared canonical corpus including uint64 maximum, replay, stale, token reuse, and malformed inputs"]
 assumptions = ["language runtime integer/string semantics match the exercised corpus outside provider-specific transport layers"]
+
+[[target]]
+id = "maintained-transaction-commit-admission"
+risk = "critical"
+status = "active"
+claim_classes = ["finite-exhaustive-abstraction", "implementation-replay"]
+source_paths = [
+  "src/rust/maintained.rs",
+  "src/go/maintained.go",
+  "src/ts/src/maintained.ts",
+  "src/dart/lib/src/maintained.dart",
+  "src/gleam/src/ores_locks_and_leases/maintained.gleam",
+]
+evidence_paths = [
+  "formal/maintained-model.mjs",
+  "formal/PROCEDURE.md",
+  "docs/maintained-xact-locks.md",
+  ".github/workflows/formal-state-machines.yml",
+]
+bounds = [
+  "at most two successful periodic renewals and two PostgreSQL advisory-lock contention retries before each finite terminal branch",
+  "878 reachable states, 889 transitions, and 568 terminal outcomes in the reviewed local run",
+]
+assumptions = [
+  "the final renewal completes immediately before the PostgreSQL commit call",
+  "the datastore still atomically admits the unchanged fencing token with every protected mutation",
+  "transport and database adapters expose the documented failure classifications",
+  "every runtime rejects an acquired or renewed effective TTL that differs from the configured acquisition TTL before commit",
+  "authority deadline continuity is enforced by the separate renewal supervisor when callers require that stronger metadata guarantee",
+]
 
 [[target]]
 id = "cleanup-error-precedence"

@@ -30,12 +30,14 @@ const (
 	ScopeSession PgScope = "session"
 )
 
-// Step is one action in a Plan. The values are the contract's LockStep enum.
+// Step is one observable action. Maintained routines emit
+// StepFiduciaRenew dynamically without changing the legacy Plan matrix.
 type Step string
 
 const (
 	StepFiduciaAcquire        Step = "fiducia.acquire"
 	StepFiduciaTryAcquire     Step = "fiducia.try_acquire"
+	StepFiduciaRenew          Step = "fiducia.renew"
 	StepFiduciaRelease        Step = "fiducia.release"
 	StepPgBegin               Step = "pg.begin"
 	StepPgAdvisoryXactLock    Step = "pg.advisory_xact_lock"
@@ -56,9 +58,10 @@ type Plan struct {
 	Steps   []Step
 }
 
-// MakePlan computes the plan. Pure; identical across every language slice.
-// wait=true blocks each layer up to its budget; wait=false uses the
-// non-blocking acquisition of each layer and fails fast with KindContention.
+// MakePlan computes the legacy plan. Pure; identical across every language
+// slice. Maintained routines add renewal events dynamically and therefore do
+// not change this deterministic matrix. wait=true blocks each layer up to its
+// budget; wait=false uses nonblocking acquisition and fails with contention.
 func MakePlan(layers Layers, scope PgScope, wait bool) Plan {
 	steps := make([]Step, 0, 6)
 	pick := func(blocking, nonBlocking Step) Step {

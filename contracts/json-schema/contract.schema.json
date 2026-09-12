@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ORESoftware/ores-locks-and-leases/contracts/json-schema/contract.schema.json",
-  "$comment": "ores-locks-and-leases \u2014 JSON Schema authority. Independent peer of contracts/typespec/main.tsp (ORESoftware/ores-contracts): neither is generated from the other; `npx ores-contracts check` must find them equivalent.",
+  "$comment": "ores-locks-and-leases — JSON Schema authority. Independent peer of contracts/typespec/main.tsp (ORESoftware/ores-contracts): neither is generated from the other; `npx ores-contracts check` must find them equivalent.",
   "x-ores-namespace": "Ores.LocksAndLeases",
   "$defs": {
     "LockKey": {
@@ -184,6 +184,7 @@
       "enum": [
         "fiducia.acquire",
         "fiducia.try_acquire",
+        "fiducia.renew",
         "fiducia.release",
         "pg.begin",
         "pg.advisory_xact_lock",
@@ -195,12 +196,12 @@
         "pg.advisory_unlock",
         "work"
       ],
-      "description": "The ordered actions a routine performs for a given LockLayers / PgScope / wait tuple. Matrix: conformance/cases/lock-plan.json."
+      "description": "One observable action in a lock routine. Maintained transactions may emit fiducia.renew dynamically without changing the legacy static lock-plan matrix."
     },
     "LockPlan": {
       "type": "object",
       "unevaluatedProperties": false,
-      "description": "A pure function of the inputs; every implementation must produce the same steps.",
+      "description": "A pure function of the inputs; every implementation must produce the same steps. Dynamic maintenance renewals are intentionally not included.",
       "properties": {
         "layers": {
           "$ref": "#/$defs/LockLayers"
@@ -233,15 +234,15 @@
       "properties": {
         "ttlMs": {
           "type": "integer",
-          "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released."
+          "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released. Fixed-cadence maintained transactions require every authority response to report this exact effective TTL."
         },
         "waitTimeoutMs": {
           "type": "integer",
-          "description": "Time to poll the fiducia authority before giving up, in milliseconds. PostgreSQL blocking waits use that session's lock_timeout/statement_timeout; ignored when wait is false."
+          "description": "Time to poll the fiducia authority before giving up, in milliseconds. Maintained PostgreSQL waits use this as their bounded advisory-lock budget; ignored when wait is false."
         },
         "retryIntervalMs": {
           "type": "integer",
-          "description": "Poll interval while waiting on the fiducia layer, in milliseconds."
+          "description": "Poll interval while waiting on the fiducia or maintained PostgreSQL advisory-lock layer, in milliseconds."
         },
         "holder": {
           "type": "string",
@@ -252,6 +253,19 @@
         "ttlMs",
         "waitTimeoutMs",
         "retryIntervalMs"
+      ]
+    },
+    "LeaseMaintenanceOptions": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "description": "Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer. The acquired grant and every renewal must preserve the exact acquisition TTL; drift is lost_lease because the fixed cadence cannot safely assume the old duration.",
+      "properties": {
+        "renewIntervalMs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "renewIntervalMs"
       ]
     },
     "LeaseGrant": {
@@ -273,7 +287,8 @@
           "description": "Absolute expiry in Unix milliseconds when the authority reports it."
         },
         "ttlMs": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Effective authority TTL in milliseconds. Fixed-cadence maintained transactions require this to equal the requested acquisition TTL on acquisition and every renewal."
         }
       },
       "required": [
@@ -294,7 +309,7 @@
         "work",
         "invalid_plan"
       ],
-      "description": "Why an acquisition or guarded run failed. contention: a layer is held by someone else and wait was false. timeout: the wait budget elapsed. lost_lease: the fiducia lease could not be renewed or was reaped \u2014 fenced authority is lost and the guarded work must not continue. transport: transport/HTTP failure talking to the lease authority; ownership is unknown. database: the database refused the advisory-lock statement, the transaction, or the connection. work: the caller's work returned an error; outer layers were still released/rolled back. invalid_plan: the inputs cannot be planned."
+      "description": "Why an acquisition or guarded run failed. contention: a layer is held by someone else and wait was false. timeout: the wait budget elapsed. lost_lease: the fiducia lease could not be renewed or was reaped — fenced authority is lost and the guarded work must not continue. transport: transport/HTTP failure talking to the lease authority; ownership is unknown. database: the database refused the advisory-lock statement, the transaction, or the connection. work: the caller's work returned an error; outer layers were still released/rolled back. invalid_plan: the inputs cannot be planned, including an unsafe renewal cadence."
     },
     "LockError": {
       "type": "object",

@@ -13,6 +13,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 vendor_parent="$scratch/locks/.vendor/.zed/oresoftware"
+tjsv_commit=dfc28bfc000faba5a963f23c708171dfd5f8debf
+tjsv_package="https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsv_commit}.tar.gz"
+generated_declarations='["Preflight.Locks.LockCatalog","Preflight.Locks.LockCatalogEntry","Preflight.Locks.LockDomain","Preflight.Locks.LockLayers","Preflight.Locks.PgScope"]'
 
 # Reproduce a lib-core whose repository root is a virtual Cargo workspace.
 # Without an explicit workspace in locks/rust/Cargo.toml, Cargo rejects the
@@ -87,12 +90,120 @@ log "Gleam"
   gleam test
 )
 
-log "TypeSpec and JSON Schema"
+log "TypeSpec and JSON Schema peer authorities"
 (
   cd "$scratch/locks"
   npx --yes \
     --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz \
     ores-contracts check --config contracts/contracts.config.json
+
+  mkdir -p target/tjsv/generated-consumer/generated-schema-b
+  npx --yes --package="$tjsv_package" tjsv check \
+    --typespec=contracts/typespec/main.tsp \
+    --schema=contracts/json-schema/contract.schema.json \
+    --report=target/tjsv/generated-consumer/report.json \
+    --sarif=target/tjsv/generated-consumer/report.sarif \
+    --contract-ir=target/tjsv/generated-consumer/contract-ir.json \
+    --output-dir=target/tjsv/generated-consumer/generated-schema-b \
+    --bundle-id=generated-consumer.typespec.generated.schema.json \
+    --int64-strategy=number \
+    --seal-object-schemas=true \
+    --probes=true \
+    --max-probes=128
+
+  npx --yes --package="$tjsv_package" tjsv verify-ir \
+    --contract-ir=target/tjsv/generated-consumer/contract-ir.json \
+    --parity-receipt=target/tjsv/generated-consumer/report.json \
+    --typespec=contracts/typespec/main.tsp \
+    --generated-schema=target/tjsv/generated-consumer/generated-schema-b/generated-consumer.typespec.generated.schema.json \
+    --schema=contracts/json-schema/contract.schema.json \
+    --expected-declarations="$generated_declarations" \
+    --verification=target/tjsv/generated-consumer/consumer-verification.json
+
+  node - \
+    target/tjsv/generated-consumer/report.json \
+    target/tjsv/generated-consumer/contract-ir.json \
+    target/tjsv/generated-consumer/consumer-verification.json \
+    "$generated_declarations" <<'NODE'
+import { readFileSync } from "node:fs";
+
+const [reportPath, irPath, verificationPath, expectedJson] = process.argv.slice(2);
+const report = JSON.parse(readFileSync(reportPath, "utf8"));
+const contractIr = JSON.parse(readFileSync(irPath, "utf8"));
+const verification = JSON.parse(readFileSync(verificationPath, "utf8"));
+const digestPattern = /^[0-9a-f]{64}$/u;
+const summary = report.differential?.summary;
+
+function normalizedIds(value, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new Error(`${label} is not a nonempty declaration list`);
+  }
+  const sorted = [...value].sort();
+  if (new Set(sorted).size !== sorted.length) {
+    throw new Error(`${label} contains duplicate declarations`);
+  }
+  return sorted;
+}
+
+const expected = normalizedIds(JSON.parse(expectedJson), "expected generated scope");
+
+if (
+  report.status !== "passed" ||
+  report.zeroUnexplainedFindings !== true ||
+  !digestPattern.test(report.runId ?? "") ||
+  report.differential?.disabled === true ||
+  summary === null ||
+  typeof summary !== "object" ||
+  summary.probesEvaluated <= 0 ||
+  summary.divergences !== 0 ||
+  summary.refusals !== 0
+) {
+  throw new Error("generated consumer contract did not pass TJSV differential admission");
+}
+
+const admitted = normalizedIds(
+  contractIr.declarations?.map((entry) => entry.id),
+  "generated Contract IR scope",
+);
+if (
+  contractIr.status !== "passed" ||
+  contractIr.admissible !== true ||
+  contractIr.role !== "downstream-derived-parity-artifact" ||
+  contractIr.editableAuthority !== false ||
+  !digestPattern.test(contractIr.irId ?? "") ||
+  contractIr.authorities?.typespec !== "independently-authored" ||
+  contractIr.authorities?.jsonSchema !== "independently-authored" ||
+  contractIr.authorities?.generatedJsonSchema !== "comparison-evidence-only" ||
+  contractIr.authorities?.precedence !== "none" ||
+  contractIr.admission?.receipt?.runId !== report.runId ||
+  contractIr.admission?.scope?.complete !== true ||
+  JSON.stringify(admitted) !== JSON.stringify(expected)
+) {
+  throw new Error("generated consumer Contract IR was not admitted over its exact declaration scope");
+}
+
+const verified = normalizedIds(
+  verification.declarationIds,
+  "generated consumer verification scope",
+);
+if (
+  verification.status !== "passed" ||
+  verification.admissible !== true ||
+  !digestPattern.test(verification.verificationId ?? "") ||
+  verification.suppliedIrId !== contractIr.irId ||
+  verification.computedIrId !== contractIr.irId ||
+  verification.expectedIrId !== contractIr.irId ||
+  verification.receiptRunId !== report.runId ||
+  verification.failureCode !== null ||
+  JSON.stringify(verified) !== JSON.stringify(expected)
+) {
+  throw new Error("generated consumer canonical verify-ir receipt was not admissible");
+}
+NODE
 )
 
 log "all generated runtime, contract, and fencing-asset checks passed"
