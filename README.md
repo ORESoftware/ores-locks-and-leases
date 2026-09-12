@@ -30,6 +30,20 @@ Every `*-lib-core` consumes this repository through zed-pkg and wraps lock keys
 with its own `<org>/<domain>/<name>` prefix rather than reimplementing the
 coordination or fencing rules.
 
+The `templates/lib-core/gen_org_locks.py` generator emits consumer runtime
+packages under `locks/langs/{rust,typescript,dart,gleam,golang}`. Its Zed
+targets, Go module identity, and vendored dependency paths use that layout.
+The catalog and its independent TypeSpec and JSON Schema peers stay under
+`locks/`; generated comparison artifacts retain their existing output paths.
+
+If a consumer still has `locks/rust`, `locks/typescript`, `locks/dart`,
+`locks/gleam`, or `locks/golang`, generation refuses before writing anything.
+First review and migrate that consumer's unique source and all dependent
+paths in its own PR. The generator neither deletes legacy work nor creates
+a second copy alongside it. `--commit --base-ref` checks the selected commit
+and leaves a parked checkout untouched. `--stdout` previews the canonical
+file list without changing the repository.
+
 ## Lock routines
 
 Every runtime exposes the same coordination families:
