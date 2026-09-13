@@ -87,7 +87,7 @@ test("Redis REST client uses one cluster slot and decimal u64 tokens", async () 
   const fenceTag = fenceRedisKey.match(/\{([^}]+)\}/)?.[1];
   assert.ok(lockTag);
   assert.equal(lockTag, fenceTag);
-  assert.equal(commands[1][6], "18446744073709551615");
+  assert.equal(commands[1][5], "18446744073709551615");
   assert.equal(commands[2][5], "18446744073709551615");
 });
 
