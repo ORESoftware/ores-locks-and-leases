@@ -3,10 +3,11 @@
 -- ARGV[1] holder, ARGV[2] TTL milliseconds.
 -- Both keys MUST share one Redis Cluster hash tag.
 --
--- Returns {1, token, pttl} when acquired/replayed or {0, '', pttl} on
--- contention. Re-acquiring with the current holder replays the existing grant
--- without extending its TTL or minting another fencing token. This lets callers
--- recover safely from an ambiguous transport result.
+-- Returns {1, token, pttl, replayed} when acquired/replayed or
+-- {0, '', pttl, 0} on contention. `replayed` is 1 only when an active grant for
+-- the same holder is returned. Re-acquiring with the current holder never
+-- extends its TTL or mints another fencing token; clients can follow a replay
+-- with explicit token-bound renewal before exposing authority to guarded work.
 --
 -- The counter is a decimal string and is incremented digit-by-digit so Redis
 -- Lua double precision never participates in fencing-token arithmetic.
@@ -27,9 +28,9 @@ if redis.call('EXISTS', lock_key) == 1 then
     return redis.error_reply('ores-locks: corrupt active lease')
   end
   if current_holder == holder then
-    return {1, current_token, pttl}
+    return {1, current_token, pttl, 1}
   end
-  return {0, '', pttl}
+  return {0, '', pttl, 0}
 end
 
 local current = redis.call('GET', fence_key) or '0'
@@ -65,4 +66,4 @@ end
 redis.call('SET', fence_key, next_token)
 redis.call('HSET', lock_key, 'holder', holder, 'token', next_token)
 redis.call('PEXPIRE', lock_key, ttl_ms)
-return {1, next_token, redis.call('PTTL', lock_key)}
+return {1, next_token, redis.call('PTTL', lock_key), 0}
