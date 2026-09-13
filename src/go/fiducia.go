@@ -16,16 +16,16 @@ import (
 	"time"
 )
 
-// FiduciaLease is a Lease over the fiducia-cloud node HTTP protocol, using
-// only net/http. It speaks the same three endpoints the official clients do
-// (/v1/locks/acquire, /v1/locks/renew, /v1/locks/release) with the same
-// headers, so a service that already holds a *fiducia.Client can keep it for
-// everything else and hand this adapter the same base URL and credentials.
+const maxFiduciaErrorBody = 8 << 10
+
+// FiduciaLease is a Lease over the fiducia-cloud lock HTTP protocol, using
+// only net/http. It keeps the small Lease abstraction while matching the
+// current fiducia-clients wire contract: one request identity per logical
+// acquisition, explicit wait budget, keys[] renewal, and token-scoped release.
 //
-// The node never holds a request open: acquire returns at once with
-// acquired=false when the key is held, so the client owns the wait. This
-// adapter polls at opts.RetryInterval until the grant arrives or
-// opts.WaitTimeout elapses.
+// Hosted traffic should use the public edge/load-balancer endpoint so Fiducia's
+// HTTP idempotency/replay boundary stays in front of the node. NewFiduciaInternal
+// is only for a trusted in-cluster hop.
 type FiduciaLease struct {
 	base       string
 	http       *http.Client
@@ -84,7 +84,11 @@ type fiduciaHTTPError struct {
 }
 
 func (e *fiduciaHTTPError) Error() string {
-	return fmt.Sprintf("fiducia: HTTP %d: %s", e.status, bytes.TrimSpace(e.body))
+	body := bytes.TrimSpace(e.body)
+	if len(body) > maxFiduciaErrorBody {
+		body = body[:maxFiduciaErrorBody]
+	}
+	return fmt.Sprintf("fiducia: HTTP %d: %s", e.status, body)
 }
 
 // post sends body and returns result.output, or a fiduciaHTTPError on a
@@ -173,9 +177,9 @@ func transportErr(key LockKey, err error) *Error {
 	return newError(KindTransport, key, "", err.Error(), err)
 }
 
-// GeneratedHolder is an unguessable holder identity. Holder names
-// participate in queue identity and cancellation authority, so a pid/counter
-// is not enough.
+// GeneratedHolder is an unguessable holder identity. Holder names participate
+// in ownership and queue identity; callers with a stable service identity may
+// still supply AcquireOptions.Holder explicitly.
 func GeneratedHolder() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -184,27 +188,66 @@ func GeneratedHolder() string {
 	return "ores-locks-" + hex.EncodeToString(b[:])
 }
 
+// generatedRequestID returns a per-acquisition identity separate from holder.
+// A stable request id across polls is what lets Fiducia preserve FIFO position
+// and deduplicate retries.
+func generatedRequestID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("fiducia: secure request-id generation failed: %w", err)
+	}
+	return "ores-lock-request-" + hex.EncodeToString(b[:]), nil
+}
+
 // Acquire implements Lease.
 func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOptions, wait bool) (LeaseGrant, error) {
 	holder := opts.Holder
 	if holder == "" {
 		holder = GeneratedHolder()
 	}
+	requestID, err := generatedRequestID()
+	if err != nil {
+		return LeaseGrant{}, transportErr(key, err)
+	}
 	ttlMs := opts.TTL.Milliseconds()
 	started := time.Now()
+	attempt := 0
 	for {
-		out, err := f.post(ctx, "/v1/locks/acquire", map[string]any{"key": string(key), "holder": holder, "ttl_ms": ttlMs})
+		body := map[string]any{
+			"key":        string(key),
+			"holder":     holder,
+			"ttl_ms":     ttlMs,
+			"wait":       wait,
+			"request_id": requestID,
+		}
+		if wait {
+			body["wait_timeout_ms"] = opts.WaitTimeout.Milliseconds()
+		}
+		out, err := f.post(ctx, "/v1/locks/acquire", body)
 		if err != nil {
+			// Transport failure means ownership is unknown. Never collapse it to
+			// contention or continue guarded work.
 			return LeaseGrant{}, transportErr(key, err)
 		}
 		if outBool(out, "acquired") {
 			token, ok := outUint(out, "fencing_token")
-			if !ok {
-				return LeaseGrant{}, transportErr(key, errors.New("fiducia: acquired without a fencing token"))
+			if !ok || token == 0 {
+				return LeaseGrant{}, transportErr(key, errors.New("fiducia: acquired without a positive fencing token"))
 			}
 			grant := LeaseGrant{Key: key, Holder: holder, FencingToken: token, TTLMs: ttlMs}
 			if exp, ok := outUint(out, "lease_expires_ms"); ok {
 				grant.LeaseExpiresMs = int64(exp)
+			}
+			// A retry-discovered grant may have aged before this response. Match
+			// the official high-level clients and prove current authority with a
+			// fenced renewal before returning it to application work.
+			renewed, renewalReported := out["renewed"].(bool)
+			if attempt > 0 || (renewalReported && !renewed) {
+				confirmed, renewErr := f.Renew(ctx, grant, opts.TTL)
+				if renewErr != nil {
+					return LeaseGrant{}, renewErr
+				}
+				grant = confirmed
 			}
 			return grant, nil
 		}
@@ -215,6 +258,7 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 		if waited+opts.RetryInterval > opts.WaitTimeout {
 			return LeaseGrant{}, timeout(key, StepFiduciaAcquire, waited.Milliseconds())
 		}
+		attempt++
 		select {
 		case <-ctx.Done():
 			return LeaseGrant{}, transportErr(key, ctx.Err())
@@ -223,11 +267,16 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 	}
 }
 
-// Renew implements Lease. renewed=false is lost fenced authority: fiducia
-// has already reaped the grant and may have promoted another holder.
+// Renew implements Lease. renewed=false is lost fenced authority: fiducia has
+// already reaped the grant and may have promoted another holder.
 func (f *FiduciaLease) Renew(ctx context.Context, grant LeaseGrant, ttl time.Duration) (LeaseGrant, error) {
 	ttlMs := ttl.Milliseconds()
-	out, err := f.post(ctx, "/v1/locks/renew", map[string]any{"key": string(grant.Key), "holder": grant.Holder, "fencing_token": grant.FencingToken, "ttl_ms": ttlMs})
+	out, err := f.post(ctx, "/v1/locks/renew", map[string]any{
+		"keys":          []string{string(grant.Key)},
+		"holder":        grant.Holder,
+		"fencing_token": grant.FencingToken,
+		"ttl_ms":        ttlMs,
+	})
 	if err != nil {
 		return grant, transportErr(grant.Key, err)
 	}
@@ -242,9 +291,13 @@ func (f *FiduciaLease) Renew(ctx context.Context, grant LeaseGrant, ttl time.Dur
 	return renewed, nil
 }
 
-// Release implements Lease.
+// Release implements Lease. The current lock contract releases the whole grant
+// by holder + fencing token; a member key is intentionally not required.
 func (f *FiduciaLease) Release(ctx context.Context, grant LeaseGrant) (bool, error) {
-	out, err := f.post(ctx, "/v1/locks/release", map[string]any{"key": string(grant.Key), "holder": grant.Holder, "fencing_token": grant.FencingToken})
+	out, err := f.post(ctx, "/v1/locks/release", map[string]any{
+		"holder":        grant.Holder,
+		"fencing_token": grant.FencingToken,
+	})
 	if err != nil {
 		return false, transportErr(grant.Key, err)
 	}
