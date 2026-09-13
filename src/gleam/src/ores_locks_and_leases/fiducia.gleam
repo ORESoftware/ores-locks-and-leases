@@ -3,7 +3,7 @@
 //// This keeps the small local Lease abstraction while matching the current
 //// fiducia-clients wire contract: one request identity per logical acquire,
 //// explicit wait budget, `keys[]` renewal, and token-scoped release.
-//// Hosted traffic should use the public edge/load balancer; direct node access
+//// Hosted traffic should use the public edge load balancer; direct node access
 //// is only for a trusted internal hop.
 
 import gleam/dynamic/decode
@@ -301,10 +301,7 @@ pub fn renew(
 ) -> Result(core.LeaseGrant, core.LockError) {
   let body =
     json.object([
-      #(
-        "keys",
-        json.array([core.key_to_string(grant.key)], json.string),
-      ),
+      #("keys", json.array([core.key_to_string(grant.key)], json.string)),
       #("holder", json.string(grant.holder)),
       #("fencing_token", json.int(grant.fencing_token)),
       #("ttl_ms", json.int(ttl_ms)),
