@@ -19,6 +19,36 @@ names mean **outer fenced lease authority**, whether the concrete backend is
 Fiducia, Cloudflare Durable Objects, or Redis. This avoids a breaking rename
 across five runtimes while making the authority replaceable now.
 
+## Durable Object design rules
+
+Cloudflare Durable Objects are the primary implementation reference for the
+managed-authority shape. The important ideas are broader than Cloudflare itself:
+
+- choose the smallest **atom of coordination** that can own a correctness
+  decision. For a simple ORES lock that is one lock key, so one key maps to one
+  Durable Object. For Fiducia union locks the atom is the overlapping conflict
+  domain, not an individual key; blindly sharding `{a,b}` and `{b,c}` to separate
+  authorities would break mutual exclusion;
+- keep authoritative state durable. In-memory state is cache only and may vanish
+  on hibernation, restart, deployment, or failover;
+- serialize read/modify/write transitions through one authority and its
+  transactional storage. Do not recreate a second independent lock in the
+  Worker/client layer;
+- alarms/timers are **cleanup and wake-up mechanisms, never the lease clock**.
+  Every acquire, renew, release, and guarded read re-checks persisted expiry.
+  Alarm delivery may be delayed or repeated without extending authority;
+- make retries idempotent. Re-acquiring an active lease with the same holder
+  replays the existing token and expiry without extending the lease. Clients
+  recovering such a replay perform an explicit token-bound renew before exposing
+  the grant to protected work;
+- treat restart and transport ambiguity as normal distributed-system events.
+  A lost response is not contention and not proof that acquisition failed;
+- bound request sizes and identity fields before they reach the authority, and
+  fail closed on fencing exhaustion rather than wrapping/reusing a token;
+- design backpressure as part of deterministic authority semantics. Local memory
+  pressure or one process's queue length must not create a different ownership
+  decision on another replica.
+
 ## Cloudflare Durable Objects
 
 A deployable authority is in `managed/cloudflare-do`. It maps every lock key to
@@ -31,10 +61,18 @@ Properties:
 - acquire/renew/release state transitions execute against strongly consistent
   object-local storage;
 - the fencing counter survives lease release and expiry;
-- the counter is stored and returned as decimal text so JavaScript never rounds
-  unsigned-64 tokens;
-- an alarm reaps expired holder state, but acquisition also checks expiry, so a
-  delayed alarm cannot keep an expired grant authoritative;
+- fencing tokens are positive and capped at `9007199254740991`, JavaScript's
+  largest exactly representable integer and the same public ceiling used by
+  fiducia-cloud. The Worker keeps decimal text on its existing JSON boundary for
+  compatibility, but values above the ceiling are neither accepted nor minted;
+- re-acquiring with the active holder replays the existing token without
+  extending authority; the TypeScript adapter follows a replay with explicit
+  token-bound renewal before returning the grant;
+- an alarm reaps expired holder state, but every mutation also checks expiry, so
+  delayed or at-least-once alarm delivery cannot keep an expired grant
+  authoritative;
+- key, holder, optional request id, request body, and TTL are bounded before
+  state mutation;
 - renew and release match both holder and fencing token;
 - the public Worker fails closed if `ORES_LOCKS_API_TOKEN` is absent unless
   `ALLOW_UNAUTHENTICATED=true` is explicitly configured for development.
@@ -96,11 +134,12 @@ The braces are intentional: both keys land in one Redis Cluster hash slot so
 `EVAL` remains legal and atomic. The `:fence` key has **no TTL**. It is the
 monotonic authority watermark and must survive every lease expiry/release.
 
-The acquire script does not use `tonumber` and does not use `INCR`. Redis Lua
-numbers are doubles and `INCR` is signed-64; either choice would narrow the
-repository's unsigned-64 fencing contract. Instead, the script increments the
-counter digit-by-digit as decimal text and rejects overflow above
-`18446744073709551615`.
+The acquire script does not use `tonumber` for fencing arithmetic and does not
+use `INCR`. Redis Lua numbers are doubles, so fencing arithmetic is performed
+digit-by-digit as decimal text. The script rejects the next token above
+`9007199254740991`, matching Cloudflare DO, Fiducia, TypeSpec, and JSON Schema.
+It also treats a same-holder retry as an idempotent replay rather than minting a
+second token or extending the lease.
 
 TypeScript / Upstash:
 
