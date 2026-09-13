@@ -1,5 +1,5 @@
 {
-  "$comment": "Cross-runtime fencing decision corpus. Tokens are positive canonical decimal strings in the exact JSON integer domain 1..9007199254740991; payloadSha256 is lowercase hex.",
+  "$comment": "Cross-runtime fencing decision corpus. Tokens are canonical unsigned-64 decimal strings; payloadSha256 is lowercase hex.",
   "cases": [
     {
       "name": "first grant advances an absent watermark",
@@ -150,27 +150,27 @@
       }
     },
     {
-      "name": "largest exact JSON integer fencing token remains exact",
+      "name": "full unsigned 64 bit maximum remains exact",
       "current": {
         "tenantScope": "tenant/acme",
         "resourceKey": "example/jobs/rebuild",
-        "fencingToken": "9007199254740990",
+        "fencingToken": "18446744073709551614",
         "operationId": "op-max-minus-one",
         "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       },
       "incoming": {
         "tenantScope": "tenant/acme",
         "resourceKey": "example/jobs/rebuild",
-        "fencingToken": "9007199254740991",
+        "fencingToken": "18446744073709551615",
         "operationId": "op-max",
         "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       },
       "expected": {
         "kind": "advanced",
         "shouldApply": true,
-        "incomingToken": "9007199254740991",
-        "currentToken": "9007199254740991",
-        "previousToken": "9007199254740990"
+        "incomingToken": "18446744073709551615",
+        "currentToken": "18446744073709551615",
+        "previousToken": "18446744073709551614"
       }
     },
     {
@@ -194,7 +194,6 @@
   ],
   "invalidTokens": [
     "",
-    "0",
     "00",
     "01",
     "+1",
@@ -202,8 +201,6 @@
     "1.0",
     " 1",
     "1 ",
-    "9007199254740992",
-    "18446744073709551615",
     "18446744073709551616",
     "99999999999999999999",
     "not-a-token"
