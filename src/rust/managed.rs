@@ -164,7 +164,10 @@ where
         let holder = opts.holder.clone().unwrap_or_else(generated_holder);
         let ttl_ms = opts.ttl_ms();
         if ttl_ms == 0 {
-            return Err(LockError::invalid_plan(key, "managed lease ttl must be positive"));
+            return Err(LockError::invalid_plan(
+                key,
+                "managed lease ttl must be positive",
+            ));
         }
 
         let started = Instant::now();
@@ -199,7 +202,7 @@ where
                             duration_ms(waited),
                         ));
                     }
-                    tokio_sleep(opts.retry_interval).await;
+                    portable_sleep(opts.retry_interval).await;
                 }
             }
         }
@@ -227,7 +230,10 @@ where
             ManagedRenewResult::Lost => Err(LockError::new(
                 LockErrorKind::LostLease,
                 &grant.key,
-                format!("{} refused renewal: fenced authority is lost", self.backend.as_str()),
+                format!(
+                    "{} refused renewal: fenced authority is lost",
+                    self.backend.as_str()
+                ),
             )),
         }
     }
@@ -240,14 +246,40 @@ where
     }
 }
 
-// Keep the dependency-free core independent of a particular async runtime.
-// During real contention the existing `fiducia`/maintained paths normally use
-// Tokio, but generic transports may be driven by another executor. A short
-// blocking sleep is therefore the least surprising portable default here.
-// Consumers needing non-blocking wait loops should set `wait=false` and own
-// retry scheduling, or provide the TypeScript concrete clients shipped here.
-async fn tokio_sleep(duration: Duration) {
-    std::thread::sleep(duration);
+// Keep the dependency-free core independent of a particular async runtime
+// without blocking the caller's executor thread during contention. Each retry
+// interval uses one short-lived sleeper thread which wakes the future. Native
+// runtime-specific transports may still choose `wait=false` and own retries
+// when they need a higher-throughput scheduler.
+async fn portable_sleep(duration: Duration) {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::task::{Poll, Waker};
+
+    let state = Arc::new((AtomicBool::new(false), Mutex::new(None::<Waker>)));
+    let sleeper = Arc::clone(&state);
+    std::thread::spawn(move || {
+        std::thread::sleep(duration);
+        sleeper.0.store(true, Ordering::Release);
+        if let Some(waker) = sleeper.1.lock().unwrap().take() {
+            waker.wake();
+        }
+    });
+
+    std::future::poll_fn(move |cx| {
+        if state.0.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+        *state.1.lock().unwrap() = Some(cx.waker().clone());
+        if state.0.load(Ordering::Acquire) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 #[cfg(test)]
