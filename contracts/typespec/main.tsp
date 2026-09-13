@@ -22,9 +22,9 @@ scalar AdvisoryKey extends int64;
 @maxValue(9007199254740991)
 scalar FencingToken extends safeint;
 
-@doc("Lossless decimal wire/storage form of a positive fencing token. It is canonical unsigned decimal text with no sign, whitespace, fractional part, or leading zeroes; implementations additionally reject numeric values above 9007199254740991.")
-@maxLength(16)
-@pattern("^[1-9][0-9]{0,15}$")
+@doc("Lossless wire and storage form for fencing watermarks: canonical unsigned-64 decimal text with no sign, whitespace, fractional part, or leading zeroes. New authorities mint only the smaller FencingToken domain, but this text form deliberately preserves exact historical/persisted uint64 watermarks during rolling migration.")
+@maxLength(20)
+@pattern("^(0|[1-9][0-9]{0,19})$")
 scalar FencingTokenText extends string;
 
 @doc("Outcome of comparing an incoming fencing token and idempotency identity with a stored watermark.")
