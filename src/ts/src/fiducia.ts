@@ -1,15 +1,15 @@
 /**
- * `Lease` over the fiducia-cloud node HTTP protocol, using only `fetch`. It
- * speaks the same three endpoints the official clients do
- * (`/v1/locks/acquire`, `/v1/locks/renew`, `/v1/locks/release`) with the
- * same headers, so a service that already holds a `@fiducia/client` keeps it
- * for everything else and hands this adapter the same base URL and
- * credentials.
+ * `Lease` over the fiducia-cloud lock HTTP protocol, using only `fetch`.
  *
- * The node never holds a request open: `acquire` returns at once with
- * `acquired: false` when the key is held, so the client owns the wait. This
- * adapter polls at `retryIntervalMs` until the grant arrives or
- * `waitTimeoutMs` elapses.
+ * The adapter deliberately keeps the small `Lease` surface while matching the
+ * current fiducia-clients wire contract. In particular a blocking acquisition
+ * has one stable request identity for its entire lifetime, carries the server
+ * wait budget on every poll, renews the exact key set, and releases by fenced
+ * grant identity rather than by a redundant member key.
+ *
+ * Prefer the public edge/load-balancer endpoint for hosted traffic so Fiducia's
+ * HTTP idempotency/replay boundary remains in front of the node. The internal
+ * constructor is only for a trusted in-cluster hop.
  */
 
 import { LockError } from "./errors.js";
@@ -22,7 +22,7 @@ export type FetchLike = (input: string, init: { method: string; headers: Record<
 }>;
 
 export interface FiduciaLeaseOptions {
-  /** Base URL of the fiducia node or edge, e.g. `https://fiducia.example` or `http://localhost:8090`. */
+  /** Base URL of the Fiducia edge/load balancer, or a trusted in-cluster node endpoint. */
   readonly baseUrl: string;
   /** Trusted internal hop: `x-fiducia-internal-auth` + `x-fiducia-org-id`. */
   readonly internal?: { readonly secret: string; readonly orgId: string };
@@ -37,6 +37,7 @@ export interface FiduciaLeaseOptions {
 }
 
 const LOCAL_SUFFIXES = [".svc", ".cluster.local", ".internal", ".local"];
+const MAX_ERROR_BODY_CHARS = 8_192;
 
 export function cleartextRefusal(baseUrl: string, hasCredential: boolean, allow: boolean): string | undefined {
   if (!hasCredential || allow || !baseUrl.startsWith("http://")) return undefined;
@@ -46,11 +47,20 @@ export function cleartextRefusal(baseUrl: string, hasCredential: boolean, allow:
   return `fiducia: refusing to send a credential over cleartext http to "${host}"; use https or allowCleartextInternal`;
 }
 
-/** An unguessable holder identity; holder names carry queue identity and cancellation authority. */
-export function generatedHolder(): string {
+function randomIdentity(prefix: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  return "ores-locks-" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return prefix + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** An unguessable holder identity; holder names carry ownership authority. */
+export function generatedHolder(): string {
+  return randomIdentity("ores-locks-");
+}
+
+/** Per-acquisition identity. It must remain distinct from the holder identity. */
+function generatedRequestId(): string {
+  return randomIdentity("ores-lock-request-");
 }
 
 function sleep(ms: number): Promise<void> {
@@ -58,9 +68,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 function asUint(value: unknown): bigint | undefined {
-  // JSON.parse has already rounded an unsafe numeric literal. Refuse it
-  // rather than release or renew a different fencing token. Decimal strings
-  // remain accepted for a future lossless Fiducia wire revision.
+  // JSON.parse has already rounded an unsafe numeric literal. Refuse it rather
+  // than renew/release a different fencing token. Decimal strings remain
+  // accepted for a future lossless Fiducia wire revision.
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
   if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
   if (typeof value === "bigint" && value >= 0n) return value;
@@ -74,6 +84,12 @@ function encodeWireInteger(value: bigint): number {
     );
   }
   return Number(value);
+}
+
+function boundedErrorBody(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= MAX_ERROR_BODY_CHARS) return trimmed;
+  return `${trimmed.slice(0, MAX_ERROR_BODY_CHARS)}…`;
 }
 
 export class FiduciaLease implements Lease {
@@ -96,7 +112,7 @@ export class FiduciaLease implements Lease {
     this.#generateHolder = options.generateHolder ?? generatedHolder;
   }
 
-  /** POST `body`, return `result.output`. Non-2xx and transport failures throw plain Errors; callers map them. */
+  /** POST `body`, return `result.output`. Redirects stay disabled at the transport boundary. */
   async #post(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (this.#refusal) throw new Error(this.#refusal);
     const response = await this.#fetch(this.#base + path, {
@@ -106,7 +122,7 @@ export class FiduciaLease implements Lease {
       redirect: "manual",
     });
     const text = await response.text();
-    if (response.status >= 300) throw new Error(`fiducia: HTTP ${response.status}: ${text.trim()}`);
+    if (response.status >= 300) throw new Error(`fiducia: HTTP ${response.status}: ${boundedErrorBody(text)}`);
     if (!text) return {};
     const parsed: unknown = JSON.parse(text);
     const output = (parsed as { result?: { output?: unknown } })?.result?.output;
@@ -115,25 +131,58 @@ export class FiduciaLease implements Lease {
 
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
+    // One identity for the complete logical acquire. Reusing it across polls is
+    // what lets Fiducia preserve FIFO position and deduplicate retries.
+    const requestId = generatedRequestId();
     const started = Date.now();
+    let attempt = 0;
+
     for (;;) {
       let out: Record<string, unknown>;
       try {
-        out = await this.#post("/v1/locks/acquire", { key, holder, ttl_ms: opts.ttlMs });
+        out = await this.#post("/v1/locks/acquire", {
+          key,
+          holder,
+          ttl_ms: opts.ttlMs,
+          wait,
+          wait_timeout_ms: wait ? opts.waitTimeoutMs : undefined,
+          request_id: requestId,
+        });
       } catch (cause) {
+        // A transport failure is ownership-ambiguous. Never convert it into
+        // contention; the caller must not perform guarded work.
         throw LockError.transport(key, cause);
       }
+
       if (out["acquired"] === true) {
         const fencingToken = asUint(out["fencing_token"]);
-        if (fencingToken === undefined) throw LockError.transport(key, new Error("fiducia: acquired without a fencing token"));
-        const expires = asUint(out["lease_expires_ms"]);
+        if (fencingToken === undefined || fencingToken === 0n) {
+          throw LockError.transport(key, new Error("fiducia: acquired without a positive fencing token"));
+        }
+
+        let expires = asUint(out["lease_expires_ms"]);
+        // A grant discovered by a retry can be older than this response. Prove
+        // current fenced authority before returning it to application work,
+        // matching the official high-level clients' safety rule.
+        if (attempt > 0 || out["renewed"] === false) {
+          const renewed = await this.renew(
+            { key, holder, fencingToken, ttlMs: opts.ttlMs, ...(expires === undefined ? {} : { leaseExpiresMs: Number(expires) }) },
+            opts.ttlMs,
+          );
+          expires = renewed.leaseExpiresMs === undefined ? undefined : BigInt(renewed.leaseExpiresMs);
+        }
+
         return expires === undefined
           ? { key, holder, fencingToken, ttlMs: opts.ttlMs }
           : { key, holder, fencingToken, ttlMs: opts.ttlMs, leaseExpiresMs: Number(expires) };
       }
+
       if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
       const waited = Date.now() - started;
-      if (waited + opts.retryIntervalMs > opts.waitTimeoutMs) throw LockError.timeout(key, "fiducia.acquire", waited);
+      if (waited + opts.retryIntervalMs > opts.waitTimeoutMs) {
+        throw LockError.timeout(key, "fiducia.acquire", waited);
+      }
+      attempt += 1;
       await sleep(opts.retryIntervalMs);
     }
   }
@@ -141,20 +190,28 @@ export class FiduciaLease implements Lease {
   async renew(grant: LeaseGrant, ttlMs: number): Promise<LeaseGrant> {
     let out: Record<string, unknown>;
     try {
-      out = await this.#post("/v1/locks/renew", { key: grant.key, holder: grant.holder, fencing_token: grant.fencingToken, ttl_ms: ttlMs });
+      out = await this.#post("/v1/locks/renew", {
+        keys: [grant.key],
+        holder: grant.holder,
+        fencing_token: grant.fencingToken,
+        ttl_ms: ttlMs,
+      });
     } catch (cause) {
       throw LockError.transport(grant.key, cause);
     }
-    // `renewed: false` is lost fenced authority: fiducia has already reaped the
-    // grant and may have promoted another holder.
-    if (out["renewed"] !== true) throw new LockError("lost_lease", grant.key, "fiducia: lock renewal lost fenced authority");
+    if (out["renewed"] !== true) {
+      throw new LockError("lost_lease", grant.key, "fiducia: lock renewal lost fenced authority");
+    }
     const expires = asUint(out["lease_expires_ms"]);
     return expires === undefined ? { ...grant, ttlMs } : { ...grant, ttlMs, leaseExpiresMs: Number(expires) };
   }
 
   async release(grant: LeaseGrant): Promise<boolean> {
     try {
-      const out = await this.#post("/v1/locks/release", { key: grant.key, holder: grant.holder, fencing_token: grant.fencingToken });
+      const out = await this.#post("/v1/locks/release", {
+        holder: grant.holder,
+        fencing_token: grant.fencingToken,
+      });
       return out["released"] === true;
     } catch (cause) {
       throw LockError.transport(grant.key, cause, "fiducia.release");
