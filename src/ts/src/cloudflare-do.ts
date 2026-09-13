@@ -14,14 +14,18 @@ export interface CloudflareDurableObjectLeaseOptions {
   readonly generateHolder?: () => string;
 }
 
+const MAX_FENCING_TOKEN = BigInt(Number.MAX_SAFE_INTEGER);
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function asBigInt(value: unknown): bigint | undefined {
-  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
-  return undefined;
+  let parsed: bigint;
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value)) parsed = BigInt(value);
+  else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) parsed = BigInt(value);
+  else return undefined;
+  return parsed <= MAX_FENCING_TOKEN ? parsed : undefined;
 }
 
 function asSafeMs(value: unknown): number | undefined {
@@ -39,8 +43,13 @@ function asSafeMs(value: unknown): number | undefined {
  *
  * One lock key maps to one Durable Object instance. That instance persists the
  * current holder, TTL, and a decimal-string fencing counter in strongly
- * consistent storage. Fencing tokens stay strings on JSON boundaries so the
- * full unsigned-64 domain is never rounded by JavaScript.
+ * consistent storage. Tokens are capped at JavaScript's exact integer ceiling,
+ * matching fiducia-cloud and every browser/JSON consumer.
+ *
+ * A retry by the same holder may replay an already-committed acquisition after
+ * an ambiguous transport result. Replayed grants are renewed immediately before
+ * being exposed to caller work so the caller receives a fresh full TTL without
+ * allowing an unfenced acquire request itself to extend authority.
  */
 export class CloudflareDurableObjectLease implements Lease {
   readonly #base: string;
@@ -96,9 +105,15 @@ export class CloudflareDurableObjectLease implements Lease {
           throw LockError.transport(key, new Error("cloudflare-do: acquired without a valid fencing token"));
         }
         const leaseExpiresMs = asSafeMs(out["lease_expires_ms"]);
-        return leaseExpiresMs === undefined
+        const grant: LeaseGrant = leaseExpiresMs === undefined
           ? { key, holder, fencingToken, ttlMs: opts.ttlMs }
           : { key, holder, fencingToken, ttlMs: opts.ttlMs, leaseExpiresMs };
+
+        // Same-holder reacquire is deliberately idempotent and does not extend
+        // authority server-side. If this is recovery from a lost acquire
+        // response, perform the explicit token-bound renewal before guarded work.
+        if (out["replayed"] === true) return this.renew(grant, opts.ttlMs);
+        return grant;
       }
       if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
       const waited = Date.now() - started;
