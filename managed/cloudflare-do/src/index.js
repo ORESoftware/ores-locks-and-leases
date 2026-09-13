@@ -179,7 +179,6 @@ export class LockLeaseObject {
             acquired: true,
             fencing_token: row.token,
             lease_expires_ms: row.expires_ms,
-            ttl_ms: body.ttl_ms,
             renewed: false,
             replayed: true,
           };
