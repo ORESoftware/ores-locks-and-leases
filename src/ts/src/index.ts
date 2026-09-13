@@ -1,11 +1,15 @@
 /**
  * @oresoftware/locks-and-leases — composed distributed locking for the
- * ORESoftware fleet: a fiducia-cloud lease around a Postgres advisory lock,
- * each layer individually switchable, with fencing tokens threaded through
- * to the guarded work.
+ * ORESoftware fleet: a fenced lease authority around a Postgres advisory
+ * lock, each layer individually switchable, with fencing tokens threaded
+ * through to the guarded work.
+ *
+ * Fiducia, Cloudflare Durable Objects, and managed Redis all implement the
+ * same `Lease` interface. The v1 conformance corpus retains historical
+ * `fiducia.*` step names for the outer lease layer.
  *
  * ```text
- * fiducia.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work/renew* ─► fiducia.renew ─► pg.commit ─► fiducia.release
+ * lease.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work/renew* ─► lease.renew ─► pg.commit ─► lease.release
  * ```
  *
  * The TypeScript slice of ORESoftware/ores-locks-and-leases; held to the same
@@ -58,3 +62,14 @@ export {
   type MaintainedXactGuarded,
 } from "./maintained.js";
 export { FiduciaLease, cleartextRefusal, generatedHolder, type FetchLike, type FiduciaLeaseOptions } from "./fiducia.js";
+export {
+  CloudflareDurableObjectLease,
+  type CloudflareDurableObjectLeaseOptions,
+} from "./cloudflare-do.js";
+export {
+  REDIS_ACQUIRE_LUA,
+  REDIS_RELEASE_LUA,
+  REDIS_RENEW_LUA,
+  UpstashRedisLease,
+  type UpstashRedisLeaseOptions,
+} from "./upstash-redis.js";
