@@ -81,30 +81,54 @@ For data duplicated across Supabase, Neon, and Redis, each physical store
 maintains its own watermark. An outbox event carries the token and idempotency
 identity to downstream projections, which independently fence the event.
 
-## Full-width token representation
+## Minted authority versus persisted watermark width
 
-Fiducia tokens are `uint64`, whose maximum is:
+New lease authorities mint only positive fencing tokens in the exact JSON
+integer domain:
+
+```text
+1 .. 9007199254740991
+```
+
+That ceiling is JavaScript's `Number.MAX_SAFE_INTEGER`. Keeping the authoritative
+grant domain inside it means a `LeaseGrant` can cross every first-class runtime
+and ordinary JSON/TypeSpec/JSON-Schema boundaries without rounding authority.
+Cloudflare Durable Objects, Redis/Valkey, and Fiducia are expected to fail closed
+when that minting domain is exhausted; they must never wrap, reset, or reuse a
+token to recover availability.
+
+`FencingTokenText` intentionally remains wider. It is the lossless persisted
+watermark representation and continues to admit canonical unsigned-64 decimal
+text through:
 
 ```text
 18446744073709551615
 ```
 
+This distinction lets rolling upgrades read historical watermarks or replicated
+state created under the former uint64 minting contract without truncating or
+rewriting security history. A value above the new minting ceiling is therefore
+valid as an exact **stored watermark string**, but a new managed lease authority
+must not mint it as a `LeaseGrant`.
+
 Representation rules:
 
 | boundary | representation |
 | --- | --- |
-| JSON / TypeSpec / JSON Schema wire contract | canonical decimal string |
-| Rust | `u64` internally, `FencingTokenText` at boundaries |
-| Go | `uint64` internally, `FencingTokenText` at boundaries |
-| TypeScript | `bigint` internally, branded decimal string at boundaries |
-| Dart / Flutter | `BigInt` internally, decimal string at boundaries |
-| Gleam / BEAM | arbitrary-precision `Int` internally, decimal string at boundaries |
+| new lease grant / numeric JSON contract | positive exact integer, max `9007199254740991` |
+| persisted fencing watermark / FencedWriteRequest | canonical decimal string, uint64-compatible |
+| Rust | `u64` internally, `FencingTokenText` at persistence/wire boundaries |
+| Go | `uint64` internally, `FencingTokenText` at persistence/wire boundaries |
+| TypeScript | `bigint` internally, branded decimal string at persistence boundaries |
+| Dart / Flutter | `BigInt` internally, decimal string at persistence boundaries |
+| Gleam / BEAM | arbitrary-precision `Int` internally, decimal string at persistence boundaries |
 | PostgreSQL | `NUMERIC(20,0)` with unsigned-range check |
 | Redis | decimal string compared without `tonumber` |
 
-A canonical string is `0` or a non-zero digit followed by decimal digits, with
-no sign, whitespace, fractional part, or leading zeroes, and its numeric value
-must not exceed the unsigned-64 maximum.
+A canonical watermark string is `0` or a non-zero digit followed by decimal
+digits, with no sign, whitespace, fractional part, or leading zeroes, and its
+numeric value must not exceed the unsigned-64 maximum. New grant paths add the
+stricter positive/max-safe admission rule before exposing authority to work.
 
 ## Payload digest
 
