@@ -8,17 +8,16 @@ import 'key.dart';
 import 'lease.dart';
 import 'plan.dart';
 
-/// [Lease] over the fiducia-cloud node HTTP protocol with `package:http`. It
-/// speaks the same three endpoints the official clients do
-/// (`/v1/locks/acquire`, `/v1/locks/renew`, `/v1/locks/release`) with the
-/// same headers.
+/// [Lease] over the fiducia-cloud lock HTTP protocol with `package:http`.
 ///
-/// The node never holds a request open: `acquire` returns at once with
-/// `acquired: false` when the key is held, so the client owns the wait. This
-/// adapter polls at `opts.retryInterval` until the grant arrives or
-/// `opts.waitTimeout` elapses.
+/// This keeps the small local [Lease] abstraction while matching the current
+/// fiducia-clients wire contract: one request identity per logical acquisition,
+/// explicit wait budget, `keys[]` renewal, and token-scoped release.
+/// Hosted traffic should use the public edge/load-balancer endpoint; the
+/// internal constructor is only for a trusted in-cluster hop.
 final class FiduciaLease implements Lease {
   static final BigInt _maxSafeJsonInteger = BigInt.from(9007199254740991);
+  static const int _maxErrorBodyChars = 8192;
 
   final Uri _base;
   final Map<String, String> _headers;
@@ -102,13 +101,18 @@ final class FiduciaLease implements Lease {
     return 'fiducia: refusing to send a credential over cleartext http to "$host"; use https or allowCleartextInternal';
   }
 
-  /// An unguessable holder identity; holder names carry queue identity and
-  /// cancellation authority.
-  static String generatedHolder() {
+  static String _randomIdentity(String prefix) {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-    return 'ores-locks-${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
+    return '$prefix${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
   }
+
+  /// An unguessable holder identity; holder names carry ownership authority.
+  static String generatedHolder() => _randomIdentity('ores-locks-');
+
+  /// Per-acquisition identity, intentionally distinct from holder identity.
+  static String _generatedRequestId() =>
+      _randomIdentity('ores-lock-request-');
 
   Future<Map<String, Object?>> _post(
     String path,
@@ -130,8 +134,10 @@ final class FiduciaLease implements Lease {
       body: jsonEncode(wireBody),
     );
     if (response.statusCode >= 300) {
+      final trimmed = response.body.trim();
+      final bounded = trimmed.substring(0, min(trimmed.length, _maxErrorBodyChars));
       throw http.ClientException(
-        'fiducia: HTTP ${response.statusCode}: ${response.body.trim()}',
+        'fiducia: HTTP ${response.statusCode}: $bounded',
       );
     }
     if (response.body.isEmpty) return const {};
@@ -162,7 +168,9 @@ final class FiduciaLease implements Lease {
     required bool wait,
   }) async {
     final holder = opts.holder ?? _generateHolder();
+    final requestId = _generatedRequestId();
     final started = DateTime.now();
+    var attempt = 0;
     for (;;) {
       final Map<String, Object?> out;
       try {
@@ -170,25 +178,36 @@ final class FiduciaLease implements Lease {
           'key': key.value,
           'holder': holder,
           'ttl_ms': opts.ttl.inMilliseconds,
+          'wait': wait,
+          if (wait) 'wait_timeout_ms': opts.waitTimeout.inMilliseconds,
+          'request_id': requestId,
         });
       } catch (cause) {
+        // A transport failure leaves ownership unknown. Never turn it into
+        // contention or continue guarded work.
         throw LockError.transport(key, cause);
       }
       if (out['acquired'] == true) {
         final token = _uint(out['fencing_token']);
-        if (token == null) {
+        if (token == null || token == BigInt.zero) {
           throw LockError.transport(
             key,
-            'fiducia: acquired without a fencing token',
+            'fiducia: acquired without a positive fencing token',
           );
         }
-        return LeaseGrant(
+        var grant = LeaseGrant(
           key: key,
           holder: holder,
           fencingToken: token,
           leaseExpiresMs: _uint(out['lease_expires_ms'])?.toInt(),
           ttlMs: opts.ttl.inMilliseconds,
         );
+        // A retry-discovered grant may have aged before this response. Prove
+        // current fenced authority before exposing it to application work.
+        if (attempt > 0 || out['renewed'] == false) {
+          grant = await renew(grant, opts.ttl);
+        }
+        return grant;
       }
       if (!wait) throw LockError.contention(key, LockStep.fiduciaTryAcquire);
       final waited = DateTime.now().difference(started);
@@ -199,6 +218,7 @@ final class FiduciaLease implements Lease {
           waited.inMilliseconds,
         );
       }
+      attempt += 1;
       await Future<void>.delayed(opts.retryInterval);
     }
   }
@@ -208,7 +228,7 @@ final class FiduciaLease implements Lease {
     final Map<String, Object?> out;
     try {
       out = await _post('/v1/locks/renew', {
-        'key': grant.key.value,
+        'keys': [grant.key.value],
         'holder': grant.holder,
         'fencing_token': grant.fencingToken,
         'ttl_ms': ttl.inMilliseconds,
@@ -216,8 +236,6 @@ final class FiduciaLease implements Lease {
     } catch (cause) {
       throw LockError.transport(grant.key, cause);
     }
-    // `renewed: false` is lost fenced authority: fiducia has already reaped
-    // the grant and may have promoted another holder.
     if (out['renewed'] != true) {
       throw LockError(
         LockErrorKind.lostLease,
@@ -235,7 +253,6 @@ final class FiduciaLease implements Lease {
   Future<bool> release(LeaseGrant grant) async {
     try {
       final out = await _post('/v1/locks/release', {
-        'key': grant.key.value,
         'holder': grant.holder,
         'fencing_token': grant.fencingToken,
       });
