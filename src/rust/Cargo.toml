@@ -4,7 +4,7 @@ version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-description = "Composed distributed locking for the ORESoftware fleet: a fiducia-cloud lease around a Postgres advisory lock (transaction- or session-scoped), each layer individually switchable, with fencing tokens threaded through to the guarded work."
+description = "Composed distributed locking for the ORESoftware fleet: a fenced lease authority around a Postgres advisory lock (transaction- or session-scoped), each layer individually switchable, with fencing tokens threaded through to the guarded work."
 repository = "https://github.com/ORESoftware/ores-locks-and-leases"
 keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing"]
 categories = ["concurrency", "database"]
@@ -19,11 +19,13 @@ default = []
 # Postgres advisory locks through SeaORM (the fleet's application ORM; direct
 # sqlx / tokio-postgres are forbidden by the migration contract).
 pg = ["dep:sea-orm"]
-# The fiducia-cloud lease adapter over the official async Rust client. Tokio's
-# timer and macro features power the maintained transaction renewal loop.
+# Long-running maintained transaction locks. This is intentionally independent
+# of the concrete lease authority so Cloudflare/Redis do not pull Fiducia in.
+maintained = ["pg", "dep:tokio"]
+# The fiducia-cloud lease adapter over the official async Rust client.
 fiducia = ["dep:fiducia-client", "dep:tokio"]
-# Everything.
-full = ["pg", "fiducia"]
+# Everything, including the legacy Fiducia adapter and generic maintained path.
+full = ["pg", "maintained", "fiducia"]
 
 [dependencies]
 sea-orm = { version = "1", default-features = false, features = [
