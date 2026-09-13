@@ -16,12 +16,13 @@ export interface UpstashRedisLeaseOptions {
   readonly generateHolder?: () => string;
 }
 
-const MAX_U64 = "18446744073709551615";
+const MAX_FENCING_TOKEN = "9007199254740991";
+const MAX_FENCING_TOKEN_BIGINT = BigInt(MAX_FENCING_TOKEN);
 
 /**
  * Atomic acquire script for a Redis/Valkey authority. The fence counter is a
- * decimal string and is incremented digit-by-digit, avoiding Redis Lua's
- * double precision and Redis `INCR`'s signed-64 ceiling.
+ * decimal string and is incremented digit-by-digit, avoiding Redis Lua's double
+ * precision. The fourth result element is `1` only for a same-holder replay.
  */
 export const REDIS_ACQUIRE_LUA = `
 local lock_key = KEYS[1]
@@ -30,7 +31,19 @@ local holder = ARGV[1]
 local ttl_ms = ARGV[2]
 
 if redis.call('EXISTS', lock_key) == 1 then
-  return {0, '', redis.call('PTTL', lock_key)}
+  local pttl = redis.call('PTTL', lock_key)
+  if pttl <= 0 then
+    return redis.error_reply('ores-locks: active lease is missing a positive TTL')
+  end
+  local current_holder = redis.call('HGET', lock_key, 'holder')
+  local current_token = redis.call('HGET', lock_key, 'token')
+  if not current_holder or not current_token then
+    return redis.error_reply('ores-locks: corrupt active lease')
+  end
+  if current_holder == holder then
+    return {1, current_token, pttl, 1}
+  end
+  return {0, '', pttl, 0}
 end
 
 local current = redis.call('GET', fence_key) or '0'
@@ -57,14 +70,15 @@ if carry == 1 then table.insert(reversed, '1') end
 local next_chars = {}
 for i = #reversed, 1, -1 do table.insert(next_chars, reversed[i]) end
 local next_token = table.concat(next_chars)
-if string.len(next_token) > 20 or (string.len(next_token) == 20 and next_token > '${MAX_U64}') then
-  return redis.error_reply('ores-locks: unsigned-64 fencing token overflow')
+if string.len(next_token) > 16 or
+   (string.len(next_token) == 16 and next_token > '${MAX_FENCING_TOKEN}') then
+  return redis.error_reply('ores-locks: safe-integer fencing token exhausted')
 end
 
 redis.call('SET', fence_key, next_token)
 redis.call('HSET', lock_key, 'holder', holder, 'token', next_token)
 redis.call('PEXPIRE', lock_key, ttl_ms)
-return {1, next_token, redis.call('PTTL', lock_key)}
+return {1, next_token, redis.call('PTTL', lock_key), 0}
 `;
 
 /** Atomic renewal: extend only the exact holder+token grant. */
@@ -118,9 +132,11 @@ function asFlag(value: unknown): boolean {
 }
 
 function asBigInt(value: unknown): bigint | undefined {
-  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
-  return undefined;
+  let parsed: bigint;
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value)) parsed = BigInt(value);
+  else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) parsed = BigInt(value);
+  else return undefined;
+  return parsed <= MAX_FENCING_TOKEN_BIGINT ? parsed : undefined;
 }
 
 function asNonNegativeMs(value: unknown): number | undefined {
@@ -208,9 +224,14 @@ export class UpstashRedisLease implements Lease {
           throw LockError.transport(key, new Error("redis-rest: acquired without a valid fencing token"));
         }
         const pttl = asNonNegativeMs(result[2]);
-        return pttl === undefined
+        const grant: LeaseGrant = pttl === undefined
           ? { key, holder, fencingToken, ttlMs: opts.ttlMs }
           : { key, holder, fencingToken, ttlMs: opts.ttlMs, leaseExpiresMs: Date.now() + pttl };
+        // A same-holder replay intentionally did not extend TTL in the acquire
+        // script. Recover an ambiguous prior acquire with the only operation that
+        // may extend authority: token-bound renewal.
+        if (asFlag(result[3])) return this.renew(grant, opts.ttlMs);
+        return grant;
       }
       if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
       const waited = Date.now() - started;
