@@ -111,8 +111,7 @@ final class FiduciaLease implements Lease {
   static String generatedHolder() => _randomIdentity('ores-locks-');
 
   /// Per-acquisition identity, intentionally distinct from holder identity.
-  static String _generatedRequestId() =>
-      _randomIdentity('ores-lock-request-');
+  static String _generatedRequestId() => _randomIdentity('ores-lock-request-');
 
   Future<Map<String, Object?>> _post(
     String path,
@@ -135,7 +134,8 @@ final class FiduciaLease implements Lease {
     );
     if (response.statusCode >= 300) {
       final trimmed = response.body.trim();
-      final bounded = trimmed.substring(0, min(trimmed.length, _maxErrorBodyChars));
+      final bounded =
+          trimmed.substring(0, min(trimmed.length, _maxErrorBodyChars));
       throw http.ClientException(
         'fiducia: HTTP ${response.statusCode}: $bounded',
       );
