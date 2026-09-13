@@ -1,0 +1,15 @@
+name = "ores-locks-and-leases"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+ALLOW_UNAUTHENTICATED = "false"
+
+[durable_objects]
+bindings = [
+  { name = "LOCKS", class_name = "LockLeaseObject" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LockLeaseObject"]

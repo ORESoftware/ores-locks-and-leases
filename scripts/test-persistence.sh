@@ -46,6 +46,13 @@ log "canonical and adversarial Redis adapter"
 REDIS_HOST="$redis_host" REDIS_PORT="$redis_port" \
   sh "$root/persistence/redis/test-fenced-write.sh"
 
+log "managed Redis lease authority"
+REDIS_HOST="$redis_host" REDIS_PORT="$redis_port" \
+  sh "$root/managed/redis/test-authority.sh"
+
+log "Cloudflare Durable Object authority syntax"
+node --check "$root/managed/cloudflare-do/src/index.js"
+
 if node -e '
   const corpus=require(process.argv[1]);
   process.exit(corpus?.schema === "ores.locks-and-leases.fence-corpus/v2"

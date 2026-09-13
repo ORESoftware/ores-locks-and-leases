@@ -37,6 +37,9 @@ jobs:
       - name: Core compiles with no features and no dependencies
         working-directory: src/rust
         run: cargo check --locked --no-default-features
+      - name: Managed maintained path compiles without Fiducia
+        working-directory: src/rust
+        run: cargo check --locked --no-default-features --features maintained
       - name: Clippy (all features)
         working-directory: src/rust
         run: cargo clippy --locked --all-targets --features full -- -D warnings
@@ -160,6 +163,8 @@ jobs:
           bash -n templates/lib-core/fanout.sh
           sh -n scripts/test-persistence.sh
           sh -n persistence/redis/test-fenced-write.sh
+          sh -n managed/redis/test-authority.sh
+          node --check managed/cloudflare-do/src/index.js
           python3 -c 'compile(open("templates/lib-core/gen_org_locks.py", encoding="utf-8").read(), "templates/lib-core/gen_org_locks.py", "exec")'
           python3 -c 'compile(open("templates/lib-core/gen_org_fencing.py", encoding="utf-8").read(), "templates/lib-core/gen_org_fencing.py", "exec")'
           if templates/lib-core/fanout.sh --no-push; then
