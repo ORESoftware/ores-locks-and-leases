@@ -35,10 +35,11 @@
 //! datastore fencing remains mandatory because a heartbeat cannot undo an
 //! effect emitted before the checkpoint.
 //!
-//! With both `pg` and `fiducia` enabled, [`with_maintained_xact_lock`] renews
-//! the outer lease while the inner PostgreSQL transaction is active and
-//! requires one final renewal before commit. It is the fail-closed path for
-//! work that may outlive the initial lease TTL.
+//! With `pg` plus either `fiducia` or the generic `maintained` feature,
+//! [`with_maintained_xact_lock`] renews any [`Lease`] implementation while the
+//! inner PostgreSQL transaction is active and requires one final renewal before
+//! commit. Cloudflare Durable Objects and Redis therefore use the same
+//! fail-closed maintained path without depending on the Fiducia client.
 //!
 //! Nothing here depends on the network or on SeaORM unless the matching
 //! cargo feature is enabled: the core (`key`, `plan`, `error`, `lease`,
@@ -66,7 +67,7 @@ pub mod fiducia;
 #[cfg(feature = "pg")]
 pub mod coordinated;
 
-#[cfg(all(feature = "pg", feature = "fiducia"))]
+#[cfg(all(feature = "pg", any(feature = "fiducia", feature = "maintained")))]
 pub mod maintained;
 
 pub use error::{LockError, LockErrorKind};
@@ -90,5 +91,5 @@ pub use renewal::{
 #[cfg(feature = "pg")]
 pub use coordinated::{Guarded, with_session_lock, with_xact_lock};
 
-#[cfg(all(feature = "pg", feature = "fiducia"))]
+#[cfg(all(feature = "pg", any(feature = "fiducia", feature = "maintained")))]
 pub use maintained::{LeaseMaintenanceOptions, with_maintained_both, with_maintained_xact_lock};
