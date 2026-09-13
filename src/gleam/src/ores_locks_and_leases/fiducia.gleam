@@ -1,12 +1,10 @@
-//// `Lease` over the fiducia-cloud node HTTP protocol with `gleam_httpc`. It
-//// speaks the same three endpoints the official clients do
-//// (`/v1/locks/acquire`, `/v1/locks/renew`, `/v1/locks/release`) with the
-//// same headers.
+//// `Lease` over the fiducia-cloud lock HTTP protocol with `gleam_httpc`.
 ////
-//// The node never holds a request open: `acquire` returns at once with
-//// `acquired: false` when the key is held, so the client owns the wait.
-//// This adapter polls at `retry_interval_ms` until the grant arrives or
-//// `wait_timeout_ms` elapses.
+//// This keeps the small local Lease abstraction while matching the current
+//// fiducia-clients wire contract: one request identity per logical acquire,
+//// explicit wait budget, `keys[]` renewal, and token-scoped release.
+//// Hosted traffic should use the public edge/load balancer; direct node access
+//// is only for a trusted internal hop.
 
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -66,7 +64,7 @@ fn strip_trailing_slash(url: String) -> String {
   }
 }
 
-/// A `Lease` whose three verbs call the node described by `config`.
+/// A `Lease` whose three verbs call the endpoint described by `config`.
 pub fn lease(config: Config) -> core.Lease {
   core.Lease(
     acquire: fn(key, opts, wait) { acquire(config, key, opts, wait) },
@@ -75,9 +73,17 @@ pub fn lease(config: Config) -> core.Lease {
   )
 }
 
-/// An unguessable holder identity.
+/// Holder identity. Callers with a stronger service identity may provide it in
+/// AcquireOptions; this default remains intentionally separate from request id.
 pub fn generated_holder() -> String {
   "ores-locks-"
+  <> int.to_string(int.random(1_000_000_000_000))
+  <> "-"
+  <> int.to_string(int.random(1_000_000_000_000))
+}
+
+fn generated_request_id() -> String {
+  "ores-lock-request-"
   <> int.to_string(int.random(1_000_000_000_000))
   <> "-"
   <> int.to_string(int.random(1_000_000_000_000))
@@ -213,7 +219,8 @@ pub fn acquire(
   wait: Bool,
 ) -> Result(core.LeaseGrant, core.LockError) {
   let holder = core.holder_or(opts, config.generate_holder)
-  poll_acquire(config, key, opts, wait, holder, now_ms())
+  let request_id = generated_request_id()
+  poll_acquire(config, key, opts, wait, holder, request_id, now_ms(), 0)
 }
 
 fn poll_acquire(
@@ -222,27 +229,38 @@ fn poll_acquire(
   opts: core.AcquireOptions,
   wait: Bool,
   holder: String,
+  request_id: String,
   started_ms: Int,
+  attempt: Int,
 ) -> Result(core.LeaseGrant, core.LockError) {
   let body =
     json.object([
       #("key", json.string(core.key_to_string(key))),
       #("holder", json.string(holder)),
       #("ttl_ms", json.int(opts.ttl_ms)),
+      #("wait", json.bool(wait)),
+      #("wait_timeout_ms", json.int(opts.wait_timeout_ms)),
+      #("request_id", json.string(request_id)),
     ])
   use output <- result.try(
     post(config, "/v1/locks/acquire", body)
     |> result.map_error(core.transport_error(key, _)),
   )
   case field_bool(output, "acquired"), field_int(output, "fencing_token") {
-    True, Some(fencing_token) ->
-      Ok(core.LeaseGrant(
-        key: key,
-        holder: holder,
-        fencing_token: fencing_token,
-        lease_expires_ms: field_int(output, "lease_expires_ms"),
-        ttl_ms: opts.ttl_ms,
-      ))
+    True, Some(fencing_token) -> {
+      let grant =
+        core.LeaseGrant(
+          key: key,
+          holder: holder,
+          fencing_token: fencing_token,
+          lease_expires_ms: field_int(output, "lease_expires_ms"),
+          ttl_ms: opts.ttl_ms,
+        )
+      case attempt > 0 {
+        True -> renew(config, grant, opts.ttl_ms)
+        False -> Ok(grant)
+      }
+    }
     True, None ->
       Error(core.transport_error(
         key,
@@ -257,7 +275,16 @@ fn poll_acquire(
             True -> Error(core.timeout(key, core.FiduciaAcquire, waited))
             False -> {
               process.sleep(opts.retry_interval_ms)
-              poll_acquire(config, key, opts, wait, holder, started_ms)
+              poll_acquire(
+                config,
+                key,
+                opts,
+                wait,
+                holder,
+                request_id,
+                started_ms,
+                attempt + 1,
+              )
             }
           }
         }
@@ -274,7 +301,10 @@ pub fn renew(
 ) -> Result(core.LeaseGrant, core.LockError) {
   let body =
     json.object([
-      #("key", json.string(core.key_to_string(grant.key))),
+      #(
+        "keys",
+        json.array([core.key_to_string(grant.key)], json.string),
+      ),
       #("holder", json.string(grant.holder)),
       #("fencing_token", json.int(grant.fencing_token)),
       #("ttl_ms", json.int(ttl_ms)),
@@ -308,7 +338,6 @@ pub fn release(
 ) -> Result(Bool, core.LockError) {
   let body =
     json.object([
-      #("key", json.string(core.key_to_string(grant.key))),
       #("holder", json.string(grant.holder)),
       #("fencing_token", json.int(grant.fencing_token)),
     ])
