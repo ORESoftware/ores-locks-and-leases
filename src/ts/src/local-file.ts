@@ -48,6 +48,8 @@ export function generated_local_file_lock_owner(): string {
   return `ores-locks-${randomUUID()}`;
 }
 
+type LocalFileLockReleaseState = "held" | "released" | "partial";
+
 /**
  * Held portable single-host filesystem lock.
  *
@@ -57,7 +59,9 @@ export function generated_local_file_lock_owner(): string {
 export class LocalFileLock {
   readonly path: string;
   readonly owner: string;
-  #released = false;
+  #release_state: LocalFileLockReleaseState = "held";
+  #release_promise: Promise<void> | undefined;
+  #partial_release_error: unknown | undefined;
 
   constructor(path: string, owner: string) {
     this.path = path;
@@ -65,13 +69,32 @@ export class LocalFileLock {
   }
 
   get released(): boolean {
-    return this.#released;
+    return this.#release_state === "released";
+  }
+
+  get release_state(): LocalFileLockReleaseState {
+    return this.#release_state;
   }
 
   async release(): Promise<void> {
-    if (this.#released) return;
+    if (this.#release_state === "released") return;
+    if (this.#release_state === "partial") throw this.#partial_release_error;
+    if (this.#release_promise !== undefined) return this.#release_promise;
 
+    const releasePromise = this.#release_once();
+    this.#release_promise = releasePromise;
+    try {
+      await releasePromise;
+    } finally {
+      if (this.#release_promise === releasePromise && this.#release_state === "held") {
+        this.#release_promise = undefined;
+      }
+    }
+  }
+
+  async #release_once(): Promise<void> {
     await validate_real_directory(this.path, this.path, "lock directory");
+    await validate_posix_private_lock_directory(this.path, this.path);
     const entries = await read_local_file_lock_entry_names_bounded(this.path);
     if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
       throw new LocalFileLockError(
@@ -93,19 +116,26 @@ export class LocalFileLock {
       );
     }
 
+    let ownerRemoved = false;
     try {
       await unlink(owner_path);
+      ownerRemoved = true;
       await rmdir(this.path);
     } catch (error) {
       const code = error_code(error);
-      throw new LocalFileLockError(
+      const wrapped = new LocalFileLockError(
         code === "ENOTEMPTY" || code === "EEXIST" ? "compromised" : "io",
         this.path,
         `remove local lock directory failed: ${describe_error(error)}`,
         error,
       );
+      if (ownerRemoved) {
+        this.#release_state = "partial";
+        this.#partial_release_error = wrapped;
+      }
+      throw wrapped;
     }
-    this.#released = true;
+    this.#release_state = "released";
   }
 }
 
@@ -114,12 +144,15 @@ export async function try_acquire_local_file_lock(
   path: string,
   owner: string,
 ): Promise<LocalFileLock | null> {
-  validate_owner(path, owner);
+  validate_local_file_lock_path(path);
+  validate_local_file_lock_owner(path, owner);
   const parent = dirname(path);
   try {
     await mkdir(parent, { recursive: true, mode: 0o700 });
     await validate_real_directory(path, parent, "lock parent");
+    await validate_posix_trusted_parent(path, parent);
     await mkdir(path, { mode: 0o700 });
+    await validate_posix_private_lock_directory(path, path);
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "EEXIST") {
@@ -142,9 +175,13 @@ export async function try_acquire_local_file_lock(
   const owner_path = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   try {
     await writeFile(owner_path, owner, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await validate_regular_file(path, owner_path, "owner token");
   } catch (error) {
     let rollbackError: unknown;
     try {
+      await unlink(owner_path).catch((cleanupError: unknown) => {
+        if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
+      });
       await rmdir(path);
     } catch (cleanupError) {
       rollbackError = cleanupError;
@@ -153,10 +190,11 @@ export async function try_acquire_local_file_lock(
       throw new LocalFileLockError(
         "compromised",
         path,
-        `owner-token write failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
+        `owner-token publication failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
         rollbackError,
       );
     }
+    if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "EEXIST") {
       throw new LocalFileLockError(
         "compromised",
@@ -177,7 +215,8 @@ export async function acquire_local_file_lock(
   owner: string,
   options: LocalFileLockOptions = {},
 ): Promise<LocalFileLock> {
-  validate_owner(path, owner);
+  validate_local_file_lock_path(path);
+  validate_local_file_lock_owner(path, owner);
   const resolved = { ...DEFAULT_LOCAL_FILE_LOCK_OPTIONS, ...options };
   validate_options(path, resolved);
   // `performance.now()` is monotonic in supported Node runtimes and avoids
@@ -216,6 +255,7 @@ export async function acquire_local_file_lock(
  * @deprecated Prefer `inspect_local_file_lock` for diagnostics.
  */
 export async function local_file_lock_exists(path: string): Promise<boolean> {
+  validate_local_file_lock_path(path);
   let metadata;
   try {
     metadata = await lstat(path);
@@ -230,6 +270,7 @@ export async function local_file_lock_exists(path: string): Promise<boolean> {
       "lock path exists but is not an unaliased directory",
     );
   }
+  validate_posix_private_mode(path, metadata.mode, "lock directory");
 
   const entries = await read_local_file_lock_entry_names_bounded(path);
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
@@ -285,6 +326,7 @@ export async function read_bounded_local_file_lock_owner(
         "owner token is not an unaliased regular file",
       );
     }
+    validate_posix_private_mode(lockPath, pathMetadata.mode, "owner token");
     if (pathMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
@@ -307,6 +349,7 @@ export async function read_bounded_local_file_lock_owner(
         "owner token identity changed while opening; refusing raced path-to-handle state",
       );
     }
+    validate_posix_private_mode(lockPath, openedMetadata.mode, "opened owner token");
     if (openedMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
@@ -354,7 +397,23 @@ export function local_file_lock_sleep_delay_ms(retryIntervalMs: number, remainin
   ));
 }
 
-function validate_owner(path: string, owner: string): void {
+export function validate_local_file_lock_path(path: string): void {
+  if (path.length === 0) {
+    throw new LocalFileLockError("invalid_input", path, "local lock path must not be empty");
+  }
+  if (path.includes("\0")) {
+    throw new LocalFileLockError("invalid_input", path, "local lock path must not contain NUL");
+  }
+  if (has_lone_surrogate(path)) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      "local lock path must contain only valid Unicode scalar values",
+    );
+  }
+}
+
+export function validate_local_file_lock_owner(path: string, owner: string): void {
   if (owner.length === 0) {
     throw new LocalFileLockError("invalid_input", path, "owner token must not be empty");
   }
@@ -430,10 +489,52 @@ async function validate_real_directory(lock_path: string, path: string, label: s
   }
 }
 
+async function validate_posix_trusted_parent(lockPath: string, path: string): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    const metadata = await lstat(path);
+    if ((metadata.mode & 0o022) !== 0) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "lock parent is group/world writable and is outside the trusted private-root boundary",
+      );
+    }
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    throw io_error(lockPath, "inspect POSIX lock-parent permissions", error);
+  }
+}
+
+async function validate_posix_private_lock_directory(lockPath: string, path: string): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    const metadata = await lstat(path);
+    validate_posix_private_mode(lockPath, metadata.mode, "lock directory");
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    throw io_error(lockPath, "inspect POSIX lock-directory permissions", error);
+  }
+}
+
+function validate_posix_private_mode(lockPath: string, mode: number, label: string): void {
+  if (process.platform === "win32") return;
+  if ((mode & 0o077) !== 0) {
+    throw new LocalFileLockError(
+      "compromised",
+      lockPath,
+      `${label} permissions widened beyond the private POSIX contract`,
+    );
+  }
+}
+
 async function validate_regular_file(lock_path: string, path: string, label: string): Promise<void> {
   try {
     const metadata = await lstat(path);
-    if (metadata.isFile() && !metadata.isSymbolicLink()) return;
+    if (metadata.isFile() && !metadata.isSymbolicLink()) {
+      validate_posix_private_mode(lock_path, metadata.mode, label);
+      return;
+    }
     throw new LocalFileLockError(
       "compromised",
       lock_path,
