@@ -19,10 +19,24 @@ assert.deepEqual(contract.defaults, {
 });
 assert.deepEqual(contract.bounds, {
   owner_max_codepoints: 512,
+  owner_max_utf8_bytes_derived: 2048,
+  owner_read_probe_bytes: 2049,
+  inspection_max_directory_entries: 2,
   retry_interval_ms_min: 0,
   zero_retry_interval_allowed_when_wait_false: true,
   owner_file_private_on_posix: true,
 });
+assert.equal(
+  contract.bounds.owner_max_utf8_bytes_derived,
+  contract.bounds.owner_max_codepoints * 4,
+  "derived UTF-8 storage ceiling must remain exactly four bytes per Unicode scalar",
+);
+assert.equal(
+  contract.bounds.owner_read_probe_bytes,
+  contract.bounds.owner_max_utf8_bytes_derived + 1,
+  "bounded readers need exactly one overflow-detection byte",
+);
+assert.equal(contract.bounds.inspection_max_directory_entries, 2);
 assert.deepEqual(
   contract.valid_edge_cases.map(({ name }) => name),
   ["zero-retry-no-wait", "owner-at-max"],
@@ -40,6 +54,10 @@ assert.deepEqual(contract.error_kinds, [
 assert.deepEqual(contract.invariants, {
   admission: "atomic_mkdir",
   release_requires_matching_owner: true,
+  release_owner_read_is_bounded: true,
+  opened_owner_handle_identity_is_revalidated_when_supported: true,
+  boolean_exists_requires_healthy_held_state: true,
+  generated_owner_uses_os_csprng: true,
   release_requires_empty_lock_directory_after_owner_removal: true,
   automatic_pid_or_mtime_stale_breaking: false,
   recursive_delete_on_release: false,
