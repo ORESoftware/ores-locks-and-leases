@@ -1,6 +1,16 @@
-//! Composed distributed locking for the ORESoftware fleet.
+//! Composed local and distributed locking for the ORESoftware fleet.
 //!
-//! Two coordination layers, each individually switchable:
+//! There are two deliberately separate coordination domains:
+//!
+//! * **local filesystem locks** — dependency-free, no-network, single-host
+//!   mutual exclusion. [`LocalFileLock`] provides the portable mkdir/owner-token
+//!   backend shared conceptually with the TypeScript, Go, and Gleam slices.
+//!   zed-pkg's Rust hot path should prefer its stronger native descriptor/handle
+//!   lock (`zed-lock`) when available.
+//! * **distributed coordination** — a fenced lease authority around an optional
+//!   Postgres advisory lock for state shared by more than one host.
+//!
+//! Distributed coordination has two layers, each individually switchable:
 //!
 //! * **fenced lease authority** — the outermost layer. Fiducia remains the
 //!   historical/default adapter, while managed Cloudflare Durable Objects and
@@ -15,15 +25,19 @@
 //!   [`PgScope::Session`] it is `pg_advisory_lock` / `pg_advisory_unlock` on
 //!   one dedicated connection and no transaction is opened at all.
 //!
-//! The layer order is fixed and the same in every language slice of this
-//! package: the fenced lease is acquired first and released last, the advisory
-//! lock sits inside it, and the caller's work is innermost. The current v1
-//! contract keeps the historical `fiducia.*` step names for compatibility;
-//! those step names mean the outer lease authority, not a required backend.
-//! [`plan`] computes that sequence as data so it can be checked against
-//! `conformance/cases/lock-plan.json`, and [`advisory_key`] derives the
-//! `bigint` the advisory functions take from a string key so every runtime
-//! locks the same integer for the same key.
+//! The distributed layer order is fixed and the same in every language slice
+//! of this package: the fenced lease is acquired first and released last, the
+//! advisory lock sits inside it, and the caller's work is innermost. The
+//! portable local filesystem backend is not inserted into that historical
+//! `plan` matrix; callers compose it explicitly when local state also needs
+//! protection.
+//!
+//! The current v1 distributed contract keeps the historical `fiducia.*` step
+//! names for compatibility; those step names mean the outer lease authority,
+//! not a required backend. [`plan`] computes that sequence as data so it can be
+//! checked against `conformance/cases/lock-plan.json`, and [`advisory_key`]
+//! derives the `bigint` the advisory functions take from a string key so every
+//! runtime locks the same integer for the same key.
 //!
 //! [`evaluate_fence`] is the dependency-free application-side decision
 //! primitive. The concrete PostgreSQL/Supabase/Neon and Redis atomic adapters
@@ -41,19 +55,21 @@
 //! commit. Cloudflare Durable Objects and Redis therefore use the same
 //! fail-closed maintained path without depending on the Fiducia client.
 //!
-//! Nothing here depends on the network or on SeaORM unless the matching
-//! cargo feature is enabled: the core (`key`, `plan`, `error`, `lease`,
-//! `managed`, `fence`, `renewal`) is dependency-free and is what `zed-lib-core`
-//! and friends import first.
+//! Nothing here depends on the network or on SeaORM unless the matching cargo
+//! feature is enabled: the core (`key`, `plan`, `error`, `lease`, `local_file`,
+//! `managed`, `fence`, `renewal`) is dependency-free and is what
+//! `zed-lib-core` and friends import first.
 //!
 //! ```text
-//! lease.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► work/renew* ─► lease.renew ─► pg.commit ─► lease.release
+//! local-only: mkdir(lock) -> write owner -> work -> verify owner -> rmdir(lock)
+//! distributed: lease.acquire -> pg.begin -> pg_advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
 //! ```
 
 pub mod error;
 pub mod fence;
 pub mod key;
 pub mod lease;
+pub mod local_file;
 pub mod managed;
 pub mod plan;
 pub mod renewal;
@@ -78,6 +94,10 @@ pub use fence::{
 };
 pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64};
 pub use lease::{AcquireOptions, FencingToken, Lease, LeaseGrant, NoLease, WorkFuture, with_lease};
+pub use local_file::{
+    LocalFileLock, LocalFileLockError, LocalFileLockErrorKind, LocalFileLockOptions,
+    local_file_lock_exists,
+};
 pub use managed::{
     CloudflareDurableObjectLease, ManagedAcquireResult, ManagedGrant, ManagedLease,
     ManagedLeaseBackend, ManagedLeaseTransport, ManagedRenewResult, RedisLease,
