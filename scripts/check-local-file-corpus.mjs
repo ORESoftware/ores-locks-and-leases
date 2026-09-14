@@ -17,6 +17,18 @@ assert.deepEqual(contract.defaults, {
   wait_timeout_ms: 30_000,
   retry_interval_ms: 50,
 });
+assert.deepEqual(contract.bounds, {
+  owner_max_codepoints: 512,
+  retry_interval_ms_min: 0,
+  zero_retry_interval_allowed_when_wait_false: true,
+  owner_file_private_on_posix: true,
+});
+assert.deepEqual(
+  contract.valid_edge_cases.map(({ name }) => name),
+  ["zero-retry-no-wait", "owner-at-max"],
+);
+assert.equal(contract.valid_edge_cases[0].retry_interval_ms, 0);
+assert.equal(contract.valid_edge_cases[1].owner_codepoints, 512);
 assert.equal(contract.owner_file, "owner");
 assert.deepEqual(contract.error_kinds, [
   "contention",
@@ -38,10 +50,14 @@ assert.deepEqual(
   invalid.cases.map(({ name, expect_error }) => [name, expect_error]),
   [
     ["empty-owner", "invalid_input"],
+    ["oversized-owner", "invalid_input"],
+    ["negative-retry-no-wait", "invalid_input"],
     ["zero-timeout-under-contention", "timeout"],
     ["no-wait-under-contention", "contention"],
   ],
 );
+assert.equal(invalid.cases.find(({ name }) => name === "oversized-owner").owner_codepoints, 513);
+assert.equal(invalid.cases.find(({ name }) => name === "negative-retry-no-wait").retry_interval_ms, -1);
 
 assert.equal(scoped.schema, "ores.locks.local-file.scoped.v1");
 assert.equal(scoped.contract, "with_local_file_lock");
