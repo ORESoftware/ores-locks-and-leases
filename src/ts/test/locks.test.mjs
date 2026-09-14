@@ -267,6 +267,8 @@ function fakeNode() {
       } else output = { acquired: false };
     } else if (path === "/v1/locks/renew") {
       output = { renewed: body.holder === node.holder, lease_expires_ms: 234567 };
+    } else if (path === "/v1/locks/cancel") {
+      output = { cancelled: true, acquired: false };
     } else if (path === "/v1/locks/release") {
       const released = body.holder === node.holder && body.fencing_token === node.token;
       if (released) node.holder = "";
