@@ -148,3 +148,30 @@ fn case_insensitive_alias_contends_when_filesystem_aliases_case() {
     first.release().expect("release upper");
     fs::remove_dir_all(root).expect("cleanup root");
 }
+
+#[test]
+fn unicode_normalization_alias_contends_when_filesystem_normalizes_names() {
+    let root = test_root("unicode-normalization-alias");
+    fs::create_dir_all(&root).expect("create root");
+    let composed = root.join("café.lock");
+    let decomposed = root.join("cafe\u{301}.lock");
+    let mut first = LocalFileLock::try_acquire(&composed, "owner-a")
+        .expect("acquire composed path")
+        .expect("holder");
+
+    let aliases = match (fs::canonicalize(&composed), fs::canonicalize(&decomposed)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    };
+    if aliases {
+        assert!(
+            LocalFileLock::try_acquire(&decomposed, "owner-b")
+                .expect("normalization alias acquire")
+                .is_none(),
+            "normalization-equivalent alias must contend when the filesystem maps both names to one rendezvous"
+        );
+    }
+
+    first.release().expect("release composed path");
+    fs::remove_dir_all(root).expect("cleanup root");
+}
