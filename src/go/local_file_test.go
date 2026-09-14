@@ -74,6 +74,46 @@ func TestLocalFileLockFiniteWaitTimesOut(t *testing.T) {
 	}
 }
 
+func TestLocalFileLockZeroTimeoutTimesOutImmediately(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	first, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("first acquire: acquired=%v err=%v", acquired, err)
+	}
+	defer func() { _ = first.Release() }()
+
+	_, err = AcquireLocalFileLock(path, "owner-b", LocalFileLockOptions{
+		Wait:          true,
+		WaitTimeout:   0,
+		RetryInterval: 50 * time.Millisecond,
+	})
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileTimeout {
+		t.Fatalf("expected zero-budget timeout, got %#v", err)
+	}
+}
+
+func TestLocalFileLockEmptyOwnerIsInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	_, _, err := TryAcquireLocalFileLock(path, "")
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected invalid input, got %#v", err)
+	}
+}
+
+func TestLocalFileLockExistingRegularFileIsCompromised(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	if err := os.WriteFile(path, []byte("not a lock directory"), 0o600); err != nil {
+		t.Fatalf("seed regular file: %v", err)
+	}
+	_, _, err := TryAcquireLocalFileLock(path, "owner-a")
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileCompromised {
+		t.Fatalf("expected compromised error, got %#v", err)
+	}
+}
+
 func TestLocalFileLockChangedOwnerFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
@@ -100,6 +140,23 @@ func TestLocalFileLockChangedOwnerFailsClosed(t *testing.T) {
 	}
 }
 
+func TestLocalFileLockMissingOwnerFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: acquired=%v err=%v", acquired, err)
+	}
+	ownerPath := filepath.Join(path, localFileOwnerName)
+	if err := os.Remove(ownerPath); err != nil {
+		t.Fatalf("remove owner: %v", err)
+	}
+	err = lock.Release()
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileCompromised {
+		t.Fatalf("expected compromised error, got %#v", err)
+	}
+}
+
 func TestLocalFileLockUnexpectedEntryFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
@@ -117,5 +174,19 @@ func TestLocalFileLockUnexpectedEntryFailsClosed(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(path, "unexpected")); err != nil {
 		t.Fatalf("unexpected entry must remain for explicit recovery: %v", err)
+	}
+}
+
+func TestLocalFileLockNestedUnicodePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "locks", "锁", "paquete-ñ.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-λ")
+	if err != nil || !acquired {
+		t.Fatalf("unicode acquire: acquired=%v err=%v", acquired, err)
+	}
+	if lock.Owner() != "owner-λ" {
+		t.Fatalf("owner round trip: %q", lock.Owner())
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatalf("unicode release: %v", err)
 	}
 }
