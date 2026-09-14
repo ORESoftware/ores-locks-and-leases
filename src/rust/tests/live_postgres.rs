@@ -7,7 +7,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ores_locks_and_leases::pg::DedicatedConnection;
+use ores_locks_and_leases::pg::{
+    DedicatedConnection, session_lock, session_unlock, try_session_lock,
+};
 use ores_locks_and_leases::{
     AcquireOptions, LockErrorKind, LockKey, LockLayers, NoLease, with_session_lock, with_xact_lock,
 };
@@ -107,4 +109,31 @@ async fn session_lock_round_trips_on_a_dedicated_connection() {
     .await
     .unwrap();
     assert_eq!(value, 42);
+}
+
+#[tokio::test]
+async fn session_lock_contends_across_dedicated_sessions_and_releases_explicitly() {
+    let Some(url) = database_url() else {
+        eprintln!("skipping: ORES_LOCKS_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let first = DedicatedConnection::connect(ConnectOptions::new(url.clone()))
+        .await
+        .unwrap();
+    let second = DedicatedConnection::connect(ConnectOptions::new(url))
+        .await
+        .unwrap();
+    let key = LockKey::new("ores-locks/test/session-contention").unwrap();
+
+    session_lock(&first, &key).await.unwrap();
+    let contended = try_session_lock(&second, &key).await.unwrap_err();
+    assert_eq!(contended.kind, LockErrorKind::Contention);
+
+    assert!(session_unlock(&first, &key).await.unwrap());
+    try_session_lock(&second, &key).await.unwrap();
+    assert!(session_unlock(&second, &key).await.unwrap());
+    assert!(
+        !session_unlock(&second, &key).await.unwrap(),
+        "session lock release is explicit and must report an unmatched unlock",
+    );
 }
