@@ -55,7 +55,15 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     return compromised("owner token exceeds the portable 2048-byte UTF-8 storage bound");
   }
 
-  const owner = await read_bounded_utf8_owner(path, ownerPath);
+  let owner: string;
+  try {
+    owner = await read_bounded_utf8_owner(path, ownerPath);
+  } catch (error) {
+    if (error instanceof LocalFileLockError && error.kind === "compromised") {
+      return compromised(error.message);
+    }
+    throw error;
+  }
   if (owner.length === 0) return compromised("owner token is empty");
   if (Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
     return compromised("owner token exceeds the portable 512-code-point contract bound");
