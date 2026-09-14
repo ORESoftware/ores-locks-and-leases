@@ -78,6 +78,9 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 		if err := os.MkdirAll(parent, 0o700); err != nil {
 			return nil, false, localFileError(LocalFileIO, path, "create lock parent failed", err)
 		}
+		if err := validateLocalRealDirectory(path, parent, "lock parent"); err != nil {
+			return nil, false, err
+		}
 	}
 
 	if err := os.Mkdir(path, 0o700); err != nil {
@@ -86,18 +89,33 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 			if inspectErr != nil {
 				return nil, false, localFileError(LocalFileIO, path, "inspect contended local lock path failed", inspectErr)
 			}
-			if info.IsDir() {
+			if info.IsDir() && !localFileInfoIsAlias(info) {
 				return nil, false, nil
 			}
-			return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not a directory", err)
+			return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not an unaliased directory", err)
 		}
 		return nil, false, localFileError(LocalFileIO, path, "atomically create local lock directory failed", err)
 	}
 
 	ownerPath := filepath.Join(path, localFileOwnerName)
-	if err := os.WriteFile(ownerPath, []byte(owner), 0o600); err != nil {
+	ownerFile, openErr := os.OpenFile(ownerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if openErr != nil {
 		_ = os.Remove(path)
-		return nil, false, localFileError(LocalFileIO, path, "write local lock owner token failed", err)
+		kind := LocalFileIO
+		if errors.Is(openErr, os.ErrExist) {
+			kind = LocalFileCompromised
+		}
+		return nil, false, localFileError(kind, path, "create local lock owner token failed", openErr)
+	}
+	_, writeErr := ownerFile.WriteString(owner)
+	closeErr := ownerFile.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(ownerPath)
+		_ = os.Remove(path)
+		if writeErr != nil {
+			return nil, false, localFileError(LocalFileIO, path, "write local lock owner token failed", writeErr)
+		}
+		return nil, false, localFileError(LocalFileIO, path, "close local lock owner token failed", closeErr)
 	}
 
 	return &LocalFileLock{path: path, owner: owner}, true, nil
@@ -157,8 +175,14 @@ func (l *LocalFileLock) Release() error {
 	if l.released {
 		return nil
 	}
+	if err := validateLocalRealDirectory(l.path, l.path, "lock directory"); err != nil {
+		return err
+	}
 
 	ownerPath := filepath.Join(l.path, localFileOwnerName)
+	if err := validateLocalRegularFile(l.path, ownerPath, "owner token"); err != nil {
+		return err
+	}
 	observed, err := os.ReadFile(ownerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -195,14 +219,49 @@ func (l *LocalFileLock) Release() error {
 // LocalFileLockExists is diagnostics only; callers must still acquire before
 // treating themselves as owner.
 func LocalFileLockExists(path string) (bool, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err == nil {
-		return info.IsDir(), nil
+		if info.IsDir() && !localFileInfoIsAlias(info) {
+			return true, nil
+		}
+		return false, localFileError(LocalFileCompromised, path, "lock path exists but is not an unaliased directory", nil)
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	return false, localFileError(LocalFileIO, path, "inspect local lock path failed", err)
+}
+
+func validateLocalRealDirectory(lockPath, path, label string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return localFileError(LocalFileCompromised, lockPath, label+" is missing", err)
+		}
+		return localFileError(LocalFileIO, lockPath, "inspect "+label+" failed", err)
+	}
+	if !info.IsDir() || localFileInfoIsAlias(info) {
+		return localFileError(LocalFileCompromised, lockPath, label+" is not an unaliased directory", nil)
+	}
+	return nil
+}
+
+func validateLocalRegularFile(lockPath, path, label string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return localFileError(LocalFileCompromised, lockPath, label+" is missing", err)
+		}
+		return localFileError(LocalFileIO, lockPath, "inspect "+label+" failed", err)
+	}
+	if !info.Mode().IsRegular() || localFileInfoIsAlias(info) {
+		return localFileError(LocalFileCompromised, lockPath, label+" is not an unaliased regular file", nil)
+	}
+	return nil
+}
+
+func localFileInfoIsAlias(info os.FileInfo) bool {
+	return info.Mode()&os.ModeSymlink != 0
 }
 
 func localFileError(kind LocalFileLockErrorKind, path, message string, cause error) *LocalFileLockError {

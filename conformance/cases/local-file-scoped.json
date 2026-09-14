@@ -1,0 +1,58 @@
+{
+  "schema": "ores.locks.local-file.scoped.v1",
+  "contract": "with_local_file_lock",
+  "structured_outcomes": [
+    "success",
+    "lock_error",
+    "work_error",
+    "work_and_release_error"
+  ],
+  "precedence": {
+    "acquire_failure": "lock_error",
+    "work_failure_release_success": "work_error",
+    "work_success_release_failure": "lock_error",
+    "work_failure_release_failure": "work_and_release_error"
+  },
+  "fatal_behavior": {
+    "normalized": false,
+    "rule": "runtime-fatal panic/abort conditions are not converted into structured work errors; cleanup is attempted by the runtime's normal unwinding/finalization mechanism and the original fatal condition keeps precedence"
+  },
+  "cases": [
+    {
+      "name": "acquire-fails-before-work",
+      "acquire": "contention",
+      "work": "not_run",
+      "release": "not_run",
+      "expect": "lock_error"
+    },
+    {
+      "name": "work-and-release-succeed",
+      "acquire": "success",
+      "work": "success",
+      "release": "success",
+      "expect": "success"
+    },
+    {
+      "name": "work-fails-release-succeeds",
+      "acquire": "success",
+      "work": "error",
+      "release": "success",
+      "expect": "work_error"
+    },
+    {
+      "name": "work-succeeds-release-fails",
+      "acquire": "success",
+      "work": "success",
+      "release": "compromised",
+      "expect": "lock_error"
+    },
+    {
+      "name": "work-and-release-both-fail",
+      "acquire": "success",
+      "work": "error",
+      "release": "compromised",
+      "expect": "work_and_release_error",
+      "must_preserve": ["work_error", "release_error"]
+    }
+  ]
+}

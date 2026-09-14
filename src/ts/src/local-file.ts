@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const OWNER_FILE = "owner";
@@ -60,7 +60,10 @@ export class LocalFileLock {
   async release(): Promise<void> {
     if (this.#released) return;
 
+    await validate_real_directory(this.path, this.path, "lock directory");
     const owner_path = join(this.path, OWNER_FILE);
+    await validate_regular_file(this.path, owner_path, "owner token");
+
     let observed: string;
     try {
       observed = await readFile(owner_path, "utf8");
@@ -105,20 +108,24 @@ export async function try_acquire_local_file_lock(
   owner: string,
 ): Promise<LocalFileLock | null> {
   validate_owner(path, owner);
+  const parent = dirname(path);
   try {
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    await validate_real_directory(path, parent, "lock parent");
     await mkdir(path, { mode: 0o700 });
   } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "EEXIST") {
       try {
-        if ((await lstat(path)).isDirectory()) return null;
+        const metadata = await lstat(path);
+        if (metadata.isDirectory() && !metadata.isSymbolicLink()) return null;
       } catch (inspectError) {
         throw io_error(path, "inspect contended local lock path", inspectError);
       }
       throw new LocalFileLockError(
         "compromised",
         path,
-        "lock path already exists but is not a directory",
+        "lock path already exists but is not an unaliased directory",
         error,
       );
     }
@@ -134,6 +141,14 @@ export async function try_acquire_local_file_lock(
     } catch {
       // Leave the failed lock directory visible and fail closed if cleanup
       // itself cannot be completed.
+    }
+    if (error_code(error) === "EEXIST") {
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        "owner token already exists after winning lock directory creation",
+        error,
+      );
     }
     throw io_error(path, "write local lock owner token", error);
   }
@@ -176,8 +191,15 @@ export async function acquire_local_file_lock(
 /** Diagnostics only; callers still must acquire before treating themselves as owner. */
 export async function local_file_lock_exists(path: string): Promise<boolean> {
   try {
-    return (await stat(path)).isDirectory();
+    const metadata = await lstat(path);
+    if (metadata.isDirectory() && !metadata.isSymbolicLink()) return true;
+    throw new LocalFileLockError(
+      "compromised",
+      path,
+      "lock path exists but is not an unaliased directory",
+    );
   } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "ENOENT") return false;
     throw io_error(path, "inspect local lock path", error);
   }
@@ -202,6 +224,42 @@ function validate_options(path: string, options: Required<LocalFileLockOptions>)
       path,
       "retry interval must be a finite positive number when waiting",
     );
+  }
+}
+
+async function validate_real_directory(lock_path: string, path: string, label: string): Promise<void> {
+  try {
+    const metadata = await lstat(path);
+    if (metadata.isDirectory() && !metadata.isSymbolicLink()) return;
+    throw new LocalFileLockError(
+      "compromised",
+      lock_path,
+      `${label} is not an unaliased directory`,
+    );
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    if (error_code(error) === "ENOENT") {
+      throw new LocalFileLockError("compromised", lock_path, `${label} is missing`, error);
+    }
+    throw io_error(lock_path, `inspect ${label}`, error);
+  }
+}
+
+async function validate_regular_file(lock_path: string, path: string, label: string): Promise<void> {
+  try {
+    const metadata = await lstat(path);
+    if (metadata.isFile() && !metadata.isSymbolicLink()) return;
+    throw new LocalFileLockError(
+      "compromised",
+      lock_path,
+      `${label} is not an unaliased regular file`,
+    );
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    if (error_code(error) === "ENOENT") {
+      throw new LocalFileLockError("compromised", lock_path, `${label} is missing`, error);
+    }
+    throw io_error(lock_path, `inspect ${label}`, error);
   }
 }
 

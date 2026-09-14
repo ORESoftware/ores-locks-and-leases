@@ -4,49 +4,47 @@ on:
   push:
     branches: [main]
     paths:
-      - "conformance/cases/local-file-lock.json"
-      - "conformance/cases/local-file-lock-invalid.json"
+      - "conformance/cases/local-file-*.json"
       - "conformance/LOCAL_FILE_LOCKS.md"
+      - "docs/local-file-*.md"
+      - "docs/scoped-local-file-locks.md"
       - "scripts/check-local-file-corpus.mjs"
-      - "src/rust/local_file.rs"
+      - "src/rust/local_file*.rs"
       - "src/rust/lib.rs"
-      - "src/rust/tests/local_file_fail_closed.rs"
-      - "src/go/local_file.go"
-      - "src/go/local_file_test.go"
-      - "src/ts/src/local-file.ts"
-      - "src/ts/src/local-file-node-shims.d.ts"
+      - "src/rust/tests/local_file*.rs"
+      - "src/go/local_file*.go"
+      - "src/ts/src/local-file*.ts"
       - "src/ts/src/index.ts"
-      - "src/ts/test/local-file.test.mjs"
+      - "src/ts/test/local-file*.test.mjs"
       - "src/ts/package.json"
       - "src/ts/package-lock.json"
       - "src/ts/tsconfig.json"
-      - "src/gleam/src/ores_locks_and_leases/local_file.gleam"
+      - "src/gleam/src/ores_locks_and_leases/local_file*.gleam"
       - "src/gleam/src/ores_locks_and_leases_local_file_ffi.erl"
-      - "src/gleam/test/local_file_test.gleam"
+      - "src/gleam/test/local_file*_test.gleam"
       - "src/gleam/gleam.toml"
       - "src/gleam/manifest.toml"
       - ".github/workflows/local-file-locks-cross-platform.yml"
   pull_request:
     paths:
-      - "conformance/cases/local-file-lock.json"
-      - "conformance/cases/local-file-lock-invalid.json"
+      - "conformance/cases/local-file-*.json"
       - "conformance/LOCAL_FILE_LOCKS.md"
+      - "docs/local-file-*.md"
+      - "docs/scoped-local-file-locks.md"
       - "scripts/check-local-file-corpus.mjs"
-      - "src/rust/local_file.rs"
+      - "src/rust/local_file*.rs"
       - "src/rust/lib.rs"
-      - "src/rust/tests/local_file_fail_closed.rs"
-      - "src/go/local_file.go"
-      - "src/go/local_file_test.go"
-      - "src/ts/src/local-file.ts"
-      - "src/ts/src/local-file-node-shims.d.ts"
+      - "src/rust/tests/local_file*.rs"
+      - "src/go/local_file*.go"
+      - "src/ts/src/local-file*.ts"
       - "src/ts/src/index.ts"
-      - "src/ts/test/local-file.test.mjs"
+      - "src/ts/test/local-file*.test.mjs"
       - "src/ts/package.json"
       - "src/ts/package-lock.json"
       - "src/ts/tsconfig.json"
-      - "src/gleam/src/ores_locks_and_leases/local_file.gleam"
+      - "src/gleam/src/ores_locks_and_leases/local_file*.gleam"
       - "src/gleam/src/ores_locks_and_leases_local_file_ffi.erl"
-      - "src/gleam/test/local_file_test.gleam"
+      - "src/gleam/test/local_file*_test.gleam"
       - "src/gleam/gleam.toml"
       - "src/gleam/manifest.toml"
       - ".github/workflows/local-file-locks-cross-platform.yml"
@@ -98,7 +96,12 @@ jobs:
 
       - name: Rust portable local lock tests
         working-directory: src/rust
-        run: cargo test --locked --no-default-features local_file
+        run: |
+          cargo test --locked --no-default-features local_file
+          cargo test --locked --no-default-features --test local_file_fail_closed
+          cargo test --locked --no-default-features --test local_file_scoped
+          cargo test --locked --no-default-features --test local_file_recovery
+          cargo test --locked --no-default-features --test local_file_path_identity
 
       - name: Go portable local lock tests
         working-directory: src/go
@@ -109,7 +112,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-          node --test test/local-file.test.mjs
+          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs test/local-file-recovery.test.mjs test/local-file-path-identity.test.mjs
 
       - name: Gleam portable local lock tests
         working-directory: src/gleam

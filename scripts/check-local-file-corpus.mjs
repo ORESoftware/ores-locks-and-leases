@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const contract = JSON.parse(
-  await readFile("conformance/cases/local-file-lock.json", "utf8"),
-);
-const invalid = JSON.parse(
-  await readFile("conformance/cases/local-file-lock-invalid.json", "utf8"),
-);
+async function load(path) {
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+const contract = await load("conformance/cases/local-file-lock.json");
+const invalid = await load("conformance/cases/local-file-lock-invalid.json");
+const scoped = await load("conformance/cases/local-file-scoped.json");
+const recovery = await load("conformance/cases/local-file-recovery.json");
+const identity = await load("conformance/cases/local-file-path-identity.json");
 
 assert.equal(contract.schema, "ores.locks.local-file.v1");
 assert.deepEqual(contract.defaults, {
@@ -39,5 +42,47 @@ assert.deepEqual(
     ["no-wait-under-contention", "contention"],
   ],
 );
+
+assert.equal(scoped.schema, "ores.locks.local-file.scoped.v1");
+assert.equal(scoped.contract, "with_local_file_lock");
+assert.deepEqual(scoped.structured_outcomes, [
+  "success",
+  "lock_error",
+  "work_error",
+  "work_and_release_error",
+]);
+assert.deepEqual(scoped.precedence, {
+  acquire_failure: "lock_error",
+  work_failure_release_success: "work_error",
+  work_success_release_failure: "lock_error",
+  work_failure_release_failure: "work_and_release_error",
+});
+assert.equal(scoped.fatal_behavior.normalized, false);
+assert.equal(scoped.cases.length, 5);
+assert.deepEqual(scoped.cases.at(-1).must_preserve, ["work_error", "release_error"]);
+
+assert.equal(recovery.schema, "ores.locks.local-file.recovery.v1");
+assert.deepEqual(recovery.inspection_states, ["absent", "held", "compromised"]);
+assert.equal(recovery.inspection.claims_ownership, false);
+assert.equal(recovery.inspection.follows_rendezvous_symlink, false);
+assert.deepEqual(recovery.inspection.expected_entries_when_held, ["owner"]);
+assert.equal(recovery.recovery.automatic, false);
+assert.equal(recovery.recovery.requires_explicit_confirmation, true);
+assert.equal(recovery.recovery.requires_expected_owner, true);
+assert.equal(recovery.recovery.recursive_delete, false);
+assert.equal(recovery.cases.length, 9);
+
+assert.equal(identity.schema, "ores.locks.local-file.path-identity.v1");
+assert.deepEqual(identity.rules, {
+  rendezvous_symlink: "compromised",
+  rendezvous_non_directory: "compromised",
+  owner_symlink: "compromised",
+  immediate_parent_symlink_or_reparse_point: "compromised",
+  recursive_delete: false,
+  name_based_helpers_reject_dot: true,
+  name_based_helpers_reject_dot_dot: true,
+  name_based_helpers_reject_path_separators: true,
+});
+assert.equal(identity.cases.length, 9);
 
 console.log("local filesystem lock conformance corpus is structurally valid");
