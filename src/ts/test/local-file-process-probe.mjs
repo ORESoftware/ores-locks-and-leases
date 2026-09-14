@@ -8,6 +8,7 @@ function usage() {
 
 const [mode, path, owner, holdText] = process.argv.slice(2);
 if (!mode || !path || owner === undefined || process.argv.length > 6) usage();
+if (!["hold", "try", "crash"].includes(mode)) usage();
 const holdMs = holdText === undefined ? 0 : Number(holdText);
 if (!Number.isSafeInteger(holdMs) || holdMs < 0) usage();
 
@@ -24,8 +25,6 @@ try {
   } else if (mode === "crash") {
     console.log("CRASHED");
     process.exit(30);
-  } else if (mode !== "try") {
-    usage();
   }
 
   await lock.release();
