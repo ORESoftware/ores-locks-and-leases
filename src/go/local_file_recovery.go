@@ -27,6 +27,9 @@ type LocalFileLockInspection struct {
 
 // InspectLocalFileLock reports portable-lock shape without mutating it.
 func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
+	if err := validateLocalPath(path); err != nil {
+		return LocalFileLockInspection{}, err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -148,6 +151,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 // ownerless crash-window state is never auto-recovered because owner identity
 // can no longer be authenticated.
 func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (bool, error) {
+	if err := validateLocalPath(path); err != nil {
+		return false, err
+	}
 	if !confirmedInactive {
 		return false, localFileError(LocalFileInvalidInput, path, "explicit confirmed_inactive=true is required for recovery", nil)
 	}
