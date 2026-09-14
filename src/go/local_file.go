@@ -82,7 +82,14 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 
 	if err := os.Mkdir(path, 0o700); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return nil, false, nil
+			info, inspectErr := os.Lstat(path)
+			if inspectErr != nil {
+				return nil, false, localFileError(LocalFileIO, path, "inspect contended local lock path failed", inspectErr)
+			}
+			if info.IsDir() {
+				return nil, false, nil
+			}
+			return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not a directory", err)
 		}
 		return nil, false, localFileError(LocalFileIO, path, "atomically create local lock directory failed", err)
 	}
@@ -154,6 +161,9 @@ func (l *LocalFileLock) Release() error {
 	ownerPath := filepath.Join(l.path, localFileOwnerName)
 	observed, err := os.ReadFile(ownerPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return localFileError(LocalFileCompromised, l.path, "owner token is missing; refusing to treat externally altered lock state as a successful release", err)
+		}
 		return localFileError(LocalFileIO, l.path, "read local lock owner token failed", err)
 	}
 	if string(observed) != l.owner {
