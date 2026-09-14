@@ -1,0 +1,101 @@
+name: ores-lock Rust config repair
+
+on:
+  push:
+    branches: [config/ores-lock-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ores-lock-rust-config-repair
+  cancel-in-progress: true
+
+jobs:
+  patch-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: config/ores-lock-v1
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.85.1'
+          components: rustfmt,clippy
+
+      - name: Wire config feature and repair generated source typo
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cargo = Path('src/rust/Cargo.toml')
+          text = cargo.read_text()
+          text = text.replace(
+              '[features]\ndefault = []\n',
+              '[features]\ndefault = []\nconfig = ["dep:serde", "dep:toml"]\n',
+              1,
+          )
+          text = text.replace(
+              'full = ["pg", "maintained", "fiducia"]',
+              'full = ["pg", "maintained", "fiducia", "config"]',
+              1,
+          )
+          anchor = 'tokio = { version = "1", features = ["macros", "time"], optional = true }\n'
+          assert anchor in text
+          text = text.replace(
+              anchor,
+              anchor + 'serde = { version = "1", features = ["derive"], optional = true }\n' +
+              'toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }\n',
+              1,
+          )
+          cargo.write_text(text)
+
+          lib = Path('src/rust/lib.rs')
+          text = lib.read_text()
+          anchor = 'pub mod renewal;\n'
+          assert anchor in text
+          text = text.replace(anchor, anchor + '\n#[cfg(feature = "config")]\npub mod config;\n', 1)
+          anchor = 'pub use renewal::{\n'
+          assert anchor in text
+          exports = '''#[cfg(feature = "config")]\npub use config::{\n    EnvBinding, EnvKind, FiduciaProviderConfig, LocalFileProviderConfig, LockConfigError,\n    LockProfileConfig, OresLockConfigV1, PostgresLockScope, PostgresProviderConfig,\n    ProviderSelection, LOCK_CONFIG_SCHEMA_V1, MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES,\n    MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS, MAX_WAIT_TIMEOUT_MS,\n};\n\n'''
+          text = text.replace(anchor, exports + anchor, 1)
+          lib.write_text(text)
+
+          config = Path('src/rust/config.rs')
+          text = config.read_text().replace(')]\\#[serde', ')]\n#[serde')
+          config.write_text(text)
+          PY
+
+      - name: Generate lockfile delta and format
+        run: |
+          cargo check --manifest-path src/rust/Cargo.toml --features config
+          cargo fmt --manifest-path src/rust/Cargo.toml --all
+
+      - name: Test exact config feature
+        run: |
+          cargo check --locked --manifest-path src/rust/Cargo.toml --features config
+          cargo clippy --locked --manifest-path src/rust/Cargo.toml --all-targets --features config -- -D warnings
+          cargo test --locked --manifest-path src/rust/Cargo.toml --features config config::tests
+
+      - name: Test full feature composition
+        run: |
+          cargo check --locked --manifest-path src/rust/Cargo.toml --features full
+          cargo test --locked --manifest-path src/rust/Cargo.toml --lib --features full
+
+      - name: Remove one-shot workflow and commit verified runtime support
+        run: |
+          rm .github/workflows/ores-lock-rust-config-repair.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/rust/Cargo.toml src/rust/Cargo.lock src/rust/lib.rs src/rust/config.rs .github/workflows/ores-lock-rust-config-repair.yml
+          git diff --cached --check
+          git commit -m 'feat(config): load and validate .ores-lock.toml in Rust'
+          git push origin HEAD:config/ores-lock-v1
