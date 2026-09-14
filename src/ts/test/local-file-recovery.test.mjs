@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -34,13 +34,40 @@ test("inspection distinguishes absent and clean held locks", async () => {
   });
 });
 
-test("inspection marks missing owner and dirty directories compromised", async () => {
+test("empty mkdir-before-owner crash state is explicit and never auto-recovered", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    await mkdir(path, { mode: 0o700 });
+    assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+    await assert.rejects(
+      recover_local_file_lock(path, "owner-a", true),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+  });
+});
+
+test("owner-removed-before-rmdir crash state is explicit and never auto-recovered", async () => {
   await withTempDir(async (root) => {
     const path = join(root, "install.lock");
     const lock = await try_acquire_local_file_lock(path, "owner-a");
     assert.ok(lock);
     await rm(join(path, "owner"));
-    assert.equal((await inspect_local_file_lock(path)).state, "compromised");
+    assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+    await assert.rejects(
+      recover_local_file_lock(path, "owner-a", true),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+  });
+});
+
+test("inspection marks dirty directories compromised", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    await rm(join(path, "owner"));
     await writeFile(join(path, "unexpected"), "x", "utf8");
     assert.equal((await inspect_local_file_lock(path)).state, "compromised");
   });

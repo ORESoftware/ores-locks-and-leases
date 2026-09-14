@@ -203,7 +203,11 @@ test("portable local lock refuses recursive cleanup of unexpected entries", asyn
       lock.release(),
       (error) => error instanceof LocalFileLockError && error.kind === "compromised",
     );
-    assert.equal(await local_file_lock_exists(path), true);
+    await assert.rejects(
+      local_file_lock_exists(path),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    await stat(unexpected);
   });
 });
 

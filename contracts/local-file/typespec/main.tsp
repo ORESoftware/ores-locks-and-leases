@@ -23,6 +23,7 @@ enum LocalFileLockErrorKind {
 enum LocalFileLockInspectionState {
   absent: "absent",
   held: "held",
+  incomplete: "incomplete",
   compromised: "compromised",
 }
 

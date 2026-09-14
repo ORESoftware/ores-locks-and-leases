@@ -13,6 +13,7 @@ const owner_max_codepoints = 512
 pub type LocalFileLockInspectionState {
   Absent
   Held
+  Incomplete
   Compromised
 }
 
@@ -52,6 +53,10 @@ fn inspect_directory(
 ) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
   case directory_shape(path) {
     2 -> Error(io_error(path, "list local lock directory failed"))
+    3 ->
+      Ok(incomplete(
+        "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+      ))
     1 -> Ok(compromised("lock directory must contain exactly one owner marker"))
     _ -> inspect_owner(path)
   }
@@ -73,7 +78,7 @@ fn inspect_owner(
               <> simplifile.describe_error(error),
           ))
       }
-    0 -> Ok(compromised("owner token is missing"))
+    0 -> Ok(incomplete("owner token disappeared during inspection"))
     _ -> Ok(compromised("owner token is not an unaliased regular file"))
   }
 }
@@ -96,6 +101,7 @@ fn inspect_owner_value(
 
 /// Explicit recovery after the caller independently confirms the former owner
 /// is inactive and protected local state is quiescent. `Ok(False)` means absent.
+/// Ownerless incomplete crash-window state is never auto-recovered.
 pub fn recover(
   lock_root: String,
   lock_name: String,
@@ -148,6 +154,12 @@ fn recover_inspected(
   case inspect_path(path) {
     Error(error) -> Error(error)
     Ok(LocalFileLockInspection(Absent, _, _)) -> Ok(False)
+    Ok(LocalFileLockInspection(Incomplete, _, _)) ->
+      Error(local_file.LocalFileLockError(
+        local_file.Compromised,
+        path,
+        "incomplete lock state has no owner identity; refusing automatic recovery",
+      ))
     Ok(LocalFileLockInspection(Compromised, _, message)) ->
       Error(
         local_file.LocalFileLockError(
@@ -246,6 +258,10 @@ fn validate_inputs(
       ))
     False, False, False -> Ok(Nil)
   }
+}
+
+fn incomplete(message: String) -> LocalFileLockInspection {
+  LocalFileLockInspection(Incomplete, None, Some(message))
 }
 
 fn compromised(message: String) -> LocalFileLockInspection {

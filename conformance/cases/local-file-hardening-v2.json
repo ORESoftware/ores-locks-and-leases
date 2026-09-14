@@ -1,0 +1,44 @@
+{
+  "schema": "ores.locks.local-file.hardening-v2.v1",
+  "issue": 58,
+  "policies": {
+    "existing_parent_permissions": "trusted_private_root_required",
+    "posix_reject_group_or_world_writable_immediate_parent": true,
+    "windows_acl_confidentiality_claim": false,
+    "windows_acl_policy": "platform_default_is_not_an_ownership_primitive",
+    "live_permission_widening": "compromised_on_posix_when_observable",
+    "owner_path_to_handle_revalidation": "required_when_runtime_exposes_file_identity",
+    "parent_path_to_handle_revalidation": "best_effort_portable_limit_documented",
+    "boolean_exists_semantics": "true_only_for_healthy_held_state",
+    "owner_token_in_diagnostics": "forbidden",
+    "generated_owner_entropy": "os_csprng",
+    "durability": {
+      "mutual_exclusion_requires_fsync": false,
+      "power_loss_durability_claimed_by_default": false,
+      "durable_mode": "not_exposed"
+    },
+    "contention_pressure": {
+      "fixed_retry_is_fair": false,
+      "starvation_freedom_claimed": false,
+      "cancellation_required_for_new_blocking_api": true,
+      "bounded_jitter_recommended": true
+    }
+  },
+  "executable_requirements": [
+    "release-owner-read-bounded",
+    "inspection-directory-enumeration-bounded",
+    "typescript-rejects-lone-surrogates",
+    "derived-owner-byte-bound-machine-readable",
+    "runtime-constants-centralized",
+    "opened-owner-handle-revalidated",
+    "posix-existing-parent-permission-probe",
+    "windows-acl-policy-probe",
+    "posix-live-permission-widening-probe",
+    "owner-path-to-handle-race-probe",
+    "boolean-exists-fails-closed",
+    "owner-token-redaction-regression",
+    "csprng-owner-helper",
+    "durability-policy-check",
+    "cancellation-pressure-policy-check"
+  ]
+}

@@ -1,14 +1,45 @@
+declare module "node:crypto" {
+  export function randomUUID(): string;
+}
+
 declare module "node:fs/promises" {
   interface LocalFileStats {
+    readonly size: number;
+    readonly dev: number;
+    readonly ino: number;
     isDirectory(): boolean;
     isFile(): boolean;
     isSymbolicLink(): boolean;
+  }
+
+  interface LocalDirectoryEntry {
+    readonly name: string;
+  }
+
+  interface LocalDirectory {
+    read(): Promise<LocalDirectoryEntry | null>;
+    close(): Promise<void>;
+  }
+
+  interface LocalFileHandle {
+    read(
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number,
+    ): Promise<{ bytesRead: number; buffer: Uint8Array }>;
+    stat(): Promise<LocalFileStats>;
+    close(): Promise<void>;
   }
 
   export function mkdir(
     path: string,
     options?: { recursive?: boolean; mode?: number },
   ): Promise<string | undefined>;
+
+  export function open(path: string, flags: string): Promise<LocalFileHandle>;
+
+  export function opendir(path: string): Promise<LocalDirectory>;
 
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
 

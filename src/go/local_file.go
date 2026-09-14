@@ -1,10 +1,13 @@
 package oreslocks
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -12,6 +15,7 @@ import (
 
 const localFileOwnerName = "owner"
 const localFileOwnerMaxCodepoints = 512
+const localFileOwnerMaxUTF8Bytes = localFileOwnerMaxCodepoints * 4
 
 // LocalFileLockErrorKind classifies failures from the portable single-host
 // filesystem backend.
@@ -55,6 +59,17 @@ func DefaultLocalFileLockOptions() LocalFileLockOptions {
 	}
 }
 
+// GeneratedLocalFileLockOwner returns a fresh OS-CSPRNG-backed owner identity.
+// It deliberately has no PID/time fallback because a weak fallback would turn
+// an entropy failure into an ownership-identity failure.
+func GeneratedLocalFileLockOwner() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate local lock owner identity: %w", err)
+	}
+	return "ores-locks-" + hex.EncodeToString(raw[:]), nil
+}
+
 // LocalFileLock is a held portable filesystem lock. Atomic directory creation
 // is the admission authority; the owner file is diagnostics plus an owner-safe
 // release token and is never a stale PID authority.
@@ -92,6 +107,9 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 				return nil, false, localFileError(LocalFileIO, path, "inspect contended local lock path failed", inspectErr)
 			}
 			if info.IsDir() && !localFileInfoIsAlias(info) {
+				if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
+					return nil, false, err
+				}
 				return nil, false, nil
 			}
 			return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not an unaliased directory", err)
@@ -179,15 +197,9 @@ func (l *LocalFileLock) Release() error {
 	}
 
 	ownerPath := filepath.Join(l.path, localFileOwnerName)
-	if err := validateLocalRegularFile(l.path, ownerPath, "owner token"); err != nil {
-		return err
-	}
-	observed, err := os.ReadFile(ownerPath)
+	observed, err := readBoundedLocalFileLockOwner(l.path, ownerPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return localFileError(LocalFileCompromised, l.path, "owner token is missing; refusing to treat externally altered lock state as a successful release", err)
-		}
-		return localFileError(LocalFileIO, l.path, "read local lock owner token failed", err)
+		return err
 	}
 	if string(observed) != l.owner {
 		return localFileError(
@@ -203,11 +215,12 @@ func (l *LocalFileLock) Release() error {
 	}
 	if err := os.Remove(l.path); err != nil {
 		kind := LocalFileIO
-		// Do not depend on platform-specific errno values here. If the directory
-		// is still readable and contains an unexpected entry, ownership has been
-		// compromised and recursive cleanup would be unsafe.
-		if entries, readErr := os.ReadDir(l.path); readErr == nil && len(entries) > 0 {
-			kind = LocalFileCompromised
+		if dir, openErr := os.Open(l.path); openErr == nil {
+			names, readErr := dir.Readdirnames(1)
+			_ = dir.Close()
+			if readErr == nil && len(names) > 0 {
+				kind = LocalFileCompromised
+			}
 		}
 		return localFileError(kind, l.path, "remove local lock directory failed", err)
 	}
@@ -215,25 +228,32 @@ func (l *LocalFileLock) Release() error {
 	return nil
 }
 
-// LocalFileLockExists is diagnostics only; callers must still acquire before
-// treating themselves as owner.
+// LocalFileLockExists is a compatibility diagnostic. It returns true only for
+// a structurally healthy held lock, false only when absent, and fails closed on
+// incomplete or compromised state. Prefer InspectLocalFileLock for new code.
 func LocalFileLockExists(path string) (bool, error) {
-	info, err := os.Lstat(path)
-	if err == nil {
-		if info.IsDir() && !localFileInfoIsAlias(info) {
-			return true, nil
-		}
-		return false, localFileError(LocalFileCompromised, path, "lock path exists but is not an unaliased directory", nil)
+	inspection, err := InspectLocalFileLock(path)
+	if err != nil {
+		return false, err
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	switch inspection.State {
+	case LocalFileLockAbsent:
 		return false, nil
+	case LocalFileLockHeld:
+		return true, nil
+	case LocalFileLockIncomplete:
+		return false, localFileError(LocalFileCompromised, path, "local lock is incomplete; boolean existence cannot certify ownership", nil)
+	default:
+		return false, localFileError(LocalFileCompromised, path, inspection.Message, nil)
 	}
-	return false, localFileError(LocalFileIO, path, "inspect local lock path failed", err)
 }
 
 func validateLocalOwner(path, owner string) error {
 	if owner == "" {
 		return localFileError(LocalFileInvalidInput, path, "owner token must not be empty", nil)
+	}
+	if !utf8.ValidString(owner) {
+		return localFileError(LocalFileInvalidInput, path, "owner token must be valid UTF-8 Unicode scalar data", nil)
 	}
 	if utf8.RuneCountInString(owner) > localFileOwnerMaxCodepoints {
 		return localFileError(LocalFileInvalidInput, path, "owner token must not exceed 512 Unicode code points", nil)
@@ -265,7 +285,7 @@ func validateLocalRealDirectory(lockPath, path, label string) error {
 	if !info.IsDir() || localFileInfoIsAlias(info) {
 		return localFileError(LocalFileCompromised, lockPath, label+" is not an unaliased directory", nil)
 	}
-	return nil
+	return validateLocalPOSIXPrivateMode(lockPath, info, label, 0o022)
 }
 
 func validateLocalRegularFile(lockPath, path, label string) error {
@@ -278,6 +298,16 @@ func validateLocalRegularFile(lockPath, path, label string) error {
 	}
 	if !info.Mode().IsRegular() || localFileInfoIsAlias(info) {
 		return localFileError(LocalFileCompromised, lockPath, label+" is not an unaliased regular file", nil)
+	}
+	return validateLocalPOSIXPrivateMode(lockPath, info, label, 0o077)
+}
+
+func validateLocalPOSIXPrivateMode(lockPath string, info os.FileInfo, label string, forbidden os.FileMode) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	if info.Mode().Perm()&forbidden != 0 {
+		return localFileError(LocalFileCompromised, lockPath, label+" permissions widened beyond the portable private-state policy", nil)
 	}
 	return nil
 }
