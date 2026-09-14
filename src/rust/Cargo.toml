@@ -32,7 +32,13 @@ sea-orm = { version = "1", default-features = false, features = [
   "sqlx-postgres",
   "runtime-tokio-rustls",
 ], optional = true }
-fiducia-client = { git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
+# Cargo requires every Git dependency in a publishable package to carry a
+# registry version fallback because the Git source is stripped from the
+# normalized package manifest. The exact Git revision remains authoritative for
+# source builds. fiducia-client is not yet published, so packaged-consumer CI
+# patches this optional dependency back to the exact Git revision until the
+# client is published or the adapter is split into a companion crate.
+fiducia-client = { version = "0.1.0", git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
 tokio = { version = "1", features = ["macros", "time"], optional = true }
 
 [dev-dependencies]
