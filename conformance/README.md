@@ -13,6 +13,10 @@ slice that disagrees fails.
   `renew_now`, terminal `lost`, or invalid initialization. Every runtime also
   proves full-width token preservation, identity continuity, deadline
   progression, and sticky cancellation around this shared scheduling corpus.
+- `cases/cancellation-race.json` — the safety boundary for an abandoned queued
+  acquisition: preserve the exact request identity, distinguish a committed
+  cancellation from a raced grant, release a raced grant with its fencing token,
+  and surface transport or cleanup uncertainty as a non-retryable safety error.
 
 The adversarial workflow generates a larger deterministic fencing corpus into
 `target/adversarial/`, then temporarily projects it onto
@@ -33,6 +37,7 @@ node scripts/generate-fence-adversarial.mjs \
   --output target/adversarial/fence-decision.json \
   --check
 node scripts/check-renewal-corpus.mjs
+node scripts/check-cancellation-corpus.mjs
 ```
 
 Generate the larger scheduled corpus:
