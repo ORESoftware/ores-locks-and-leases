@@ -41,6 +41,11 @@ export type LocalFileLockInspection =
       message: string;
     };
 
+type InspectionOwnerRead =
+  | { state: "owner"; owner: string }
+  | { state: "absent" }
+  | { state: "incomplete" };
+
 /** Read-only inspection. This never acquires, repairs, or removes a lock. */
 export async function inspect_local_file_lock(path: string): Promise<LocalFileLockInspection> {
   validate_local_file_lock_path(path);
@@ -96,9 +101,9 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     );
   }
 
-  let owner: string;
+  let ownerRead: InspectionOwnerRead;
   try {
-    owner = await read_bounded_local_file_lock_owner(path, ownerPath);
+    ownerRead = await read_inspection_owner(path, ownerPath);
   } catch (error) {
     if (error instanceof LocalFileLockError && error.kind === "compromised") {
       if (error.message.includes("owner token is missing")) {
@@ -108,6 +113,12 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     }
     throw error;
   }
+  if (ownerRead.state === "absent") return { state: "absent" };
+  if (ownerRead.state === "incomplete") {
+    return incomplete("owner token disappeared during inspection");
+  }
+
+  const owner = ownerRead.owner;
   if (owner.length === 0) {
     return compromised("owner_contract_violation", "owner token is empty");
   }
@@ -216,6 +227,53 @@ async function read_inspection_entry_names(path: string): Promise<string[] | nul
       } catch (probeError) {
         if (error_code(probeError) === "ENOENT") return null;
         throw io_error(path, "recheck Windows deletion-pending local lock path", probeError);
+      }
+
+      if (attempt + 1 < maxAttempts) {
+        await sleep_ms(1);
+        continue;
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Read the owner marker for read-only inspection without weakening release.
+ *
+ * Windows may report EPERM from `open(owner)` while a concurrent clean release
+ * has already made the owner or rendezvous deletion-pending. A bounded recheck
+ * converts only observed disappearance into the corresponding inspection
+ * transition. Persistent EPERM on extant state remains a real I/O failure.
+ */
+async function read_inspection_owner(path: string, ownerPath: string): Promise<InspectionOwnerRead> {
+  const maxAttempts = process.platform === "win32" ? 4 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return { state: "owner", owner: await read_bounded_local_file_lock_owner(path, ownerPath) };
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof LocalFileLockError) || error.kind !== "io") throw error;
+      if (process.platform !== "win32" || !caused_by_error_code(error, "EPERM")) {
+        throw error;
+      }
+
+      try {
+        await lstat(ownerPath);
+      } catch (ownerProbeError) {
+        if (error_code(ownerProbeError) === "ENOENT") {
+          try {
+            await lstat(path);
+            return { state: "incomplete" };
+          } catch (pathProbeError) {
+            if (error_code(pathProbeError) === "ENOENT") return { state: "absent" };
+            throw io_error(path, "recheck Windows deletion-pending local lock path", pathProbeError);
+          }
+        }
+        throw io_error(path, "recheck Windows deletion-pending owner token", ownerProbeError);
       }
 
       if (attempt + 1 < maxAttempts) {
