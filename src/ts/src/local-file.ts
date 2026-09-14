@@ -1,6 +1,5 @@
 import { lstat, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { performance } from "node:perf_hooks";
 
 const OWNER_FILE = "owner";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
@@ -167,6 +166,8 @@ export async function acquire_local_file_lock(
   validate_owner(path, owner);
   const resolved = { ...DEFAULT_LOCAL_FILE_LOCK_OPTIONS, ...options };
   validate_options(path, resolved);
+  // `performance.now()` is monotonic in supported Node runtimes and avoids
+  // wall-clock jumps changing a finite lock-wait budget.
   const started = performance.now();
 
   for (;;) {
