@@ -6,8 +6,9 @@
   "$defs": {
     "LockKey": {
       "type": "string",
+      "minLength": 1,
       "maxLength": 512,
-      "description": "A caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`."
+      "description": "A non-empty caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`."
     },
     "AdvisoryKey": {
       "type": "integer",
@@ -25,12 +26,7 @@
     },
     "FenceDecisionKind": {
       "type": "string",
-      "enum": [
-        "advanced",
-        "replay",
-        "stale",
-        "token_reuse"
-      ],
+      "enum": ["advanced", "replay", "stale", "token_reuse"],
       "description": "Outcome of comparing an incoming fencing token and idempotency identity with a stored watermark."
     },
     "FencedWriteRequest": {
@@ -38,164 +34,62 @@
       "unevaluatedProperties": false,
       "description": "One application mutation guarded by a Fiducia fencing token.",
       "properties": {
-        "tenantScope": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "resourceKey": {
-          "$ref": "#/$defs/LockKey"
-        },
-        "fencingToken": {
-          "$ref": "#/$defs/FencingTokenText"
-        },
-        "operationId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "payloadSha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$",
-          "description": "Lowercase SHA-256 of the canonical mutation payload."
-        },
-        "holder": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "leaseId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        }
+        "tenantScope": {"type": "string", "minLength": 1, "maxLength": 256},
+        "resourceKey": {"$ref": "#/$defs/LockKey"},
+        "fencingToken": {"$ref": "#/$defs/FencingTokenText"},
+        "operationId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "payloadSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Lowercase SHA-256 of the canonical mutation payload."},
+        "holder": {"type": "string", "minLength": 1, "maxLength": 256},
+        "leaseId": {"type": "string", "minLength": 1, "maxLength": 256}
       },
-      "required": [
-        "tenantScope",
-        "resourceKey",
-        "fencingToken",
-        "operationId",
-        "payloadSha256"
-      ]
+      "required": ["tenantScope", "resourceKey", "fencingToken", "operationId", "payloadSha256"]
     },
     "FenceWatermark": {
       "type": "object",
       "unevaluatedProperties": false,
       "description": "The last accepted write for one `(tenantScope, resourceKey)` identity.",
       "properties": {
-        "tenantScope": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "resourceKey": {
-          "$ref": "#/$defs/LockKey"
-        },
-        "fencingToken": {
-          "$ref": "#/$defs/FencingTokenText"
-        },
-        "operationId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "payloadSha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "holder": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "leaseId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        }
+        "tenantScope": {"type": "string", "minLength": 1, "maxLength": 256},
+        "resourceKey": {"$ref": "#/$defs/LockKey"},
+        "fencingToken": {"$ref": "#/$defs/FencingTokenText"},
+        "operationId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "payloadSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "holder": {"type": "string", "minLength": 1, "maxLength": 256},
+        "leaseId": {"type": "string", "minLength": 1, "maxLength": 256}
       },
-      "required": [
-        "tenantScope",
-        "resourceKey",
-        "fencingToken",
-        "operationId",
-        "payloadSha256"
-      ]
+      "required": ["tenantScope", "resourceKey", "fencingToken", "operationId", "payloadSha256"]
     },
     "FenceDecision": {
       "type": "object",
       "unevaluatedProperties": false,
       "description": "Pure fencing decision. `shouldApply` is true only for `advanced`.",
       "properties": {
-        "kind": {
-          "$ref": "#/$defs/FenceDecisionKind"
-        },
-        "shouldApply": {
-          "type": "boolean"
-        },
-        "incomingToken": {
-          "$ref": "#/$defs/FencingTokenText"
-        },
-        "currentToken": {
-          "$ref": "#/$defs/FencingTokenText",
-          "description": "Token that remains current after the decision."
-        },
-        "previousToken": {
-          "$ref": "#/$defs/FencingTokenText",
-          "description": "Watermark before the decision; absent only for the first accepted write."
-        }
+        "kind": {"$ref": "#/$defs/FenceDecisionKind"},
+        "shouldApply": {"type": "boolean"},
+        "incomingToken": {"$ref": "#/$defs/FencingTokenText"},
+        "currentToken": {"$ref": "#/$defs/FencingTokenText", "description": "Token that remains current after the decision."},
+        "previousToken": {"$ref": "#/$defs/FencingTokenText", "description": "Watermark before the decision; absent only for the first accepted write."}
       },
-      "required": [
-        "kind",
-        "shouldApply",
-        "incomingToken",
-        "currentToken"
-      ]
+      "required": ["kind", "shouldApply", "incomingToken", "currentToken"]
     },
     "LockLayers": {
       "type": "object",
       "unevaluatedProperties": false,
       "description": "Which coordination layers a routine engages. Both false is a deliberate pass-through (tests, single-writer dev).",
       "properties": {
-        "fiducia": {
-          "type": "boolean",
-          "description": "Engage the fiducia-cloud lease (outermost layer, cross-host, TTL-bounded, fenced)."
-        },
-        "pgAdvisory": {
-          "type": "boolean",
-          "description": "Engage a Postgres advisory lock (inner layer, single-database, released with the transaction or session)."
-        }
+        "fiducia": {"type": "boolean", "description": "Engage the fiducia-cloud lease (outermost layer, cross-host, TTL-bounded, fenced)."},
+        "pgAdvisory": {"type": "boolean", "description": "Engage a Postgres advisory lock (inner layer, single-database, released with the transaction or session)."}
       },
-      "required": [
-        "fiducia",
-        "pgAdvisory"
-      ]
+      "required": ["fiducia", "pgAdvisory"]
     },
     "PgScope": {
       "type": "string",
-      "enum": [
-        "transaction",
-        "session"
-      ],
+      "enum": ["transaction", "session"],
       "description": "How the Postgres advisory lock is scoped. transaction: pg_advisory_xact_lock inside a transaction the routine opens; released at commit/rollback; the caller's work runs inside it. session: pg_advisory_lock / pg_advisory_unlock on one dedicated connection; no transaction is opened."
     },
     "LockStep": {
       "type": "string",
-      "enum": [
-        "fiducia.acquire",
-        "fiducia.try_acquire",
-        "fiducia.renew",
-        "fiducia.release",
-        "pg.begin",
-        "pg.advisory_xact_lock",
-        "pg.try_advisory_xact_lock",
-        "pg.commit",
-        "pg.rollback",
-        "pg.advisory_lock",
-        "pg.try_advisory_lock",
-        "pg.advisory_unlock",
-        "work"
-      ],
+      "enum": ["fiducia.acquire", "fiducia.try_acquire", "fiducia.renew", "fiducia.release", "pg.begin", "pg.advisory_xact_lock", "pg.try_advisory_xact_lock", "pg.commit", "pg.rollback", "pg.advisory_lock", "pg.try_advisory_lock", "pg.advisory_unlock", "work"],
       "description": "One observable action in a lock routine. Maintained transactions may emit fiducia.renew dynamically without changing the legacy static lock-plan matrix."
     },
     "LockPlan": {
@@ -203,112 +97,48 @@
       "unevaluatedProperties": false,
       "description": "A pure function of the inputs; every implementation must produce the same steps. Dynamic maintenance renewals are intentionally not included.",
       "properties": {
-        "layers": {
-          "$ref": "#/$defs/LockLayers"
-        },
-        "pgScope": {
-          "$ref": "#/$defs/PgScope"
-        },
-        "wait": {
-          "type": "boolean",
-          "description": "true: block up to the wait budget; false: fail fast with `contention` when any layer is held."
-        },
-        "steps": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/LockStep"
-          }
-        }
+        "layers": {"$ref": "#/$defs/LockLayers"},
+        "pgScope": {"$ref": "#/$defs/PgScope"},
+        "wait": {"type": "boolean", "description": "true: block up to the wait budget; false: fail fast with `contention` when any layer is held."},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/LockStep"}}
       },
-      "required": [
-        "layers",
-        "pgScope",
-        "wait",
-        "steps"
-      ]
+      "required": ["layers", "pgScope", "wait", "steps"]
     },
     "AcquireOptions": {
       "type": "object",
       "unevaluatedProperties": false,
       "description": "Acquisition tuning shared by every layer.",
       "properties": {
-        "ttlMs": {
-          "type": "integer",
-          "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released. Fixed-cadence maintained transactions require every authority response to report this exact effective TTL."
-        },
-        "waitTimeoutMs": {
-          "type": "integer",
-          "description": "Time to poll the fiducia authority before giving up, in milliseconds. Maintained PostgreSQL waits use this as their bounded advisory-lock budget; ignored when wait is false."
-        },
-        "retryIntervalMs": {
-          "type": "integer",
-          "description": "Poll interval while waiting on the fiducia or maintained PostgreSQL advisory-lock layer, in milliseconds."
-        },
-        "holder": {
-          "type": "string",
-          "description": "Caller identity for the fiducia layer; also the release key. Absent: an unguessable generated id."
-        }
+        "ttlMs": {"type": "integer", "description": "Lease TTL in milliseconds for the fiducia layer. The lease lapses if never renewed or released. Fixed-cadence maintained transactions require every authority response to report this exact effective TTL."},
+        "waitTimeoutMs": {"type": "integer", "description": "Time to poll the fiducia authority before giving up, in milliseconds. Maintained PostgreSQL waits use this as their bounded advisory-lock budget; ignored when wait is false."},
+        "retryIntervalMs": {"type": "integer", "description": "Poll interval while waiting on the fiducia or maintained PostgreSQL advisory-lock layer, in milliseconds."},
+        "holder": {"type": "string", "description": "Caller identity for the fiducia layer; also the release key. Absent: an unguessable generated id."}
       },
-      "required": [
-        "ttlMs",
-        "waitTimeoutMs",
-        "retryIntervalMs"
-      ]
+      "required": ["ttlMs", "waitTimeoutMs", "retryIntervalMs"]
     },
     "LeaseMaintenanceOptions": {
       "type": "object",
       "unevaluatedProperties": false,
       "description": "Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer. The acquired grant and every renewal must preserve the exact acquisition TTL; drift is lost_lease because the fixed cadence cannot safely assume the old duration.",
-      "properties": {
-        "renewIntervalMs": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "renewIntervalMs"
-      ]
+      "properties": {"renewIntervalMs": {"type": "integer"}},
+      "required": ["renewIntervalMs"]
     },
     "LeaseGrant": {
       "type": "object",
       "unevaluatedProperties": false,
       "description": "A held fiducia grant, as returned by the lease authority.",
       "properties": {
-        "key": {
-          "$ref": "#/$defs/LockKey"
-        },
-        "holder": {
-          "type": "string"
-        },
-        "fencingToken": {
-          "$ref": "#/$defs/FencingToken"
-        },
-        "leaseExpiresMs": {
-          "type": "integer",
-          "description": "Absolute expiry in Unix milliseconds when the authority reports it."
-        },
-        "ttlMs": {
-          "type": "integer",
-          "description": "Effective authority TTL in milliseconds. Fixed-cadence maintained transactions require this to equal the requested acquisition TTL on acquisition and every renewal."
-        }
+        "key": {"$ref": "#/$defs/LockKey"},
+        "holder": {"type": "string"},
+        "fencingToken": {"$ref": "#/$defs/FencingToken"},
+        "leaseExpiresMs": {"type": "integer", "description": "Absolute expiry in Unix milliseconds when the authority reports it."},
+        "ttlMs": {"type": "integer", "description": "Effective authority TTL in milliseconds. Fixed-cadence maintained transactions require this to equal the requested acquisition TTL on acquisition and every renewal."}
       },
-      "required": [
-        "key",
-        "holder",
-        "fencingToken",
-        "ttlMs"
-      ]
+      "required": ["key", "holder", "fencingToken", "ttlMs"]
     },
     "LockErrorKind": {
       "type": "string",
-      "enum": [
-        "contention",
-        "timeout",
-        "lost_lease",
-        "transport",
-        "database",
-        "work",
-        "invalid_plan"
-      ],
+      "enum": ["contention", "timeout", "lost_lease", "transport", "database", "work", "invalid_plan"],
       "description": "Why an acquisition or guarded run failed. contention: a layer is held by someone else and wait was false. timeout: the wait budget elapsed. lost_lease: the fiducia lease could not be renewed or was reaped — fenced authority is lost and the guarded work must not continue. transport: transport/HTTP failure talking to the lease authority; ownership is unknown. database: the database refused the advisory-lock statement, the transaction, or the connection. work: the caller's work returned an error; outer layers were still released/rolled back. invalid_plan: the inputs cannot be planned, including an unsafe renewal cadence."
     },
     "LockError": {
@@ -316,25 +146,12 @@
       "unevaluatedProperties": false,
       "description": "The structured failure every implementation surfaces.",
       "properties": {
-        "kind": {
-          "$ref": "#/$defs/LockErrorKind"
-        },
-        "key": {
-          "$ref": "#/$defs/LockKey"
-        },
-        "step": {
-          "$ref": "#/$defs/LockStep",
-          "description": "Which step failed, when known."
-        },
-        "message": {
-          "type": "string"
-        }
+        "kind": {"$ref": "#/$defs/LockErrorKind"},
+        "key": {"$ref": "#/$defs/LockKey"},
+        "step": {"$ref": "#/$defs/LockStep", "description": "Which step failed, when known."},
+        "message": {"type": "string"}
       },
-      "required": [
-        "kind",
-        "key",
-        "message"
-      ]
+      "required": ["kind", "key", "message"]
     }
   }
 }
