@@ -1,3 +1,4 @@
+import gleam/option.{Some}
 import gleeunit/should
 import ores_locks_and_leases/local_file
 import simplifile
@@ -59,7 +60,7 @@ pub fn immediate_parent_symlink_is_compromised_when_supported_test() {
 pub fn owner_symlink_is_compromised_on_release_when_supported_test() {
   let root = "./.tmp-local-file-path-identity/owner"
   clean(root)
-  let assert Ok(local_file.Some(lock)) =
+  let assert Ok(Some(lock)) =
     local_file.try_acquire(root, "install.lock", "owner-a")
   let path = local_file.local_file_lock_path(lock)
   let assert Ok(Nil) = simplifile.delete_file(at: path <> "/owner")
