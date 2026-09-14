@@ -77,3 +77,19 @@ test("portable local lock owner-token mismatch fails closed", async () => {
     );
   });
 });
+
+test("portable local lock refuses recursive cleanup of unexpected entries", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    const unexpected = join(path, "unexpected");
+    await writeFile(unexpected, "do not delete", "utf8");
+
+    await assert.rejects(
+      lock.release(),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    assert.equal(await local_file_lock_exists(path), true);
+  });
+});
