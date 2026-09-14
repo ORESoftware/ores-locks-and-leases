@@ -6,6 +6,7 @@ on:
       - 'contracts/**'
       - 'conformance/**'
       - 'src/**'
+      - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
@@ -15,6 +16,7 @@ on:
       - 'contracts/**'
       - 'conformance/**'
       - 'src/**'
+      - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
@@ -30,8 +32,8 @@ concurrency:
 
 env:
   EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-  TJSV_COMMIT: dfc28bfc000faba5a963f23c708171dfd5f8debf
-  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/dfc28bfc000faba5a963f23c708171dfd5f8debf.tar.gz
+  TJSV_COMMIT: 1614779275115258db73b92c938313e8ae437936
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/1614779275115258db73b92c938313e8ae437936.tar.gz
 
 jobs:
   boundary:
