@@ -114,3 +114,23 @@ test("case aliases contend when the filesystem is case-insensitive", async () =>
     await first.release();
   });
 });
+
+test("Unicode normalization aliases contend when the filesystem normalizes names", async () => {
+  await withTempDir(async (root) => {
+    const composed = join(root, "café.lock");
+    const decomposed = join(root, "cafe\u0301.lock");
+    const first = await try_acquire_local_file_lock(composed, "owner-a");
+    assert.ok(first);
+
+    let aliases = false;
+    try {
+      aliases = (await realpath(decomposed)) === (await realpath(composed));
+    } catch {
+      // Filesystem preserves the two Unicode spellings as distinct names.
+    }
+    if (aliases) {
+      assert.equal(await try_acquire_local_file_lock(decomposed, "owner-b"), null);
+    }
+    await first.release();
+  });
+});
