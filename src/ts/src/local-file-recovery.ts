@@ -8,20 +8,23 @@ import {
   MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
   read_bounded_local_file_lock_owner,
   read_local_file_lock_entry_names_bounded,
+  validate_local_file_lock_owner,
+  validate_local_file_lock_path,
 } from "./local-file.js";
 
 export { MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES } from "./local-file.js";
 
 export type LocalFileLockInspectionState = "absent" | "held" | "incomplete" | "compromised";
 
-export interface LocalFileLockInspection {
-  state: LocalFileLockInspectionState;
-  owner?: string;
-  message?: string;
-}
+export type LocalFileLockInspection =
+  | { state: "absent" }
+  | { state: "held"; owner: string }
+  | { state: "incomplete"; message: string }
+  | { state: "compromised"; message: string };
 
 /** Read-only inspection. This never acquires, repairs, or removes a lock. */
 export async function inspect_local_file_lock(path: string): Promise<LocalFileLockInspection> {
+  validate_local_file_lock_path(path);
   let lockMetadata;
   try {
     lockMetadata = await lstat(path);
@@ -91,21 +94,13 @@ export async function recover_local_file_lock(
   expected_owner: string,
   confirmed_inactive: boolean,
 ): Promise<boolean> {
+  validate_local_file_lock_path(path);
+  validate_local_file_lock_owner(path, expected_owner);
   if (!confirmed_inactive) {
     throw new LocalFileLockError(
       "invalid_input",
       path,
       "explicit confirmed_inactive=true is required for recovery",
-    );
-  }
-  if (expected_owner.length === 0) {
-    throw new LocalFileLockError("invalid_input", path, "expected owner must not be empty");
-  }
-  if (Array.from(expected_owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
-    throw new LocalFileLockError(
-      "invalid_input",
-      path,
-      `expected owner must not exceed ${MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS} Unicode code points`,
     );
   }
 
@@ -119,11 +114,7 @@ export async function recover_local_file_lock(
     );
   }
   if (inspection.state === "compromised") {
-    throw new LocalFileLockError(
-      "compromised",
-      path,
-      inspection.message ?? "local lock state is compromised",
-    );
+    throw new LocalFileLockError("compromised", path, inspection.message);
   }
   if (inspection.owner !== expected_owner) {
     throw new LocalFileLockError(
