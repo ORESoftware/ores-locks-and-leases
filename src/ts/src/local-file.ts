@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { lstat, mkdir, open, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, rmdir, unlink, writeFile } from "node:fs/promises";
 
 export const LOCAL_FILE_LOCK_OWNER_FILE = "owner";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
 export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES =
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS * 4;
+/** Node timers clamp larger delays; never submit an oversized delay. */
+export const MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS = 2_147_483_647;
 
 export type LocalFileLockErrorKind =
   | "contention"
@@ -35,11 +37,11 @@ export interface LocalFileLockOptions {
   retry_interval_ms?: number;
 }
 
-export const DEFAULT_LOCAL_FILE_LOCK_OPTIONS: Required<LocalFileLockOptions> = {
+export const DEFAULT_LOCAL_FILE_LOCK_OPTIONS: Readonly<Required<LocalFileLockOptions>> = Object.freeze({
   wait: true,
   wait_timeout_ms: 30_000,
   retry_interval_ms: 50,
-};
+});
 
 /** Generate a fresh owner identity from the Node.js OS-backed CSPRNG. */
 export function generated_local_file_lock_owner(): string {
@@ -70,6 +72,15 @@ export class LocalFileLock {
     if (this.#released) return;
 
     await validate_real_directory(this.path, this.path, "lock directory");
+    const entries = await read_local_file_lock_entry_names_bounded(this.path);
+    if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
+      throw new LocalFileLockError(
+        "compromised",
+        this.path,
+        "lock directory must contain exactly one owner marker before release",
+      );
+    }
+
     const owner_path = join(this.path, LOCAL_FILE_LOCK_OWNER_FILE);
     await validate_regular_file(this.path, owner_path, "owner token");
 
@@ -132,11 +143,19 @@ export async function try_acquire_local_file_lock(
   try {
     await writeFile(owner_path, owner, { encoding: "utf8", mode: 0o600, flag: "wx" });
   } catch (error) {
+    let rollbackError: unknown;
     try {
       await rmdir(path);
-    } catch {
-      // Leave the failed lock directory visible and fail closed if cleanup
-      // itself cannot be completed.
+    } catch (cleanupError) {
+      rollbackError = cleanupError;
+    }
+    if (rollbackError !== undefined) {
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        `owner-token write failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
+        rollbackError,
+      );
     }
     if (error_code(error) === "EEXIST") {
       throw new LocalFileLockError(
@@ -182,7 +201,10 @@ export async function acquire_local_file_lock(
       );
     }
 
-    await sleep(Math.min(resolved.retry_interval_ms, resolved.wait_timeout_ms - elapsed));
+    await sleep(local_file_lock_sleep_delay_ms(
+      resolved.retry_interval_ms,
+      resolved.wait_timeout_ms - elapsed,
+    ));
   }
 }
 
@@ -209,6 +231,15 @@ export async function local_file_lock_exists(path: string): Promise<boolean> {
     );
   }
 
+  const entries = await read_local_file_lock_entry_names_bounded(path);
+  if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
+    throw new LocalFileLockError(
+      "compromised",
+      path,
+      "lock directory must contain exactly one owner marker",
+    );
+  }
+
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   await validate_regular_file(path, ownerPath, "owner token");
   const owner = await read_bounded_local_file_lock_owner(path, ownerPath);
@@ -220,6 +251,24 @@ export async function local_file_lock_exists(path: string): Promise<boolean> {
     );
   }
   return true;
+}
+
+/** Read no more than two names: enough to prove the one-owner-marker invariant. */
+export async function read_local_file_lock_entry_names_bounded(path: string): Promise<string[]> {
+  let directory;
+  try {
+    directory = await opendir(path);
+    const first = await directory.read();
+    if (first === null) return [];
+    const second = await directory.read();
+    if (second === null) return [first.name];
+    return [first.name, second.name];
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    throw io_error(path, "list local lock directory", error);
+  } finally {
+    await directory?.close();
+  }
 }
 
 export async function read_bounded_local_file_lock_owner(
@@ -294,6 +343,15 @@ export async function read_bounded_local_file_lock_owner(
   } finally {
     await handle?.close();
   }
+}
+
+/** Pure scheduling policy used to keep huge valid int64-like waits safe in Node. */
+export function local_file_lock_sleep_delay_ms(retryIntervalMs: number, remainingMs: number): number {
+  return Math.max(0, Math.min(
+    retryIntervalMs,
+    remainingMs,
+    MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS,
+  ));
 }
 
 function validate_owner(path: string, owner: string): void {
