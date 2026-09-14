@@ -3,6 +3,7 @@ package oreslocks
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
