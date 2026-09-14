@@ -76,7 +76,7 @@
       "required": ["path", "owner", "released"]
     },
     "LocalFileLockInspection": {
-      "oneOf": [
+      "anyOf": [
         {
           "type": "object",
           "unevaluatedProperties": false,
