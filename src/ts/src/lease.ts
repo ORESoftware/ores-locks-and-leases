@@ -16,6 +16,25 @@ import type { LockKey } from "./key.js";
  */
 export type FencingToken = bigint;
 
+/** DOM-independent abort listener shape for queued acquisition. */
+export type AcquireAbortListener = () => void;
+
+/** DOM-independent subset of AbortSignal used by acquisition/cancellation. */
+export interface AcquireAbortSignal {
+  readonly aborted: boolean;
+  readonly reason?: unknown;
+  addEventListener(
+    type: "abort",
+    listener: AcquireAbortListener,
+    options?: boolean | { readonly once?: boolean },
+  ): void;
+  removeEventListener(
+    type: "abort",
+    listener: AcquireAbortListener,
+    options?: boolean | { readonly once?: boolean },
+  ): void;
+}
+
 /** Acquisition tuning shared by every layer. The contract's `AcquireOptions`. */
 export interface AcquireOptions {
   /** Lease TTL in ms. Size it to the longest the guarded work can take. */
@@ -29,7 +48,7 @@ export interface AcquireOptions {
   /** Stable logical acquisition identity. Fiducia reuses it across polls and cancellation. */
   readonly requestId?: string;
   /** Optional caller cancellation. Fiducia performs safe queued-request cleanup before returning. */
-  readonly signal?: AbortSignal;
+  readonly signal?: AcquireAbortSignal;
 }
 
 /** Mirrors the official fiducia clients: 60s lease, 30s wait budget, 250ms poll. */
