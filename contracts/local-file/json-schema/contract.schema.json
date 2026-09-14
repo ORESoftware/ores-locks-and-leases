@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ORESoftware/ores-locks-and-leases/contracts/local-file/json-schema/contract.schema.json",
+  "$comment": "Portable local filesystem lock contract — independent JSON Schema authority. Peer of ../typespec/main.tsp; neither is generated from the other.",
+  "x-ores-namespace": "Ores.LocksAndLeases.LocalFile",
+  "$defs": {
+    "LocalFileLockPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "LocalFileLockOwner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "LocalFileLockErrorKind": {
+      "type": "string",
+      "enum": [
+        "contention",
+        "timeout",
+        "compromised",
+        "io",
+        "invalid_input"
+      ]
+    },
+    "LocalFileLockOptions": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "wait": { "type": "boolean" },
+        "waitTimeoutMs": { "type": "integer", "minimum": 0 },
+        "retryIntervalMs": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["wait", "waitTimeoutMs", "retryIntervalMs"]
+    },
+    "LocalFileLockIdentity": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/LocalFileLockPath" },
+        "owner": { "$ref": "#/$defs/LocalFileLockOwner" }
+      },
+      "required": ["path", "owner"]
+    },
+    "LocalFileLockSnapshot": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/LocalFileLockPath" },
+        "owner": { "$ref": "#/$defs/LocalFileLockOwner" },
+        "released": { "type": "boolean" }
+      },
+      "required": ["path", "owner", "released"]
+    },
+    "LocalFileLockFailure": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/LocalFileLockErrorKind" },
+        "path": { "$ref": "#/$defs/LocalFileLockPath" },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "required": ["kind", "path", "message"]
+    }
+  }
+}
