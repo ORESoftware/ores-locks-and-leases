@@ -8,6 +8,7 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import simplifile
 
@@ -72,7 +73,7 @@ pub fn try_acquire(
   lock_name: String,
   owner: String,
 ) -> Result(Option(LocalFileLock), LocalFileLockError) {
-  use _ <- validate_inputs(lock_root, lock_name, owner)
+  use _ <- result.try(validate_inputs(lock_root, lock_name, owner))
   let path = lock_path(lock_root, lock_name)
 
   case simplifile.create_directory_all(lock_root) {
@@ -100,9 +101,9 @@ pub fn acquire(
   owner: String,
   options: LocalFileLockOptions,
 ) -> Result(LocalFileLock, LocalFileLockError) {
-  use _ <- validate_inputs(lock_root, lock_name, owner)
+  use _ <- result.try(validate_inputs(lock_root, lock_name, owner))
   let path = lock_path(lock_root, lock_name)
-  use _ <- validate_options(path, options)
+  use _ <- result.try(validate_options(path, options))
   acquire_loop(lock_root, lock_name, owner, options, options.wait_timeout_ms)
 }
 
