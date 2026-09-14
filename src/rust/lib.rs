@@ -70,6 +70,7 @@ pub mod fence;
 pub mod key;
 pub mod lease;
 pub mod local_file;
+pub mod local_file_scoped;
 pub mod managed;
 pub mod plan;
 pub mod renewal;
@@ -98,6 +99,7 @@ pub use local_file::{
     LocalFileLock, LocalFileLockError, LocalFileLockErrorKind, LocalFileLockOptions,
     local_file_lock_exists,
 };
+pub use local_file_scoped::{ScopedLocalFileLockError, with_local_file_lock};
 pub use managed::{
     CloudflareDurableObjectLease, ManagedAcquireResult, ManagedGrant, ManagedLease,
     ManagedLeaseBackend, ManagedLeaseTransport, ManagedRenewResult, RedisLease,
