@@ -3,6 +3,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { LockLeaseAuthority } from "./src/authority.js";
+import {
+  MAX_BODY_BYTES,
+  bearerMatches,
+  internalBody,
+  productionMode,
+  readBoundedJson,
+  validateInternalOperation,
+  validatePublicOperation,
+} from "./src/http-boundary.js";
 
 const MAX_SAFE_FENCING_TOKEN = "9007199254740991";
 
@@ -162,12 +171,123 @@ test("Durable Object authority fails closed at the exact JSON fencing ceiling", 
   assert.equal(storage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
 });
 
+test("HTTP boundary rejects unknown fields and invalid operation values", () => {
+  assert.equal(
+    validatePublicOperation("/v1/leases/acquire", {
+      key: "zed-pkg/registry/publish",
+      holder: "worker-a",
+      ttl_ms: 1_000,
+      surprise: true,
+    }),
+    "unknown_field",
+  );
+  assert.equal(
+    validatePublicOperation("/v1/leases/acquire", {
+      key: "x".repeat(513),
+      holder: "worker-a",
+      ttl_ms: 1_000,
+    }),
+    "invalid_key",
+  );
+  assert.equal(
+    validatePublicOperation("/v1/leases/renew", {
+      key: "shared-auth/session/rotate",
+      holder: "worker-a",
+      ttl_ms: 1_000,
+      fencing_token: "9007199254740992",
+    }),
+    "invalid_fencing_token",
+  );
+  assert.equal(
+    validateInternalOperation("/v1/leases/acquire", { holder: "worker-a", ttl_ms: 0 }),
+    "invalid_ttl",
+  );
+});
+
+test("HTTP boundary canonicalizes internal RPC bodies and strips public routing identity", () => {
+  assert.deepEqual(
+    internalBody("/v1/leases/acquire", {
+      key: "fiducia-cloud/election/leader",
+      holder: "worker-a",
+      ttl_ms: 5_000,
+      request_id: "attempt-9",
+    }),
+    { holder: "worker-a", ttl_ms: 5_000, request_id: "attempt-9" },
+  );
+  assert.deepEqual(
+    internalBody("/v1/leases/renew", {
+      key: "fiducia-cloud/election/leader",
+      holder: "worker-a",
+      ttl_ms: 5_000,
+      fencing_token: 7,
+    }),
+    { holder: "worker-a", ttl_ms: 5_000, fencing_token: "7" },
+  );
+});
+
+test("bounded JSON reader rejects bad lengths and oversized streams", async () => {
+  const badLength = new Request("https://locks.example.test/v1/leases/acquire", {
+    method: "POST",
+    headers: { "content-length": "nan" },
+    body: "{}",
+  });
+  assert.deepEqual(await readBoundedJson(badLength), {
+    error: "invalid_content_length",
+    status: 400,
+  });
+
+  const declaredTooLarge = new Request("https://locks.example.test/v1/leases/acquire", {
+    method: "POST",
+    headers: { "content-length": String(MAX_BODY_BYTES + 1) },
+    body: "{}",
+  });
+  assert.deepEqual(await readBoundedJson(declaredTooLarge), {
+    error: "body_too_large",
+    status: 413,
+  });
+
+  const streamedTooLarge = new Request("https://locks.example.test/v1/leases/acquire", {
+    method: "POST",
+    body: "x".repeat(MAX_BODY_BYTES + 1),
+  });
+  assert.deepEqual(await readBoundedJson(streamedTooLarge), {
+    error: "body_too_large",
+    status: 413,
+  });
+
+  const valid = new Request("https://locks.example.test/v1/leases/acquire", {
+    method: "POST",
+    body: JSON.stringify({ holder: "worker-a" }),
+  });
+  assert.deepEqual(await readBoundedJson(valid), { body: { holder: "worker-a" } });
+});
+
+test("bearer comparison is scheme-case tolerant but value exact", async () => {
+  const good = new Request("https://locks.example.test", {
+    headers: { authorization: "bearer correct-secret" },
+  });
+  const bad = new Request("https://locks.example.test", {
+    headers: { authorization: "Bearer wrong-secret" },
+  });
+  assert.equal(await bearerMatches(good, "correct-secret"), true);
+  assert.equal(await bearerMatches(bad, "correct-secret"), false);
+  assert.equal(await bearerMatches(good, ""), false);
+});
+
+test("production mode recognizes prod aliases and prevents dev-mode ambiguity", () => {
+  assert.equal(productionMode({ ORES_LOCKS_ENVIRONMENT: "production" }), true);
+  assert.equal(productionMode({ ORES_LOCKS_ENVIRONMENT: "PROD" }), true);
+  assert.equal(productionMode({ ORES_LOCKS_ENVIRONMENT: "staging" }), false);
+});
+
 test("deployed wrapper is RPC-native while retaining the HTTP adapter", async () => {
   const source = await readFile(new URL("./src/index.js", import.meta.url), "utf8");
   assert.match(source, /class LockLeaseObject extends DurableObject/);
-  assert.match(source, /env\.LOCKS\.getByName\(body\.key\)/);
-  assert.match(source, /stub\.acquire\(input\)/);
-  assert.match(source, /stub\.renew\(input\)/);
-  assert.match(source, /stub\.release\(input\)/);
+  assert.match(source, /env\.LOCKS\.getByName\(decoded\.body\.key\)/);
+  assert.match(source, /stub\.acquire\(body\)/);
+  assert.match(source, /stub\.renew\(body\)/);
+  assert.match(source, /stub\.release\(body\)/);
   assert.match(source, /Backwards-compatible stub\.fetch adapter/);
+  assert.match(source, /unsafe_configuration/);
+  assert.match(source, /authority_rpc_failed/);
 });
