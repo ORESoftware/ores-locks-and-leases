@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 fn usage() -> ! {
-    eprintln!("usage: local_file_probe <hold|try> <path> <owner> [hold_ms]");
+    eprintln!("usage: local_file_probe <hold|try|crash> <path> <owner> [hold_ms]");
     process::exit(2);
 }
 
@@ -37,10 +37,15 @@ fn main() {
 
     println!("ACQUIRED");
     io::stdout().flush().expect("flush stdout");
-    if mode == "hold" {
-        thread::sleep(Duration::from_millis(hold_ms));
-    } else if mode != "try" {
-        usage();
+    match mode.as_str() {
+        "hold" => thread::sleep(Duration::from_millis(hold_ms)),
+        "try" => {}
+        "crash" => {
+            println!("CRASHED");
+            io::stdout().flush().expect("flush stdout");
+            process::exit(30);
+        }
+        _ => usage(),
     }
 
     if let Err(error) = lock.release() {
