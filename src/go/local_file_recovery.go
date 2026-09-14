@@ -2,10 +2,13 @@ package oreslocks
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"unicode/utf8"
 )
+
+const localFileOwnerMaxUTF8Bytes = 2048
 
 // LocalFileLockInspectionState describes read-only portable-lock state.
 type LocalFileLockInspectionState string
@@ -55,9 +58,27 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	if !ownerInfo.Mode().IsRegular() || localFileInfoIsAlias(ownerInfo) {
 		return compromisedInspection("owner token is not an unaliased regular file"), nil
 	}
-	owner, err := os.ReadFile(ownerPath)
+	if ownerInfo.Size() > localFileOwnerMaxUTF8Bytes {
+		return compromisedInspection("owner token exceeds the portable 2048-byte UTF-8 storage bound"), nil
+	}
+
+	ownerFile, err := os.Open(ownerPath)
 	if err != nil {
-		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "read local lock owner token failed", err)
+		if errors.Is(err, os.ErrNotExist) {
+			return compromisedInspection("owner token is missing"), nil
+		}
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "open local lock owner token failed", err)
+	}
+	owner, readErr := io.ReadAll(io.LimitReader(ownerFile, localFileOwnerMaxUTF8Bytes+1))
+	closeErr := ownerFile.Close()
+	if readErr != nil {
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "read local lock owner token failed", readErr)
+	}
+	if closeErr != nil {
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "close local lock owner token failed", closeErr)
+	}
+	if len(owner) > localFileOwnerMaxUTF8Bytes {
+		return compromisedInspection("owner token exceeds the portable 2048-byte UTF-8 storage bound"), nil
 	}
 	if len(owner) == 0 {
 		return compromisedInspection("owner token is empty"), nil
