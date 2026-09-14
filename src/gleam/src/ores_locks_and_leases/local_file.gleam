@@ -72,6 +72,24 @@ pub fn try_acquire(
   use _ <- result.try(validate_inputs(lock_root, lock_name, owner))
   let path = lock_path(lock_root, lock_name)
 
+  case path_kind(lock_root) {
+    0 -> create_missing_lock_root(lock_root, path, owner)
+    1 -> create_lock_directory(path, owner)
+    4 -> Error(io_error(path, "inspect lock root failed"))
+    _ ->
+      Error(LocalFileLockError(
+        Compromised,
+        path,
+        "lock root is not an unaliased directory",
+      ))
+  }
+}
+
+fn create_missing_lock_root(
+  lock_root: String,
+  path: String,
+  owner: String,
+) -> Result(Option(LocalFileLock), LocalFileLockError) {
   case simplifile.create_directory_all(lock_root) {
     Error(error) ->
       Error(io_error(
@@ -81,12 +99,12 @@ pub fn try_acquire(
     Ok(Nil) ->
       case path_kind(lock_root) {
         1 -> create_lock_directory(path, owner)
-        4 -> Error(io_error(path, "inspect lock root failed"))
+        4 -> Error(io_error(path, "inspect created lock root failed"))
         _ ->
           Error(LocalFileLockError(
             Compromised,
             path,
-            "lock root is not an unaliased directory",
+            "created lock root is not an unaliased directory",
           ))
       }
   }
