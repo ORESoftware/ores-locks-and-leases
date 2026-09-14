@@ -28,7 +28,7 @@ fn runtime_admission_matches_portable_lock_config_corpus() {
     ))
     .expect("runtime corpus must be valid JSON");
 
-    assert!(corpus.cases.len() >= 10, "keep a non-trivial admission corpus");
+    assert_eq!(corpus.cases.len(), 20, "keep the full admission corpus intact");
 
     for case in corpus.cases {
         match OresLockConfigV1::from_toml_str(&case.toml) {
