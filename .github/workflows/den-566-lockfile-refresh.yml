@@ -1,0 +1,34 @@
+name: DEN-566 lockfile refresh
+
+on:
+  push:
+    branches:
+      - den-566-cloudflare-do-boundary-hardening
+    paths:
+      - .github/workflows/den-566-lockfile-refresh.yml
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+      - name: Refresh patched rustls in exact Rust lockfile
+        run: cargo update --manifest-path src/rust/Cargo.toml -p rustls --precise 0.23.45
+      - name: Prove patched lockfile is buildable
+        run: cargo check --manifest-path src/rust/Cargo.toml --locked --all-features
+      - name: Upload exact lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: den-566-rust-lockfile
+          path: src/rust/Cargo.lock
+          if-no-files-found: error
