@@ -418,8 +418,8 @@ mod tests {
     #[test]
     fn empty_owner_is_invalid_input() {
         let path = test_path("empty-owner");
-        let error = LocalFileLock::try_acquire(&path, "")
-            .expect_err("empty owner must be rejected");
+        let error =
+            LocalFileLock::try_acquire(&path, "").expect_err("empty owner must be rejected");
         assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
     }
 
