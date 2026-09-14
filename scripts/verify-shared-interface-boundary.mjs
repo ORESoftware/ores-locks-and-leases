@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const PIN_SCHEMA = "ores.locks.shared-interfaces-pin/v2";
+const PIN_SCHEMA = "ores.locks.shared-interface-policy-pin/v1";
 const UPSTREAM_SCHEMA = "ores.shared-interfaces-source/v1";
 const SHARED_REPOSITORY = "ORESoftware/ores-interfaces";
 const SHARED_COMMIT = "ec51630b2139a58831280bc7facbeaf21834c1ea";
@@ -46,26 +46,26 @@ function assertDependencyBoundary() {
   const runtime = section(manifest, "dependencies");
   const build = section(manifest, "build-dependencies");
 
-  assert.match(runtime, /^\s*"oresoftware\/ores-interfaces"\s*=\s*"\^0\.1\.0"\s*$/mu,
-    "ores-interfaces must be a runtime/shared semantic dependency");
-  assert.doesNotMatch(runtime, /ores-contracts|typespec-json-schema-validator/u,
-    "validation/codegen tooling must not be a runtime dependency");
+  assert.doesNotMatch(runtime, /ores-interfaces|ores-contracts|typespec-json-schema-validator/u,
+    "lock-lib currently has no shared/tooling runtime dependency");
   assert.match(build, /^\s*"oresoftware\/ores-contracts"\s*=\s*"\^0\.1\.0"\s*$/mu,
     "ores-contracts must be build/admission-only");
-  assert.doesNotMatch(build, /ores-locks-and-leases/u,
-    "the package must not depend on itself through a tooling edge");
+  assert.doesNotMatch(build, /ores-interfaces|ores-locks-and-leases/u,
+    "ores-interfaces must not become a package edge until concrete composition exists");
 }
 
 function validatePin(pin) {
   assert.equal(pin?.schema, PIN_SCHEMA);
   assert.equal(pin.repository, SHARED_REPOSITORY);
   assert.match(pin.commit ?? "", SHA_PATTERN);
-  assert.equal(pin.commit, SHARED_COMMIT, "consumer pin must use the reviewed current ores-interfaces commit");
+  assert.equal(pin.commit, SHARED_COMMIT, "policy audit must use the reviewed current ores-interfaces commit");
+  assert.equal(pin.packageDependency, false, "ores-interfaces is policy evidence, not a current package edge");
+  assert.match(pin.packageDependencyReason ?? "", /concrete composition/u);
   assert.equal(pin.source?.repository, SOURCE_REPOSITORY);
   assert.equal(pin.source?.commit, SOURCE_COMMIT);
   assert.equal(pin.upstreamValidator?.repository, UPSTREAM_VALIDATOR_REPOSITORY);
   assert.equal(pin.upstreamValidator?.commit, UPSTREAM_VALIDATOR_COMMIT,
-    "record upstream validator provenance without forcing the lock-lib runtime validator to downgrade");
+    "record upstream validator provenance without forcing the lock-lib validator to downgrade");
   assert.equal(pin.authorityModel, "independent-typespec-and-json-schema-peers");
   assert.equal(pin.authorityTransfer, false);
   assert.deepEqual(pin.expectedDeclarations, DECLARATIONS);
@@ -120,7 +120,7 @@ const pin = readJson("contracts/shared-interfaces.json");
 validatePin(pin);
 const revision = spawnSync("git", ["-C", upstreamRoot, "rev-parse", "HEAD"], { encoding: "utf8" });
 assert.equal(revision.status, 0, revision.stderr || "unable to inspect ores-interfaces checkout");
-assert.equal(revision.stdout.trim(), pin.commit, "checked-out ores-interfaces revision must equal the immutable consumer pin");
+assert.equal(revision.stdout.trim(), pin.commit, "checked-out ores-interfaces revision must equal the immutable policy pin");
 validateUpstream(pin, readJson(resolve(upstreamRoot, "shared-interfaces.json")));
 assertNoReverseDependency();
 
@@ -130,17 +130,19 @@ expectRejected(pin, "upstream validator provenance drift", (value) => { value.up
 expectRejected(pin, "authority transfer", (value) => { value.authorityTransfer = true; });
 expectRejected(pin, "missing declaration", (value) => { value.expectedDeclarations.pop(); });
 expectRejected(pin, "wrong source repository", (value) => { value.source.repository = "other/ores-interfaces"; });
+expectRejected(pin, "gratuitous package edge", (value) => { value.packageDependency = true; });
 expectRejected(pin, "missing native runtime export", (value) => { value.requiredRuntimeExports = ["node"]; });
 
 process.stdout.write(`${JSON.stringify({
   schema: "ores.locks.shared-interface-boundary-receipt/v2",
   status: "passed",
   dependencyBoundary: {
-    runtime: ["oresoftware/ores-interfaces"],
+    runtime: [],
     build: ["oresoftware/ores-contracts"],
+    oresInterfacesPackageDependency: false,
     reverseDependency: false,
   },
-  sharedInterfaces: {
+  sharedInterfacePolicy: {
     repository: pin.repository,
     commit: revision.stdout.trim(),
     sourceCommit: pin.source.commit,
@@ -148,5 +150,5 @@ process.stdout.write(`${JSON.stringify({
     declarations: pin.expectedDeclarations.length,
     requiredRuntimeExports: pin.requiredRuntimeExports,
   },
-  negativeCanaries: 7,
+  negativeCanaries: 8,
 }, null, 2)}\n`);
