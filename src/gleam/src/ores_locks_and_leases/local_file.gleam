@@ -315,5 +315,5 @@ fn io_error(path: String, message: String) -> LocalFileLockError {
   LocalFileLockError(Io, path, message)
 }
 
-@external(erlang, "file", "del_dir")
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "delete_empty_directory")
 fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)
