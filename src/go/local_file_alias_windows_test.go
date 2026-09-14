@@ -22,7 +22,7 @@ func (f syntheticWindowsFileInfo) Sys() any {
 	return &syscall.Win32FileAttributeData{FileAttributes: f.attributes}
 }
 
-func TestLocalFileInfoDetectsWindowsReparsePoint(t *testing.T) {
+func TestLocalFileLockDetectsWindowsReparsePoint(t *testing.T) {
 	reparse := syntheticWindowsFileInfo{attributes: syscall.FILE_ATTRIBUTE_REPARSE_POINT}
 	if !localFileInfoIsPlatformAlias(reparse) {
 		t.Fatal("Windows reparse point must be treated as an alias")
