@@ -23,7 +23,8 @@ pub const MAX_RETRY_INTERVAL_MS: u64 = 60_000;
 pub const MAX_TTL_MS: u64 = 86_400_000;
 pub const MAX_RENEW_INTERVAL_MS: u64 = 43_200_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]\#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvKind {
     String,
     Boolean,
@@ -132,7 +133,8 @@ impl LockProfileConfig {
             (
                 AcquireOptions {
                     ttl: Duration::from_millis(
-                        self.ttl_ms.expect("validated Fiducia profiles require ttl_ms"),
+                        self.ttl_ms
+                            .expect("validated Fiducia profiles require ttl_ms"),
                     ),
                     wait_timeout: Duration::from_millis(self.wait_timeout_ms),
                     retry_interval: Duration::from_millis(self.retry_interval_ms),
@@ -240,7 +242,8 @@ impl OresLockConfigV1 {
             validate_profile(profile, &env)?;
         }
 
-        if !valid_id(&self.default_profile) || !profile_ids.contains(self.default_profile.as_str()) {
+        if !valid_id(&self.default_profile) || !profile_ids.contains(self.default_profile.as_str())
+        {
             return Err(LockConfigError::new(
                 "default_profile",
                 "default_profile",
@@ -286,7 +289,11 @@ pub struct LockConfigError {
 
 impl LockConfigError {
     const fn new(code: &'static str, path: &'static str, message: &'static str) -> Self {
-        Self { code, path, message }
+        Self {
+            code,
+            path,
+            message,
+        }
     }
 }
 
@@ -387,7 +394,8 @@ fn validate_profile(
 
     match (profile.providers.fiducia, profile.fiducia.as_ref()) {
         (true, Some(fiducia)) => {
-            let endpoint = lookup_binding(env, &fiducia.endpoint_env, "profiles.fiducia.endpoint_env")?;
+            let endpoint =
+                lookup_binding(env, &fiducia.endpoint_env, "profiles.fiducia.endpoint_env")?;
             require_binding(
                 endpoint,
                 EnvKind::Url,
@@ -395,7 +403,11 @@ fn validate_profile(
                 "profiles.fiducia.endpoint_env",
                 "Fiducia endpoint must be a non-secret URL environment binding",
             )?;
-            let auth = lookup_binding(env, &fiducia.auth_token_env, "profiles.fiducia.auth_token_env")?;
+            let auth = lookup_binding(
+                env,
+                &fiducia.auth_token_env,
+                "profiles.fiducia.auth_token_env",
+            )?;
             require_binding(
                 auth,
                 EnvKind::String,
@@ -555,9 +567,7 @@ mod tests {
         assert!(local.lease_acquire_options().is_none());
         assert_eq!(local.pg_scope(), None);
 
-        let service = config
-            .profile("service-composed")
-            .expect("service profile");
+        let service = config.profile("service-composed").expect("service profile");
         assert_eq!(service.layers(), LockLayers::BOTH);
         assert!(service.local_file_options().is_none());
         assert_eq!(service.pg_scope(), Some(PgScope::Transaction));
@@ -601,10 +611,8 @@ mod tests {
             "env_reference_policy"
         );
 
-        let bad_renewal = ROOT_CONFIG.replace(
-            "renew_interval_ms = 10000",
-            "renew_interval_ms = 20000",
-        );
+        let bad_renewal =
+            ROOT_CONFIG.replace("renew_interval_ms = 10000", "renew_interval_ms = 20000");
         assert_eq!(
             OresLockConfigV1::from_toml_str(&bad_renewal)
                 .unwrap_err()
@@ -622,13 +630,11 @@ mod tests {
         );
 
         let dormant = ROOT_CONFIG.replace(
-            "local_file = true\nfiducia = false",
-            "local_file = false\nfiducia = false",
+            "local_file = true\nfiducia = false\npg_advisory = false",
+            "local_file = false\nfiducia = false\npg_advisory = true",
         );
         assert_eq!(
-            OresLockConfigV1::from_toml_str(&dormant)
-                .unwrap_err()
-                .code,
+            OresLockConfigV1::from_toml_str(&dormant).unwrap_err().code,
             "local_file_dormant"
         );
     }
