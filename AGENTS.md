@@ -30,10 +30,13 @@ changes every org, so:
   Draft 2020-12 under `contracts/` are human-authored peers with no precedence.
   Run `sh scripts/check-tjsv-contracts.sh all` after touching either authority.
   TJSV is pinned at commit
-  `6bb5b7c1ee41c8b43741e50a264c33a1165549c4`; generated Schema B is disposable
-  comparison evidence only and must never replace authored Schema A. Also run
-  the pinned `ores-contracts` checks because they exercise the existing
-  multi-language projection configuration.
+  `b2c4810400625829114a56087ad33937caac735a`; generated Schema B is disposable
+  comparison evidence only and must never replace authored Schema A. Protobuf,
+  WIT, and Dafny are optional additive projections: once a lane exists under
+  `contracts/projections/`, it must pass
+  `sh scripts/check-tjsv-optional-projections.sh` and TJSV `verify-projection`.
+  Also run the pinned `ores-contracts` checks because they exercise the
+  existing multi-language projection configuration.
 * **Contract changes are exact-head, cross-runtime changes.** The
   `contract-runtime-boundary` receipt must bind successful TJSV structural and
   differential parity to Rust, Go, TypeScript/Node.js, Dart/Flutter-facing,
