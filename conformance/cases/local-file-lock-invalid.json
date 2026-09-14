@@ -7,6 +7,19 @@
       "expect_error": "invalid_input"
     },
     {
+      "name": "oversized-owner",
+      "owner_codepoints": 513,
+      "expect_error": "invalid_input"
+    },
+    {
+      "name": "negative-retry-no-wait",
+      "owner": "owner-a",
+      "wait": false,
+      "wait_timeout_ms": 30000,
+      "retry_interval_ms": -1,
+      "expect_error": "invalid_input"
+    },
+    {
       "name": "zero-timeout-under-contention",
       "owner": "owner-b",
       "wait": true,

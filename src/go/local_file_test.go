@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,6 +101,76 @@ func TestLocalFileLockEmptyOwnerIsInvalid(t *testing.T) {
 	var lockErr *LocalFileLockError
 	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileInvalidInput {
 		t.Fatalf("expected invalid input, got %#v", err)
+	}
+}
+
+func TestLocalFileLockOwnerAtMaxCodepointsIsValid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	owner := strings.Repeat("😀", 512)
+	lock, acquired, err := TryAcquireLocalFileLock(path, owner)
+	if err != nil || !acquired {
+		t.Fatalf("expected 512-code-point owner to be valid: acquired=%v err=%v", acquired, err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatalf("release max owner lock: %v", err)
+	}
+}
+
+func TestLocalFileLockOversizedOwnerIsInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	_, _, err := TryAcquireLocalFileLock(path, strings.Repeat("😀", 513))
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected oversized owner invalid input, got %#v", err)
+	}
+}
+
+func TestLocalFileLockNegativeRetryIsInvalidEvenWithoutWaiting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	_, err := AcquireLocalFileLock(path, "owner-a", LocalFileLockOptions{
+		Wait:          false,
+		WaitTimeout:   30 * time.Second,
+		RetryInterval: -1 * time.Millisecond,
+	})
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected negative retry invalid input, got %#v", err)
+	}
+}
+
+func TestLocalFileLockZeroRetryIsValidWithoutWaiting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, err := AcquireLocalFileLock(path, "owner-a", LocalFileLockOptions{
+		Wait:          false,
+		WaitTimeout:   30 * time.Second,
+		RetryInterval: 0,
+	})
+	if err != nil {
+		t.Fatalf("zero retry without waiting must be valid: %v", err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatalf("release zero-retry lock: %v", err)
+	}
+}
+
+func TestLocalFileLockOwnerMarkerIsPrivateOnPosix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not the Windows ownership primitive")
+	}
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: acquired=%v err=%v", acquired, err)
+	}
+	ownerInfo, err := os.Stat(filepath.Join(path, localFileOwnerName))
+	if err != nil {
+		t.Fatalf("stat owner marker: %v", err)
+	}
+	if got := ownerInfo.Mode().Perm() & 0o077; got != 0 {
+		t.Fatalf("owner marker exposes group/other permissions: %#o", got)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatalf("release: %v", err)
 	}
 }
 

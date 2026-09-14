@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const localFileOwnerName = "owner"
+const localFileOwnerMaxCodepoints = 512
 
 // LocalFileLockErrorKind classifies failures from the portable single-host
 // filesystem backend.
@@ -69,8 +71,8 @@ func (l *LocalFileLock) Owner() string { return l.owner }
 // TryAcquireLocalFileLock makes one immediate atomic attempt. acquired=false
 // with a nil error means ordinary contention.
 func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired bool, err error) {
-	if owner == "" {
-		return nil, false, localFileError(LocalFileInvalidInput, path, "owner token must not be empty", nil)
+	if err := validateLocalOwner(path, owner); err != nil {
+		return nil, false, err
 	}
 
 	parent := filepath.Dir(path)
@@ -125,14 +127,11 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 // backend retries mkdir; zed-pkg's native Rust lock should keep one
 // kernel-backed blocking request instead.
 func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*LocalFileLock, error) {
-	if owner == "" {
-		return nil, localFileError(LocalFileInvalidInput, path, "owner token must not be empty", nil)
+	if err := validateLocalOwner(path, owner); err != nil {
+		return nil, err
 	}
-	if options.WaitTimeout < 0 {
-		return nil, localFileError(LocalFileInvalidInput, path, "wait timeout must not be negative", nil)
-	}
-	if options.Wait && options.RetryInterval <= 0 {
-		return nil, localFileError(LocalFileInvalidInput, path, "retry interval must be greater than zero when waiting", nil)
+	if err := validateLocalOptions(path, options); err != nil {
+		return nil, err
 	}
 
 	started := time.Now()
@@ -230,6 +229,29 @@ func LocalFileLockExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, localFileError(LocalFileIO, path, "inspect local lock path failed", err)
+}
+
+func validateLocalOwner(path, owner string) error {
+	if owner == "" {
+		return localFileError(LocalFileInvalidInput, path, "owner token must not be empty", nil)
+	}
+	if utf8.RuneCountInString(owner) > localFileOwnerMaxCodepoints {
+		return localFileError(LocalFileInvalidInput, path, "owner token must not exceed 512 Unicode code points", nil)
+	}
+	return nil
+}
+
+func validateLocalOptions(path string, options LocalFileLockOptions) error {
+	if options.WaitTimeout < 0 {
+		return localFileError(LocalFileInvalidInput, path, "wait timeout must not be negative", nil)
+	}
+	if options.RetryInterval < 0 {
+		return localFileError(LocalFileInvalidInput, path, "retry interval must not be negative", nil)
+	}
+	if options.Wait && options.RetryInterval == 0 {
+		return localFileError(LocalFileInvalidInput, path, "retry interval must be greater than zero when waiting", nil)
+	}
+	return nil
 }
 
 func validateLocalRealDirectory(lockPath, path, label string) error {

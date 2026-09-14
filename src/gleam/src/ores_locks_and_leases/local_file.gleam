@@ -14,6 +14,8 @@ import simplifile
 
 const owner_file = "owner"
 
+const owner_max_codepoints = 512
+
 /// Why a portable local filesystem lock operation failed.
 pub type LocalFileLockErrorKind {
   Contention
@@ -312,33 +314,40 @@ fn validate_inputs(
     || lock_name == ".."
     || string.contains(lock_name, "/")
     || string.contains(lock_name, "\\"),
-    string.is_empty(owner)
+    string.is_empty(owner),
+    unicode_codepoint_count(owner) > owner_max_codepoints
   {
-    True, _, _, _ ->
+    True, _, _, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock root must not be empty",
       ))
-    _, True, _, _ ->
+    _, True, _, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock name must not be empty",
       ))
-    _, _, True, _ ->
+    _, _, True, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock name must be one non-dot path component",
       ))
-    _, _, _, True ->
+    _, _, _, True, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "owner token must not be empty",
       ))
-    False, False, False, False -> Ok(Nil)
+    _, _, _, _, True ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "owner token must not exceed 512 Unicode code points",
+      ))
+    False, False, False, False, False -> Ok(Nil)
   }
 }
 
@@ -348,21 +357,28 @@ fn validate_options(
 ) -> Result(Nil, LocalFileLockError) {
   case
     options.wait_timeout_ms < 0,
-    options.wait && options.retry_interval_ms <= 0
+    options.retry_interval_ms < 0,
+    options.wait && options.retry_interval_ms == 0
   {
-    True, _ ->
+    True, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "wait timeout must not be negative",
       ))
-    _, True ->
+    _, True, _ ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "retry interval must not be negative",
+      ))
+    _, _, True ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "retry interval must be greater than zero when waiting",
       ))
-    False, False -> Ok(Nil)
+    False, False, False -> Ok(Nil)
   }
 }
 
@@ -388,3 +404,6 @@ fn path_kind(path: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "write_new_file_status")
 fn write_new_file_status(path: String, contents: String) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "unicode_codepoint_count")
+fn unicode_codepoint_count(value: String) -> Int

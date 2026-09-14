@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -89,6 +89,68 @@ test("portable local lock rejects an empty owner", async () => {
       try_acquire_local_file_lock(path, ""),
       (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
     );
+  });
+});
+
+test("portable local lock accepts exactly 512 Unicode code points", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const owner = "😀".repeat(512);
+    const lock = await try_acquire_local_file_lock(path, owner);
+    assert.ok(lock);
+    assert.equal(Array.from(lock.owner).length, 512);
+    await lock.release();
+  });
+});
+
+test("portable local lock rejects owners over 512 Unicode code points", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    await assert.rejects(
+      try_acquire_local_file_lock(path, "😀".repeat(513)),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
+  });
+});
+
+test("portable local lock rejects negative retry even when wait is false", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    await assert.rejects(
+      acquire_local_file_lock(path, "owner-a", {
+        wait: false,
+        wait_timeout_ms: 30_000,
+        retry_interval_ms: -1,
+      }),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
+  });
+});
+
+test("portable local lock allows zero retry when wait is false", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const lock = await acquire_local_file_lock(path, "owner-a", {
+      wait: false,
+      wait_timeout_ms: 30_000,
+      retry_interval_ms: 0,
+    });
+    await lock.release();
+  });
+});
+
+test("portable local lock owner marker is private on POSIX", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX mode bits are not the Windows ownership primitive");
+    return;
+  }
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    const metadata = await stat(join(path, "owner"));
+    assert.equal(metadata.mode & 0o077, 0);
+    await lock.release();
   });
 });
 

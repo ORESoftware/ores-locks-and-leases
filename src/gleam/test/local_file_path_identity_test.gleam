@@ -1,4 +1,4 @@
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleeunit/should
 import ores_locks_and_leases/local_file
 import simplifile
@@ -82,5 +82,25 @@ pub fn owner_symlink_is_compromised_on_release_when_supported_test() {
   clean(root)
 }
 
+pub fn case_fold_alias_contends_when_filesystem_aliases_case_test() {
+  let root = "./.tmp-local-file-path-identity/case-fold"
+  clean(root)
+  let assert Ok(Some(first)) =
+    local_file.try_acquire(root, "Install.lock", "owner-a")
+  case path_kind(root <> "/install.lock") {
+    1 -> {
+      let assert Ok(None) =
+        local_file.try_acquire(root, "install.lock", "owner-b")
+      Nil
+    }
+    _ -> Nil
+  }
+  local_file.release(first) |> should.equal(Ok(Nil))
+  clean(root)
+}
+
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "make_symlink_status")
 fn make_symlink_status(target: String, link: String) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "path_kind")
+fn path_kind(path: String) -> Int

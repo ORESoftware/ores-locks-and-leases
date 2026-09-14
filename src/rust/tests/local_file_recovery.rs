@@ -55,6 +55,20 @@ fn inspect_missing_owner_and_dirty_directory_are_compromised() {
 }
 
 #[test]
+fn inspect_oversized_persisted_owner_is_compromised() {
+    let path = test_path("oversized-persisted-owner");
+    let lock = LocalFileLock::try_acquire(&path, "owner-a")
+        .expect("acquire")
+        .expect("holder");
+    fs::write(path.join("owner"), "😀".repeat(513)).expect("replace owner");
+    let inspection = inspect_local_file_lock(&path).expect("inspect oversized owner");
+    assert_eq!(inspection.state, LocalFileLockInspectionState::Compromised);
+    std::mem::forget(lock);
+    fs::remove_file(path.join("owner")).expect("cleanup owner");
+    fs::remove_dir(path).expect("cleanup lock");
+}
+
+#[test]
 fn recovery_requires_confirmation_and_expected_owner() {
     let path = test_path("gates");
     let lock = LocalFileLock::try_acquire(&path, "owner-a")
@@ -72,6 +86,14 @@ fn recovery_requires_confirmation_and_expected_owner() {
 
     assert!(recover_local_file_lock(&path, "owner-a", true).expect("recover clean lock"));
     assert!(!path.exists());
+}
+
+#[test]
+fn recovery_rejects_oversized_expected_owner() {
+    let path = test_path("oversized-expected-owner");
+    let error = recover_local_file_lock(&path, &"😀".repeat(513), true)
+        .expect_err("oversized expected owner must fail admission");
+    assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
 }
 
 #[test]

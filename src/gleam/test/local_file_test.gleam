@@ -1,4 +1,5 @@
 import gleam/option.{None, Some}
+import gleam/string
 import gleeunit/should
 import ores_locks_and_leases/local_file
 import simplifile
@@ -90,6 +91,70 @@ pub fn local_file_lock_empty_owner_is_invalid_test() {
   clean(root)
 }
 
+pub fn local_file_lock_owner_at_max_codepoints_is_valid_test() {
+  let root = "./.tmp-local-file-locks/max-owner"
+  clean(root)
+  let owner = string.repeat("😀", 512)
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "install.lock", owner)
+  local_file.release(lock) |> should.equal(Ok(Nil))
+  clean(root)
+}
+
+pub fn local_file_lock_oversized_owner_is_invalid_test() {
+  let root = "./.tmp-local-file-locks/oversized-owner"
+  clean(root)
+  let owner = string.repeat("😀", 513)
+  let assert Error(error) = local_file.try_acquire(root, "install.lock", owner)
+  error.kind |> should.equal(local_file.InvalidInput)
+  clean(root)
+}
+
+pub fn local_file_lock_negative_retry_is_invalid_without_waiting_test() {
+  let root = "./.tmp-local-file-locks/negative-retry"
+  clean(root)
+  let options =
+    local_file.LocalFileLockOptions(
+      wait: False,
+      wait_timeout_ms: 30_000,
+      retry_interval_ms: -1,
+    )
+  let assert Error(error) =
+    local_file.acquire(root, "install.lock", "owner-a", options)
+  error.kind |> should.equal(local_file.InvalidInput)
+  clean(root)
+}
+
+pub fn local_file_lock_zero_retry_is_valid_without_waiting_test() {
+  let root = "./.tmp-local-file-locks/zero-retry-no-wait"
+  clean(root)
+  let options =
+    local_file.LocalFileLockOptions(
+      wait: False,
+      wait_timeout_ms: 30_000,
+      retry_interval_ms: 0,
+    )
+  let assert Ok(lock) =
+    local_file.acquire(root, "install.lock", "owner-a", options)
+  local_file.release(lock) |> should.equal(Ok(Nil))
+  clean(root)
+}
+
+pub fn local_file_lock_owner_marker_is_private_on_posix_test() {
+  let root = "./.tmp-local-file-locks/private-owner"
+  clean(root)
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let owner_path = local_file.local_file_lock_path(lock) <> "/owner"
+  case owner_private_mode_status(owner_path) {
+    0 -> Nil
+    3 -> Nil
+    other -> other |> should.equal(0)
+  }
+  local_file.release(lock) |> should.equal(Ok(Nil))
+  clean(root)
+}
+
 pub fn local_file_lock_existing_regular_file_is_compromised_test() {
   let root = "./.tmp-local-file-locks/existing-file"
   clean(root)
@@ -156,3 +221,6 @@ pub fn local_file_lock_nested_unicode_path_test() {
   local_file.exists(root, "paquete-ñ.lock") |> should.equal(Ok(False))
   clean("./.tmp-local-file-locks/unicode-锁")
 }
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "owner_private_mode_status")
+fn owner_private_mode_status(path: String) -> Int
