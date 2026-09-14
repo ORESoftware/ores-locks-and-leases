@@ -293,6 +293,15 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 			}
 			return LeaseGrant{}, transportErr(key, err)
 		}
+		// The caller may cancel after the authority has produced a response but
+		// before this client exposes it. Cancellation has precedence: reconcile
+		// through the stable request id so a grant won in that race is released.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+				return LeaseGrant{}, transportErr(key, cleanupErr)
+			}
+			return LeaseGrant{}, transportErr(key, ctxErr)
+		}
 		if outBool(out, "acquired") {
 			token, ok := outUint(out, "fencing_token")
 			if !ok || token == 0 {
