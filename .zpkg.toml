@@ -10,12 +10,11 @@ keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing", "fiducia", 
 vcs = "git"
 url = "https://github.com/ORESoftware/ores-locks-and-leases"
 
-# This package owns lock/lease/fencing/provider semantics. The only runtime
-# shared dependency is the fleet-generic interface surface; contract validation
-# and code-generation tooling stay on the build/admission edge.
-[dependencies]
-"oresoftware/ores-interfaces" = "^0.1.0"
-
+# This package owns lock/lease/fencing/provider semantics. It currently imports
+# no fleet-generic runtime primitive from ores-interfaces, so adding a runtime
+# zed edge would be gratuitous coupling. The shared-interface policy is audited
+# separately and may become a dependency when concrete composition exists.
+# Contract validation/code-generation tooling stays on the build/admission edge.
 [build-dependencies]
 "oresoftware/ores-contracts" = "^0.1.0"
 
