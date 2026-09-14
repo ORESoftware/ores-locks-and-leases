@@ -1,5 +1,6 @@
 import { lstat, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 
 const OWNER_FILE = "owner";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
@@ -166,7 +167,7 @@ export async function acquire_local_file_lock(
   validate_owner(path, owner);
   const resolved = { ...DEFAULT_LOCAL_FILE_LOCK_OPTIONS, ...options };
   validate_options(path, resolved);
-  const started = Date.now();
+  const started = performance.now();
 
   for (;;) {
     const lock = await try_acquire_local_file_lock(path, owner);
@@ -176,7 +177,7 @@ export async function acquire_local_file_lock(
       throw new LocalFileLockError("contention", path, "lock is already held by another owner");
     }
 
-    const elapsed = Date.now() - started;
+    const elapsed = performance.now() - started;
     if (elapsed >= resolved.wait_timeout_ms) {
       throw new LocalFileLockError(
         "timeout",
@@ -220,14 +221,18 @@ function validate_owner(path: string, owner: string): void {
 }
 
 function validate_options(path: string, options: Required<LocalFileLockOptions>): void {
-  if (!Number.isFinite(options.wait_timeout_ms) || options.wait_timeout_ms < 0) {
-    throw new LocalFileLockError("invalid_input", path, "wait timeout must be a finite non-negative number");
-  }
-  if (!Number.isFinite(options.retry_interval_ms) || options.retry_interval_ms < 0) {
+  if (!Number.isSafeInteger(options.wait_timeout_ms) || options.wait_timeout_ms < 0) {
     throw new LocalFileLockError(
       "invalid_input",
       path,
-      "retry interval must be a finite non-negative number",
+      "wait timeout must be a non-negative JavaScript safe integer number of milliseconds",
+    );
+  }
+  if (!Number.isSafeInteger(options.retry_interval_ms) || options.retry_interval_ms < 0) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      "retry interval must be a non-negative JavaScript safe integer number of milliseconds",
     );
   }
   if (options.wait && options.retry_interval_ms === 0) {
