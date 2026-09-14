@@ -170,7 +170,10 @@ func (l *LocalFileLock) Release() error {
 	}
 	if err := os.Remove(l.path); err != nil {
 		kind := LocalFileIO
-		if errors.Is(err, os.ErrExist) {
+		// Do not depend on platform-specific errno values here. If the directory
+		// is still readable and contains an unexpected entry, ownership has been
+		// compromised and recursive cleanup would be unsafe.
+		if entries, readErr := os.ReadDir(l.path); readErr == nil && len(entries) > 0 {
 			kind = LocalFileCompromised
 		}
 		return localFileError(kind, l.path, "remove local lock directory failed", err)
