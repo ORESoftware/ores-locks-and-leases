@@ -25,5 +25,12 @@ jobs:
           node --check managed/cloudflare-do/src/index.js
           grep -F 'class_name = "LockLeaseObject"' managed/cloudflare-do/wrangler.toml
           grep -F 'new_sqlite_classes = ["LockLeaseObject"]' managed/cloudflare-do/wrangler.toml
+      - name: Verify Wrangler-generated Durable Object RPC binding types
+        working-directory: managed/cloudflare-do
+        run: |
+          npx --yes wrangler@4.131.1 types ./worker-configuration.generated.d.ts
+          grep -F 'LOCKS: DurableObjectNamespace<' worker-configuration.generated.d.ts
+          grep -F 'LockLeaseObject' worker-configuration.generated.d.ts
+          rm worker-configuration.generated.d.ts
       - name: Exercise Durable Object fencing state machine
         run: node --test managed/cloudflare-do/test.mjs
