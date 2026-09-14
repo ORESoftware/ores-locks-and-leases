@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   LocalFileLockError,
+  inspect_local_file_lock,
   local_file_lock_exists,
   try_acquire_local_file_lock,
 } from "../dist/index.js";
@@ -88,6 +89,23 @@ test("owner marker symlink is compromised on release", async (t) => {
       throw error;
     }
 
+    await assert.rejects(
+      lock.release(),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+  });
+});
+
+test("owner marker hard links are compromised on POSIX", { skip: process.platform === "win32" }, async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "hard-link.lock");
+    const alias = join(root, "owner-alias");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    await link(join(path, "owner"), alias);
+
+    const inspection = await inspect_local_file_lock(path);
+    assert.equal(inspection.state, "compromised");
     await assert.rejects(
       lock.release(),
       (error) => error instanceof LocalFileLockError && error.kind === "compromised",
