@@ -1,6 +1,15 @@
 -module(ores_locks_and_leases_local_file_ffi).
 -include_lib("kernel/include/file.hrl").
--export([delete_empty_directory/1, is_directory/1, path_kind/1, directory_shape/1, write_new_file_status/2, make_symlink_status/2]).
+-export([
+    delete_empty_directory/1,
+    is_directory/1,
+    path_kind/1,
+    directory_shape/1,
+    write_new_file_status/2,
+    make_symlink_status/2,
+    unicode_codepoint_count/1,
+    owner_private_mode_status/1
+]).
 
 %% file:del_dir/1 returns the atom `ok` on success, while Gleam's Result
 %% representation expects {ok, Value}. Normalize the return shape without
@@ -41,22 +50,60 @@ directory_shape(Path) ->
     end.
 
 %% Create the owner marker without overwriting an attacker- or race-created
-%% node. 0 success, 1 already exists, 2 other IO failure.
+%% node. The owner token is not written until POSIX permissions have been
+%% tightened to 0600. 0 success, 1 already exists, 2 other IO failure.
 write_new_file_status(Path, Contents) ->
     case file:open(Path, [write, binary, exclusive]) of
         {error, eexist} -> 1;
         {error, _} -> 2;
         {ok, IoDevice} ->
-            case file:write(IoDevice, Contents) of
+            case ensure_private_mode(Path) of
                 ok ->
-                    case file:close(IoDevice) of
-                        ok -> 0;
-                        {error, _} -> 2
-                    end;
+                    write_and_close(IoDevice, Contents);
                 {error, _} ->
                     _ = file:close(IoDevice),
+                    _ = file:delete(Path),
                     2
             end
+    end.
+
+write_and_close(IoDevice, Contents) ->
+    case file:write(IoDevice, Contents) of
+        ok ->
+            case file:close(IoDevice) of
+                ok -> 0;
+                {error, _} -> 2
+            end;
+        {error, _} ->
+            _ = file:close(IoDevice),
+            2
+    end.
+
+ensure_private_mode(Path) ->
+    case os:type() of
+        {unix, _} -> file:change_mode(Path, 8#600);
+        _ -> ok
+    end.
+
+%% Count Unicode code points rather than UTF-8 bytes. This matches the string
+%% length bound represented in TypeSpec/JSON Schema closely enough for the
+%% portable contract and avoids treating astral characters as multiple units.
+unicode_codepoint_count(Text) ->
+    length(unicode:characters_to_list(Text)).
+
+%% Test-support status: 0 private, 1 too-permissive, 2 IO, 3 non-POSIX.
+owner_private_mode_status(Path) ->
+    case os:type() of
+        {unix, _} ->
+            case file:read_file_info(Path) of
+                {ok, #file_info{mode = Mode}} ->
+                    case Mode band 8#077 of
+                        0 -> 0;
+                        _ -> 1
+                    end;
+                {error, _} -> 2
+            end;
+        _ -> 3
     end.
 
 %% Test-support primitive used by cross-platform adversarial identity tests.
