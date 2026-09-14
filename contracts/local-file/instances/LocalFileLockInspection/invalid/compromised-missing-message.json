@@ -1,3 +1,4 @@
 {
-  "state": "compromised"
+  "state": "compromised",
+  "reason": "dirty_directory"
 }
