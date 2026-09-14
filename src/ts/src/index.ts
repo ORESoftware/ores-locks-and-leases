@@ -10,7 +10,7 @@
  *
  * ```text
  * local-only: mkdir(lock) -> write owner -> work -> verify owner -> rmdir(lock)
- * distributed: lease.acquire -> pg.begin -> pg.advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
+ * distributed: lease.acquire -> pg.begin -> pg_advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
  * ```
  *
  * The TypeScript slice of ORESoftware/ores-locks-and-leases; distributed
@@ -31,6 +31,11 @@ export {
   type LocalFileLockErrorKind,
   type LocalFileLockOptions,
 } from "./local-file.js";
+export {
+  ScopedLocalFileLockError,
+  with_local_file_lock,
+  type ScopedLocalFileLockErrorKind,
+} from "./local-file-scoped.js";
 export {
   ALL_STEPS,
   LAYERS_BOTH,
