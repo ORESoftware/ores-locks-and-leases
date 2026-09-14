@@ -73,31 +73,62 @@ Use Fiducia when its Raft-backed coordination service is available and its
 failure domain is the one you want to depend on. The same Postgres transaction
 or session scope can be nested inside it.
 
+## Durable Object design rules
+
+Cloudflare Durable Objects are the primary managed-authority implementation
+reference. The important rules also apply to other authority backends:
+
+- choose the smallest **atom of coordination** that can own one correctness
+  decision. A simple ORES lock maps one lock key to one Durable Object. Fiducia
+  union locks must instead keep authority over the overlapping conflict domain;
+- keep authoritative state durable. Application memory is cache only and may
+  disappear on hibernation, restart, deployment, failover, or migration;
+- serialize read/modify/write transitions through one authority and its
+  transactional storage. Do not layer an independent Worker-side lock on top;
+- alarms/timers are cleanup and wake-up mechanisms, never the lease clock. Every
+  mutation re-checks persisted expiry, so delayed or repeated alarms cannot
+  extend authority;
+- make ambiguous acquisition retries idempotent. Re-acquiring with the same
+  logical request replays the existing token and expiry without extending the
+  lease; an explicit token-bound renew is required before guarded work resumes;
+- treat transport ambiguity as unknown ownership, never contention;
+- bound request bodies, keys, holders, request ids and TTLs before state change;
+- fail closed when the fencing domain is exhausted. Never wrap, reset, or reuse
+  a fencing token to recover availability.
+
 ## Cloudflare Durable Objects
 
 A deployable authority is in `managed/cloudflare-do`. It maps every non-empty
-lock key to one Durable Object (`idFromName(key)`). Each object stores exactly
-one active lease plus a persistent decimal fencing counter in SQLite-backed
-Durable Object storage.
+lock key to one Durable Object. Each object stores exactly one active lease plus
+a persistent decimal fencing counter in SQLite-backed Durable Object storage.
 
 Properties:
 
-- acquire/renew/release state transitions execute atomically against
-  object-local storage;
+- `LockLeaseObject` extends Cloudflare's built-in `DurableObject` class and
+  exposes `acquire`, `renew`, and `release` as native Workers RPC methods;
+- Worker-to-object calls use `DurableObjectNamespace<LockLeaseObject>` /
+  `DurableObjectStub<LockLeaseObject>` semantics instead of an internal HTTP hop;
+- `src/ts/src/cloudflare-do-rpc-types.ts` exports explicit request/result unions
+  plus structural namespace/stub types, while `managed/cloudflare-do/src/index.d.ts`
+  declares the deployed class for Worker tooling and `wrangler types`;
+- `CloudflareDurableObjectRpcLease` implements the shared `Lease` interface for
+  Workers that already hold the `LOCKS` binding. The older
+  `CloudflareDurableObjectLease` remains the HTTP client for cross-network callers;
+- expected validation, contention, stale-owner, and fencing-exhaustion outcomes
+  are returned as typed values rather than RPC exceptions. Unexpected RPC faults
+  remain transport failures; callers obtain a fresh stub for subsequent calls;
 - the fencing counter survives lease release and expiry;
-- the counter is stored and returned as decimal text so JavaScript never rounds
-  unsigned-64 tokens;
-- an alarm reaps expired holder state, but acquisition also checks expiry, so a
-  delayed alarm cannot keep an expired grant authoritative;
+- newly minted fencing tokens are positive and capped at
+  `9007199254740991` (`Number.MAX_SAFE_INTEGER`). Decimal-text watermark storage
+  remains uint64-compatible for rolling migration and historical state;
+- re-acquiring with the active holder/request replays the existing token without
+  extending authority; both direct-RPC and HTTP TypeScript adapters follow a
+  replay with explicit token-bound renewal before exposing the grant;
+- key, holder, optional request id, request body, and TTL are bounded before
+  state mutation;
 - renew and release match both holder and fencing token;
-- empty lock keys are rejected before object routing;
-- the public Worker fails closed if `ORES_LOCKS_API_TOKEN` is absent unless
+- the public HTTP Worker fails closed if `ORES_LOCKS_API_TOKEN` is absent unless
   `ALLOW_UNAUTHENTICATED=true` is explicitly configured for development.
-
-The Durable Object's **persisted SQLite state is authoritative**. Application
-memory is only a cache while an object instance is active; correctness must not
-rely on arbitrary JavaScript memory surviving eviction, hibernation, restart,
-or migration.
 
 Deploy from the repository root:
 
@@ -107,19 +138,19 @@ npx wrangler secret put ORES_LOCKS_API_TOKEN
 npx wrangler deploy
 ```
 
-TypeScript:
+### Direct Workers RPC
+
+Inside another Worker with the `LOCKS` Durable Object namespace binding, prefer
+the direct adapter:
 
 ```ts
 import {
-  CloudflareDurableObjectLease,
+  CloudflareDurableObjectRpcLease,
   lockKey,
   withLease,
 } from "@oresoftware/locks-and-leases";
 
-const authority = new CloudflareDurableObjectLease({
-  baseUrl: process.env.ORES_LOCKS_CF_URL!,
-  apiToken: process.env.ORES_LOCKS_CF_TOKEN!,
-});
+const authority = new CloudflareDurableObjectRpcLease({ namespace: env.LOCKS });
 
 await withLease(
   lockKey("zed-pkg/registry/publish"),
@@ -132,6 +163,29 @@ await withLease(
   },
 );
 ```
+
+The generated binding should resolve as `DurableObjectNamespace<LockLeaseObject>`.
+The shared package intentionally depends only on the structural subset
+`CloudflareDurableObjectRpcNamespace`, so using it does not force Cloudflare
+runtime types into Node, Flutter, Rust, Go, or Gleam consumers.
+
+### Public HTTP compatibility path
+
+For callers outside the Worker binding graph, use the bearer-protected Worker API:
+
+```ts
+import { CloudflareDurableObjectLease } from "@oresoftware/locks-and-leases";
+
+const authority = new CloudflareDurableObjectLease({
+  baseUrl: process.env.ORES_LOCKS_CF_URL!,
+  apiToken: process.env.ORES_LOCKS_CF_TOKEN!,
+});
+```
+
+The HTTP Worker validates authentication and lock identity, selects the object
+with `env.LOCKS.getByName(key)`, and then invokes the same typed RPC methods. The
+Durable Object also keeps a `fetch()` adapter for older internal callers during
+migration; it is no longer the canonical Worker-to-object path.
 
 Rust exposes `ManagedLease::cloudflare(transport)` /
 `CloudflareDurableObjectLease<T>`. The transport is intentionally supplied by
@@ -184,11 +238,12 @@ The braces are intentional: both keys land in one Redis Cluster hash slot so
 `EVAL` remains legal and atomic. The `:fence` key has **no TTL**. It is the
 monotonic authority watermark and must survive every lease expiry/release.
 
-The acquire script does not use `tonumber` and does not use `INCR`. Redis Lua
-numbers are doubles and `INCR` is signed-64; either choice would narrow the
-repository's unsigned-64 fencing contract. Instead, the script increments the
-counter digit-by-digit as decimal text and rejects overflow above
-`18446744073709551615`.
+The acquire script does not use `tonumber` for fencing arithmetic and does not
+use `INCR`. Redis Lua numbers are doubles, so fencing arithmetic is performed
+digit-by-digit as decimal text. New grants fail closed above
+`9007199254740991`, matching Cloudflare Durable Objects, Fiducia, TypeSpec, JSON
+Schema, and browser/TypeScript exact-integer semantics. Same-holder acquisition
+retries replay the current grant without resetting TTL or minting a new token.
 
 TypeScript / Upstash:
 
