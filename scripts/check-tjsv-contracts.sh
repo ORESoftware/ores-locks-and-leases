@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fail-closed TypeSpec <-> JSON Schema parity for both independently authored
+# Fail-closed TypeSpec <-> JSON Schema parity for independently authored
 # contract bundles. TJSV generates Schema B as comparison evidence only; it
 # never replaces either authored authority. Each freshly emitted Contract IR is
 # then canonically re-verified against the retained receipt, current source
@@ -7,37 +7,44 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-validator_commit=6bb5b7c1ee41c8b43741e50a264c33a1165549c4
+validator_commit=b2c4810400625829114a56087ad33937caac735a
 validator_package="https://github.com/ORESoftware/typespec-json-schema-validator/archive/${validator_commit}.tar.gz"
 
 main_declarations='["Ores.LocksAndLeases.AcquireOptions","Ores.LocksAndLeases.AdvisoryKey","Ores.LocksAndLeases.FenceDecision","Ores.LocksAndLeases.FenceDecisionKind","Ores.LocksAndLeases.FencedWriteRequest","Ores.LocksAndLeases.FenceWatermark","Ores.LocksAndLeases.FencingToken","Ores.LocksAndLeases.FencingTokenText","Ores.LocksAndLeases.LeaseGrant","Ores.LocksAndLeases.LeaseMaintenanceOptions","Ores.LocksAndLeases.LockError","Ores.LocksAndLeases.LockErrorKind","Ores.LocksAndLeases.LockKey","Ores.LocksAndLeases.LockLayers","Ores.LocksAndLeases.LockPlan","Ores.LocksAndLeases.LockStep","Ores.LocksAndLeases.PgScope"]'
 renewal_declarations='["Ores.LocksAndLeases.Renewal.FencingToken","Ores.LocksAndLeases.Renewal.LogicalMilliseconds","Ores.LocksAndLeases.Renewal.RenewalDecision","Ores.LocksAndLeases.Renewal.RenewalDecisionKind","Ores.LocksAndLeases.Renewal.RenewalGrantIdentity","Ores.LocksAndLeases.Renewal.RenewalLossReason","Ores.LocksAndLeases.Renewal.RenewalPolicy","Ores.LocksAndLeases.Renewal.RenewalSnapshot","Ores.LocksAndLeases.Renewal.RenewalTtlMilliseconds"]'
+local_declarations='["Ores.LocksAndLeases.LocalFile.LocalFileLockErrorKind","Ores.LocksAndLeases.LocalFile.LocalFileLockFailure","Ores.LocksAndLeases.LocalFile.LocalFileLockIdentity","Ores.LocksAndLeases.LocalFile.LocalFileLockOptions","Ores.LocksAndLeases.LocalFile.LocalFileLockOwner","Ores.LocksAndLeases.LocalFile.LocalFileLockPath","Ores.LocksAndLeases.LocalFile.LocalFileLockSnapshot"]'
 
 check_bundle() {
   name=$1
   typespec=$2
   schema=$3
   expected_declarations=$4
+  instances=${5:-}
   output="$root/target/tjsv/$name"
   generated="$output/generated-schema-b/${name}.typespec.generated.schema.json"
 
   rm -rf -- "$output"
   mkdir -p -- "$output/generated-schema-b"
 
-  npx --yes --package="$validator_package" tjsv check \
-    --typespec="$root/$typespec" \
-    --schema="$root/$schema" \
-    --report="$output/report.json" \
-    --sarif="$output/report.sarif" \
-    --contract-ir="$output/contract-ir.json" \
-    --output-dir="$output/generated-schema-b" \
-    --bundle-id="${name}.typespec.generated.schema.json" \
+  set -- \
+    tjsv check \
+    "--typespec=$root/$typespec" \
+    "--schema=$root/$schema" \
+    "--report=$output/report.json" \
+    "--sarif=$output/report.sarif" \
+    "--contract-ir=$output/contract-ir.json" \
+    "--output-dir=$output/generated-schema-b" \
+    "--bundle-id=${name}.typespec.generated.schema.json" \
     --int64-strategy=number \
     --seal-object-schemas=true \
     --polymorphic-models-strategy=oneOf \
     --probes=true \
     --max-probes=128 \
     --quiet
+  if [ -n "$instances" ]; then
+    set -- "$@" "--instances=$root/$instances"
+  fi
+  npx --yes --package="$validator_package" "$@"
 
   test -s "$output/report.json"
   test -s "$output/contract-ir.json"
@@ -173,6 +180,14 @@ case "${1:-all}" in
       contracts/renewal/json-schema/contract.schema.json \
       "$renewal_declarations"
     ;;
+  local)
+    check_bundle \
+      local \
+      contracts/local-file/typespec/main.tsp \
+      contracts/local-file/json-schema/contract.schema.json \
+      "$local_declarations" \
+      contracts/local-file/instances
+    ;;
   all)
     check_bundle \
       main \
@@ -184,9 +199,15 @@ case "${1:-all}" in
       contracts/renewal/typespec/main.tsp \
       contracts/renewal/json-schema/contract.schema.json \
       "$renewal_declarations"
+    check_bundle \
+      local \
+      contracts/local-file/typespec/main.tsp \
+      contracts/local-file/json-schema/contract.schema.json \
+      "$local_declarations" \
+      contracts/local-file/instances
     ;;
   *)
-    printf 'usage: %s [main|renewal|all]\n' "$0" >&2
+    printf 'usage: %s [main|renewal|local|all]\n' "$0" >&2
     exit 64
     ;;
 esac
