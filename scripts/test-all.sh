@@ -34,6 +34,7 @@ if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
   run tjsv-optional-projections sh "$root/scripts/check-tjsv-optional-projections.sh"
   run contracts npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config "$root/contracts/contracts.config.json"
   run renewal-contracts npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config "$root/contracts/renewal/contracts.config.json"
+  run lock-config-contracts npx --yes --package=https://github.com/ORESoftware/ores-contracts/archive/f79ea8d8d94d7a9e78c15f7e46ecae8e4b584d2e.tar.gz ores-contracts check --config "$root/contracts/lock-config/contracts.config.json"
 else echo "== psql-launcher/adversarial-corpus/renewal-corpus/typescript/tjsv-contracts/tjsv-optional-projections/contracts: skipped (no node/npm)"; fi
 
 if command -v dart >/dev/null 2>&1; then

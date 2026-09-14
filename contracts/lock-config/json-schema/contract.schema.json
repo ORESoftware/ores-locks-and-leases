@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ORESoftware/ores-locks-and-leases/contracts/lock-config/json-schema/contract.schema.json",
+  "$comment": "`.ores-lock.toml` normalized contract — independent JSON Schema authority. Peer of contracts/lock-config/typespec/main.tsp; neither is generated from the other.",
+  "x-ores-namespace": "Ores.LocksAndLeases.Config",
+  "$defs": {
+    "LockConfigSchemaVersion": {
+      "type": "string",
+      "enum": ["ores.lock.config.v1"]
+    },
+    "EnvKind": {
+      "type": "string",
+      "enum": ["string", "boolean", "integer", "double", "url", "path"]
+    },
+    "EnvKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "LockProfileId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$"
+    },
+    "EnvBinding": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "key": {"$ref": "#/$defs/EnvKey"},
+        "kind": {"$ref": "#/$defs/EnvKind"},
+        "required": {"type": "boolean"},
+        "secret": {"type": "boolean"},
+        "purpose": {"type": "string", "minLength": 1, "maxLength": 255}
+      },
+      "required": ["key", "kind", "required", "secret", "purpose"]
+    },
+    "ProviderSelection": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "local_file": {"type": "boolean"},
+        "fiducia": {"type": "boolean"},
+        "pg_advisory": {"type": "boolean"}
+      },
+      "required": ["local_file", "fiducia", "pg_advisory"]
+    },
+    "LocalFileProviderConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "root_env": {"$ref": "#/$defs/EnvKey"},
+        "require_existing_root": {"type": "boolean"}
+      },
+      "required": ["root_env", "require_existing_root"]
+    },
+    "FiduciaProviderConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "endpoint_env": {"$ref": "#/$defs/EnvKey"},
+        "auth_token_env": {"$ref": "#/$defs/EnvKey"}
+      },
+      "required": ["endpoint_env", "auth_token_env"]
+    },
+    "PostgresLockScope": {
+      "type": "string",
+      "enum": ["transaction", "session"]
+    },
+    "PostgresProviderConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "database_url_env": {"$ref": "#/$defs/EnvKey"},
+        "scope": {"$ref": "#/$defs/PostgresLockScope"}
+      },
+      "required": ["database_url_env", "scope"]
+    },
+    "LockProfileConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "profile_id": {"$ref": "#/$defs/LockProfileId"},
+        "wait": {"type": "boolean"},
+        "wait_timeout_ms": {"type": "integer", "minimum": 0, "maximum": 86400000},
+        "retry_interval_ms": {"type": "integer", "minimum": 0, "maximum": 60000},
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000,
+          "description": "Fiducia lease TTL. Present only when the Fiducia provider is enabled."
+        },
+        "renew_interval_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 43200000,
+          "description": "Maintained-lease renewal interval. When present, runtime policy also requires this to be <= ttl_ms / 2."
+        },
+        "providers": {"$ref": "#/$defs/ProviderSelection"},
+        "local_file": {"$ref": "#/$defs/LocalFileProviderConfig"},
+        "fiducia": {"$ref": "#/$defs/FiduciaProviderConfig"},
+        "postgres": {"$ref": "#/$defs/PostgresProviderConfig"}
+      },
+      "required": ["profile_id", "wait", "wait_timeout_ms", "retry_interval_ms", "providers"]
+    },
+    "OresLockConfigV1": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/LockConfigSchemaVersion"},
+        "default_profile": {"$ref": "#/$defs/LockProfileId"},
+        "selected_profile_env": {"$ref": "#/$defs/EnvKey"},
+        "env": {"type": "array", "items": {"$ref": "#/$defs/EnvBinding"}},
+        "profiles": {"type": "array", "items": {"$ref": "#/$defs/LockProfileConfig"}}
+      },
+      "required": ["schema_version", "default_profile", "env", "profiles"]
+    }
+  }
+}

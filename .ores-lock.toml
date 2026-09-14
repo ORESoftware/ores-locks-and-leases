@@ -1,0 +1,80 @@
+# Runtime coordination policy for ores-locks-and-leases.
+#
+# This file owns provider selection and operational timing only. Package/build
+# mechanics stay in .zpkg.toml. Lock correctness invariants (fencing semantics,
+# owner-token bounds, stale-lock refusal, filesystem identity checks) are not
+# configurable here. Secrets are referenced by environment-variable name only.
+schema_version = "ores.lock.config.v1"
+default_profile = "local-install"
+selected_profile_env = "ORES_LOCK_PROFILE"
+
+[[env]]
+key = "ORES_LOCK_PROFILE"
+kind = "string"
+required = false
+secret = false
+purpose = "Select one declared lock profile at process startup."
+
+[[env]]
+key = "ORES_LOCK_ROOT"
+kind = "path"
+required = false
+secret = false
+purpose = "Local-file lock rendezvous root, typically under application-private state."
+
+[[env]]
+key = "FIDUCIA_BASE_URL"
+kind = "url"
+required = false
+secret = false
+purpose = "Fiducia lease authority endpoint."
+
+[[env]]
+key = "FIDUCIA_AUTH_TOKEN"
+kind = "string"
+required = false
+secret = true
+purpose = "Credential for the Fiducia lease authority."
+
+[[env]]
+key = "DATABASE_URL"
+kind = "string"
+required = false
+secret = true
+purpose = "PostgreSQL connection string used by the advisory-lock provider."
+
+[[profiles]]
+profile_id = "local-install"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 50
+
+[profiles.providers]
+local_file = true
+fiducia = false
+pg_advisory = false
+
+[profiles.local_file]
+root_env = "ORES_LOCK_ROOT"
+require_existing_root = false
+
+[[profiles]]
+profile_id = "service-composed"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 50
+ttl_ms = 30000
+renew_interval_ms = 10000
+
+[profiles.providers]
+local_file = false
+fiducia = true
+pg_advisory = true
+
+[profiles.fiducia]
+endpoint_env = "FIDUCIA_BASE_URL"
+auth_token_env = "FIDUCIA_AUTH_TOKEN"
+
+[profiles.postgres]
+database_url_env = "DATABASE_URL"
+scope = "transaction"
