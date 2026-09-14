@@ -67,6 +67,23 @@ export {
   type CloudflareDurableObjectLeaseOptions,
 } from "./cloudflare-do.js";
 export {
+  CloudflareDurableObjectRpcLease,
+  type CloudflareDurableObjectRpcLeaseOptions,
+} from "./cloudflare-do-rpc.js";
+export type {
+  CloudflareDurableObjectAcquireError,
+  CloudflareDurableObjectAcquireRequest,
+  CloudflareDurableObjectAcquireResult,
+  CloudflareDurableObjectReleaseError,
+  CloudflareDurableObjectReleaseRequest,
+  CloudflareDurableObjectReleaseResult,
+  CloudflareDurableObjectRenewError,
+  CloudflareDurableObjectRenewRequest,
+  CloudflareDurableObjectRenewResult,
+  CloudflareDurableObjectRpcNamespace,
+  CloudflareDurableObjectRpcStub,
+} from "./cloudflare-do-rpc-types.js";
+export {
   REDIS_ACQUIRE_LUA,
   REDIS_RELEASE_LUA,
   REDIS_RENEW_LUA,

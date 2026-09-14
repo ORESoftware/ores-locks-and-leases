@@ -1,6 +1,14 @@
+import { DurableObject } from "cloudflare:workers";
+
+import {
+  LockLeaseAuthority,
+  validHolder,
+  validIdentity,
+  validRequestId,
+} from "./authority.js";
+
 const MAX_LOCK_KEY_BYTES = 512;
-const MAX_TTL_MS = 86_400_000;
-const MAX_U64 = (1n << 64n) - 1n;
+const MAX_BODY_BYTES = 16_384;
 const encoder = new TextEncoder();
 
 function json(body, status = 200) {
@@ -16,166 +24,115 @@ function parseBearer(request) {
 }
 
 function validKey(key) {
-  if (typeof key !== "string") return false;
-  const bytes = encoder.encode(key).length;
-  return bytes > 0 && bytes <= MAX_LOCK_KEY_BYTES;
+  return validIdentity(key, MAX_LOCK_KEY_BYTES);
 }
 
-function validHolder(holder) {
-  return typeof holder === "string" && holder.length > 0 && encoder.encode(holder).length <= 512;
-}
-
-function validTtl(ttl) {
-  return Number.isSafeInteger(ttl) && ttl > 0 && ttl <= MAX_TTL_MS;
-}
-
-function validToken(token) {
-  return typeof token === "string" && /^\d+$/.test(token) && BigInt(token) <= MAX_U64;
-}
-
-function nextToken(current) {
-  if (typeof current !== "string" || !/^\d+$/.test(current)) {
-    throw new Error("corrupt fencing counter");
-  }
-  const next = BigInt(current) + 1n;
-  if (next > MAX_U64) throw new Error("unsigned-64 fencing token overflow");
-  return next.toString();
-}
-
-export class LockLeaseObject {
-  constructor(ctx, env) {
-    this.ctx = ctx;
-    this.env = env;
-    this.sql = ctx.storage.sql;
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS lease_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        holder TEXT,
-        token TEXT,
-        expires_ms INTEGER,
-        next_token TEXT NOT NULL
-      )
-    `);
-    this.sql.exec(`
-      INSERT OR IGNORE INTO lease_state (id, holder, token, expires_ms, next_token)
-      VALUES (1, NULL, NULL, NULL, '0')
-    `);
-  }
-
-  row() {
-    return this.sql.exec(
-      "SELECT holder, token, expires_ms, next_token FROM lease_state WHERE id = 1",
-    ).toArray()[0];
-  }
-
-  clearLease() {
-    this.sql.exec(
-      "UPDATE lease_state SET holder = NULL, token = NULL, expires_ms = NULL WHERE id = 1",
-    );
-  }
-
-  async fetch(request) {
-    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid_json" }, 400);
+async function readJson(request) {
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const bytes = Number(declared);
+    if (Number.isFinite(bytes) && bytes > MAX_BODY_BYTES) {
+      return { response: json({ error: "body_too_large" }, 413) };
     }
-    const path = new URL(request.url).pathname;
-    if (!validHolder(body?.holder)) return json({ error: "invalid_holder" }, 400);
-
-    if (path === "/v1/leases/acquire") return this.acquire(body);
-    if (path === "/v1/leases/renew") return this.renew(body);
-    if (path === "/v1/leases/release") return this.release(body);
-    return json({ error: "not_found" }, 404);
   }
 
-  async acquire(body) {
-    if (!validTtl(body?.ttl_ms)) return json({ error: "invalid_ttl" }, 400);
-    const now = Date.now();
-    const outcome = this.ctx.storage.transactionSync(() => {
-      const row = this.row();
-      if (row.holder !== null && row.expires_ms !== null && row.expires_ms > now) {
-        return { acquired: false, lease_expires_ms: row.expires_ms };
-      }
+  let text;
+  try {
+    text = await request.text();
+  } catch {
+    return { response: json({ error: "invalid_body" }, 400) };
+  }
+  if (encoder.encode(text).length > MAX_BODY_BYTES) {
+    return { response: json({ error: "body_too_large" }, 413) };
+  }
+  try {
+    return { body: JSON.parse(text) };
+  } catch {
+    return { response: json({ error: "invalid_json" }, 400) };
+  }
+}
 
-      const fencingToken = nextToken(row.next_token);
-      const expires = now + body.ttl_ms;
-      this.sql.exec(
-        "UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ? WHERE id = 1",
-        body.holder,
-        fencingToken,
-        expires,
-        fencingToken,
-      );
-      return { acquired: true, fencing_token: fencingToken, lease_expires_ms: expires };
-    });
+function rpcStatus(result) {
+  if (!result || typeof result !== "object" || !("error" in result)) return 200;
+  return result.error === "fencing_token_exhausted" ? 503 : 400;
+}
 
-    if (outcome.acquired) await this.ctx.storage.setAlarm(outcome.lease_expires_ms);
-    return json(outcome);
+function toRpcInput(path, body) {
+  if (path === "/v1/leases/acquire") {
+    return {
+      holder: body?.holder,
+      ttl_ms: body?.ttl_ms,
+      ...(body?.request_id === undefined ? {} : { request_id: body.request_id }),
+    };
+  }
+  if (path === "/v1/leases/renew") {
+    return {
+      holder: body?.holder,
+      fencing_token: body?.fencing_token,
+      ttl_ms: body?.ttl_ms,
+    };
+  }
+  return {
+    holder: body?.holder,
+    fencing_token: body?.fencing_token,
+  };
+}
+
+async function invokeRpc(stub, path, body) {
+  const input = toRpcInput(path, body);
+  if (path === "/v1/leases/acquire") return stub.acquire(input);
+  if (path === "/v1/leases/renew") return stub.renew(input);
+  return stub.release(input);
+}
+
+/** Native Cloudflare Durable Object RPC authority. */
+export class LockLeaseObject extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.authority = new LockLeaseAuthority(ctx);
   }
 
-  async renew(body) {
-    if (!validTtl(body?.ttl_ms)) return json({ error: "invalid_ttl" }, 400);
-    if (!validToken(body?.fencing_token)) return json({ error: "invalid_fencing_token" }, 400);
-    const now = Date.now();
-    const outcome = this.ctx.storage.transactionSync(() => {
-      const row = this.row();
-      if (
-        row.holder !== body.holder ||
-        row.token !== body.fencing_token ||
-        row.expires_ms === null ||
-        row.expires_ms <= now
-      ) {
-        if (row.expires_ms !== null && row.expires_ms <= now) this.clearLease();
-        return { renewed: false };
-      }
-      const expires = now + body.ttl_ms;
-      this.sql.exec("UPDATE lease_state SET expires_ms = ? WHERE id = 1", expires);
-      return { renewed: true, lease_expires_ms: expires };
-    });
-
-    if (outcome.renewed) await this.ctx.storage.setAlarm(outcome.lease_expires_ms);
-    return json(outcome);
+  async acquire(input) {
+    return this.authority.acquire(input);
   }
 
-  async release(body) {
-    if (!validToken(body?.fencing_token)) return json({ error: "invalid_fencing_token" }, 400);
-    const now = Date.now();
-    const released = this.ctx.storage.transactionSync(() => {
-      const row = this.row();
-      if (row.expires_ms !== null && row.expires_ms <= now) {
-        this.clearLease();
-        return false;
-      }
-      if (row.holder !== body.holder || row.token !== body.fencing_token) return false;
-      this.clearLease();
-      return true;
-    });
-    if (released) await this.ctx.storage.deleteAlarm();
-    return json({ released });
+  async renew(input) {
+    return this.authority.renew(input);
+  }
+
+  async release(input) {
+    return this.authority.release(input);
   }
 
   async alarm() {
-    const now = Date.now();
-    const nextAlarm = this.ctx.storage.transactionSync(() => {
-      const row = this.row();
-      if (row.expires_ms === null) return null;
-      if (row.expires_ms <= now) {
-        this.clearLease();
-        return null;
-      }
-      return row.expires_ms;
-    });
-    if (nextAlarm !== null) await this.ctx.storage.setAlarm(nextAlarm);
+    return this.authority.alarm();
+  }
+
+  /** Backwards-compatible stub.fetch adapter for callers not yet using RPC. */
+  async fetch(request) {
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    const path = new URL(request.url).pathname;
+    if (!["/v1/leases/acquire", "/v1/leases/renew", "/v1/leases/release"].includes(path)) {
+      return json({ error: "not_found" }, 404);
+    }
+    const parsed = await readJson(request);
+    if (parsed.response) return parsed.response;
+    const result = await invokeRpc(this, path, parsed.body);
+    return json(result, rpcStatus(result));
   }
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/healthz") return json({ ok: true, authority: "cloudflare_durable_object" });
+    if (url.pathname === "/healthz") {
+      return json({
+        ok: true,
+        authority: "cloudflare_durable_object",
+        transport: "workers_rpc",
+        fencing_token_max: Number.MAX_SAFE_INTEGER,
+      });
+    }
     if (!["/v1/leases/acquire", "/v1/leases/renew", "/v1/leases/release"].includes(url.pathname)) {
       return json({ error: "not_found" }, 404);
     }
@@ -189,20 +146,20 @@ export default {
       return json({ error: "unauthorized" }, 401);
     }
 
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid_json" }, 400);
-    }
+    const parsed = await readJson(request);
+    if (parsed.response) return parsed.response;
+    const body = parsed.body;
     if (!validKey(body?.key)) return json({ error: "invalid_key" }, 400);
+    if (!validHolder(body?.holder)) return json({ error: "invalid_holder" }, 400);
+    if (!validRequestId(body?.request_id)) return json({ error: "invalid_request_id" }, 400);
 
-    const id = env.LOCKS.idFromName(body.key);
-    const stub = env.LOCKS.get(id);
-    return stub.fetch(`https://lock.internal${url.pathname}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const stub = env.LOCKS.getByName(body.key);
+    try {
+      const result = await invokeRpc(stub, url.pathname, body);
+      return json(result, rpcStatus(result));
+    } catch {
+      // RPC exceptions invalidate the stub. Transport ambiguity is never contention.
+      return json({ error: "authority_rpc_failed" }, 503);
+    }
   },
 };

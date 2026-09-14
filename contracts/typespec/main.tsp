@@ -9,17 +9,20 @@
 @doc("Cross-language contract for composed distributed leases and Postgres advisory locks.")
 namespace Ores.LocksAndLeases;
 
-@doc("A caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`.")
+@doc("A non-empty caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`.")
+@minLength(1)
 @maxLength(512)
 scalar LockKey extends string;
 
 @doc("The Postgres advisory-lock integer derived from a LockKey: FNV-1a 64 over the UTF-8 bytes, reinterpreted as a two's-complement bigint. Vectors: conformance/cases/advisory-key.json.")
 scalar AdvisoryKey extends int64;
 
-@doc("A monotonically increasing token minted by the lease authority on every grant. Writes guarded by the lease carry it so a stale holder cannot clobber a newer one.")
-scalar FencingToken extends uint64;
+@doc("A positive, monotonically increasing token minted by the lease authority on every new grant. The public cross-runtime domain is capped at JavaScript's exact integer ceiling so JSON/browser clients never round fencing authority.")
+@minValue(1)
+@maxValue(9007199254740991)
+scalar FencingToken extends safeint;
 
-@doc("Lossless wire and storage form of a Fiducia uint64 token: canonical unsigned decimal text with no sign, whitespace, fractional part, or leading zeroes. Implementations also reject values above 18446744073709551615.")
+@doc("Lossless wire and storage form for fencing watermarks: canonical unsigned-64 decimal text with no sign, whitespace, fractional part, or leading zeroes. New authorities mint only the smaller FencingToken domain, but this text form deliberately preserves exact historical/persisted uint64 watermarks during rolling migration.")
 @maxLength(20)
 @pattern("^(0|[1-9][0-9]{0,19})$")
 scalar FencingTokenText extends string;
