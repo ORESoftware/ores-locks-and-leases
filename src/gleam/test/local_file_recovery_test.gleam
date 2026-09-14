@@ -31,18 +31,49 @@ pub fn inspect_absent_and_held_local_lock_test() {
   clean(root)
 }
 
-pub fn inspect_missing_owner_and_dirty_directory_are_compromised_test() {
-  let root = "./.tmp-local-file-recovery/compromised"
+pub fn inspect_empty_directory_is_incomplete_crash_state_test() {
+  let root = "./.tmp-local-file-recovery/incomplete"
+  clean(root)
+  let path = root <> "/install.lock"
+  let assert Ok(Nil) = simplifile.create_directory_all(path)
+  let assert Ok(local_file_recovery.LocalFileLockInspection(
+    local_file_recovery.Incomplete,
+    None,
+    _,
+  )) = local_file_recovery.inspect(root, "install.lock")
+  let assert Error(error) =
+    local_file_recovery.recover(root, "install.lock", "owner-a", True)
+  error.kind |> should.equal(local_file.Compromised)
+  simplifile.exists(path, True) |> should.equal(Ok(True))
+  clean(root)
+}
+
+pub fn owner_removed_before_rmdir_is_incomplete_crash_state_test() {
+  let root = "./.tmp-local-file-recovery/release-crash"
   clean(root)
   let assert Ok(Some(lock)) =
     local_file.try_acquire(root, "install.lock", "owner-a")
   let path = local_file.local_file_lock_path(lock)
   let assert Ok(Nil) = simplifile.delete_file(at: path <> "/owner")
   let assert Ok(local_file_recovery.LocalFileLockInspection(
-    local_file_recovery.Compromised,
-    _,
+    local_file_recovery.Incomplete,
+    None,
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
+  let assert Error(error) =
+    local_file_recovery.recover(root, "install.lock", "owner-a", True)
+  error.kind |> should.equal(local_file.Compromised)
+  simplifile.exists(path, True) |> should.equal(Ok(True))
+  clean(root)
+}
+
+pub fn inspect_dirty_directory_is_compromised_test() {
+  let root = "./.tmp-local-file-recovery/compromised"
+  clean(root)
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let path = local_file.local_file_lock_path(lock)
+  let assert Ok(Nil) = simplifile.delete_file(at: path <> "/owner")
   let assert Ok(Nil) =
     simplifile.write(to: path <> "/unexpected", contents: "x")
   let assert Ok(local_file_recovery.LocalFileLockInspection(
