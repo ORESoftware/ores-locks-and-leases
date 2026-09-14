@@ -55,33 +55,28 @@ fn acquire_failure_does_not_run_work() {
 #[test]
 fn work_failure_survives_successful_release() {
     let path = test_path("work-error");
-    let error = with_local_file_lock(
-        &path,
-        "owner-a",
-        LocalFileLockOptions::default(),
-        |_| Err::<(), _>("work-failed"),
-    )
+    let error = with_local_file_lock(&path, "owner-a", LocalFileLockOptions::default(), |_| {
+        Err::<(), _>("work-failed")
+    })
     .expect_err("work must fail");
 
     match error {
         ScopedLocalFileLockError::Work(work) => assert_eq!(work, "work-failed"),
         _ => panic!("unexpected scoped error"),
     }
-    assert!(!path.exists(), "successful release must remove lock directory");
+    assert!(
+        !path.exists(),
+        "successful release must remove lock directory"
+    );
 }
 
 #[test]
 fn release_failure_after_successful_work_is_lock_error() {
     let path = test_path("release-error");
-    let error = with_local_file_lock(
-        &path,
-        "owner-a",
-        LocalFileLockOptions::default(),
-        |lock| {
-            fs::write(lock.path().join("owner"), b"owner-b").expect("mutate owner marker");
-            Ok::<_, &'static str>(())
-        },
-    )
+    let error = with_local_file_lock(&path, "owner-a", LocalFileLockOptions::default(), |lock| {
+        fs::write(lock.path().join("owner"), b"owner-b").expect("mutate owner marker");
+        Ok::<_, &'static str>(())
+    })
     .expect_err("release must fail closed");
 
     match error {
@@ -97,15 +92,10 @@ fn release_failure_after_successful_work_is_lock_error() {
 #[test]
 fn work_and_release_failures_are_both_preserved() {
     let path = test_path("both-errors");
-    let error = with_local_file_lock(
-        &path,
-        "owner-a",
-        LocalFileLockOptions::default(),
-        |lock| {
-            fs::write(lock.path().join("owner"), b"owner-b").expect("mutate owner marker");
-            Err::<(), _>("work-failed")
-        },
-    )
+    let error = with_local_file_lock(&path, "owner-a", LocalFileLockOptions::default(), |lock| {
+        fs::write(lock.path().join("owner"), b"owner-b").expect("mutate owner marker");
+        Err::<(), _>("work-failed")
+    })
     .expect_err("both failures must be reported");
 
     match error {

@@ -70,7 +70,9 @@ fn rendezvous_symlink_is_compromised() {
     let error = LocalFileLock::try_acquire(&link, "owner-a")
         .expect_err("rendezvous symlink must fail closed");
     assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
-    fs::remove_file(&link).or_else(|_| fs::remove_dir(&link)).expect("remove symlink");
+    fs::remove_file(&link)
+        .or_else(|_| fs::remove_dir(&link))
+        .expect("remove symlink");
     fs::remove_dir_all(root).expect("cleanup root");
 }
 

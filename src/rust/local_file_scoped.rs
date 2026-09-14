@@ -31,8 +31,8 @@ pub fn with_local_file_lock<T, E, F>(
 where
     F: FnOnce(&LocalFileLock) -> Result<T, E>,
 {
-    let mut lock = LocalFileLock::acquire(path, owner, options)
-        .map_err(ScopedLocalFileLockError::Lock)?;
+    let mut lock =
+        LocalFileLock::acquire(path, owner, options).map_err(ScopedLocalFileLockError::Lock)?;
 
     let work_result = work(&lock);
     let release_result = lock.release();

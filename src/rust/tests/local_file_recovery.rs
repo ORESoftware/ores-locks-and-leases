@@ -66,8 +66,8 @@ fn recovery_requires_confirmation_and_expected_owner() {
         .expect_err("unconfirmed recovery must fail");
     assert_eq!(unconfirmed.kind, LocalFileLockErrorKind::InvalidInput);
 
-    let mismatch = recover_local_file_lock(&path, "owner-b", true)
-        .expect_err("owner mismatch must fail");
+    let mismatch =
+        recover_local_file_lock(&path, "owner-b", true).expect_err("owner mismatch must fail");
     assert_eq!(mismatch.kind, LocalFileLockErrorKind::Compromised);
 
     assert!(recover_local_file_lock(&path, "owner-a", true).expect("recover clean lock"));

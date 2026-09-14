@@ -166,7 +166,11 @@ fn compromised(message: &str) -> LocalFileLockInspection {
     }
 }
 
-fn error(kind: LocalFileLockErrorKind, path: &Path, message: impl Into<String>) -> LocalFileLockError {
+fn error(
+    kind: LocalFileLockErrorKind,
+    path: &Path,
+    message: impl Into<String>,
+) -> LocalFileLockError {
     LocalFileLockError {
         kind,
         path: path.to_path_buf(),

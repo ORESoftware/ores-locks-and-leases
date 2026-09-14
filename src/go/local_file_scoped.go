@@ -13,9 +13,9 @@ const (
 // ScopedLocalFileLockError preserves the work and/or local-lock failure that
 // produced a scoped-operation error.
 type ScopedLocalFileLockError struct {
-	Kind         ScopedLocalFileLockErrorKind
-	LockError    error
-	WorkError    error
+	Kind      ScopedLocalFileLockErrorKind
+	LockError error
+	WorkError error
 }
 
 func (e *ScopedLocalFileLockError) Error() string {

@@ -50,9 +50,7 @@ fn inspect_directory(
 ) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
   case directory_shape(path) {
     2 -> Error(io_error(path, "list local lock directory failed"))
-    1 -> Ok(compromised(
-      "lock directory must contain exactly one owner marker",
-    ))
+    1 -> Ok(compromised("lock directory must contain exactly one owner marker"))
     _ -> inspect_owner(path)
   }
 }
@@ -120,16 +118,19 @@ fn recover_inspected(
     Error(error) -> Error(error)
     Ok(LocalFileLockInspection(Absent, _, _)) -> Ok(False)
     Ok(LocalFileLockInspection(Compromised, _, message)) ->
-      Error(local_file.LocalFileLockError(
-        local_file.Compromised,
-        path,
-        case message {
-          Some(value) -> value
-          None -> "local lock state is compromised"
-        },
-      ))
-    Ok(LocalFileLockInspection(Held, Some(owner), _)) if owner == expected_owner ->
-      recover_after_recheck(path, expected_owner)
+      Error(
+        local_file.LocalFileLockError(
+          local_file.Compromised,
+          path,
+          case message {
+            Some(value) -> value
+            None -> "local lock state is compromised"
+          },
+        ),
+      )
+    Ok(LocalFileLockInspection(Held, Some(owner), _))
+      if owner == expected_owner
+    -> recover_after_recheck(path, expected_owner)
     Ok(LocalFileLockInspection(Held, _, _)) ->
       Error(local_file.LocalFileLockError(
         local_file.Compromised,
@@ -144,8 +145,9 @@ fn recover_after_recheck(
   expected_owner: String,
 ) -> Result(Bool, local_file.LocalFileLockError) {
   case inspect_path(path) {
-    Ok(LocalFileLockInspection(Held, Some(owner), _)) if owner == expected_owner ->
-      remove_recovered(path)
+    Ok(LocalFileLockInspection(Held, Some(owner), _))
+      if owner == expected_owner
+    -> remove_recovered(path)
     Error(error) -> Error(error)
     _ ->
       Error(local_file.LocalFileLockError(
@@ -188,7 +190,10 @@ fn validate_inputs(
   case
     string.is_empty(lock_root),
     string.is_empty(lock_name),
-    lock_name == "." || lock_name == ".." || string.contains(lock_name, "/") || string.contains(lock_name, "\\")
+    lock_name == "."
+    || lock_name == ".."
+    || string.contains(lock_name, "/")
+    || string.contains(lock_name, "\\")
   {
     True, _, _ ->
       Error(local_file.LocalFileLockError(

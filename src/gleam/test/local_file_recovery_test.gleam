@@ -69,11 +69,13 @@ pub fn recovery_requires_confirmation_and_exact_owner_test() {
   local_file_recovery.recover(root, "install.lock", "owner-a", True)
   |> should.equal(Ok(True))
   local_file_recovery.inspect(root, "install.lock")
-  |> should.equal(Ok(local_file_recovery.LocalFileLockInspection(
-    local_file_recovery.Absent,
-    None,
-    None,
-  )))
+  |> should.equal(
+    Ok(local_file_recovery.LocalFileLockInspection(
+      local_file_recovery.Absent,
+      None,
+      None,
+    )),
+  )
   clean(root)
 }
 

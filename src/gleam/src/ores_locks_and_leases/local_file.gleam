@@ -308,7 +308,10 @@ fn validate_inputs(
   case
     string.is_empty(lock_root),
     string.is_empty(lock_name),
-    lock_name == "." || lock_name == ".." || string.contains(lock_name, "/") || string.contains(lock_name, "\\"),
+    lock_name == "."
+    || lock_name == ".."
+    || string.contains(lock_name, "/")
+    || string.contains(lock_name, "\\"),
     string.is_empty(owner)
   {
     True, _, _, _ ->
