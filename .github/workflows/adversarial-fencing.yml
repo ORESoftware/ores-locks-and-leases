@@ -6,10 +6,12 @@ on:
       - 'scripts/generate-fence-adversarial.mjs'
       - 'scripts/test-adversarial-datastores.mjs'
       - 'scripts/test-adversarial-runtimes.mjs'
+      - 'scripts/test-adversarial-cloudflare-do.mjs'
       - 'scripts/run-psql.mjs'
       - 'scripts/test-run-psql.sh'
       - 'scripts/test-all.sh'
       - 'scripts/test-persistence.sh'
+      - 'managed/cloudflare-do/**'
       - 'src/**/fence*'
       - 'persistence/**'
       - 'docs/adversarial-fencing.md'
@@ -21,10 +23,12 @@ on:
       - 'scripts/generate-fence-adversarial.mjs'
       - 'scripts/test-adversarial-datastores.mjs'
       - 'scripts/test-adversarial-runtimes.mjs'
+      - 'scripts/test-adversarial-cloudflare-do.mjs'
       - 'scripts/run-psql.mjs'
       - 'scripts/test-run-psql.sh'
       - 'scripts/test-all.sh'
       - 'scripts/test-persistence.sh'
+      - 'managed/cloudflare-do/**'
       - 'src/**/fence*'
       - 'persistence/**'
       - 'docs/adversarial-fencing.md'
@@ -111,6 +115,7 @@ jobs:
           node --check scripts/generate-fence-adversarial.mjs
           node --check scripts/test-adversarial-datastores.mjs
           node --check scripts/test-adversarial-runtimes.mjs
+          node --check scripts/test-adversarial-cloudflare-do.mjs
           node --check scripts/run-psql.mjs
           sh scripts/test-run-psql.sh
           node scripts/generate-fence-adversarial.mjs \
@@ -134,6 +139,11 @@ jobs:
           node scripts/test-adversarial-runtimes.mjs
           --corpus conformance/cases/fence-decision.json
           --receipt target/adversarial/runtime-receipt.json
+      - name: Cloudflare Durable Object adversarial authority
+        run: >-
+          node scripts/test-adversarial-cloudflare-do.mjs
+          --corpus conformance/cases/fence-decision.json
+          --receipt target/adversarial/cloudflare-do-receipt.json
       - name: PostgreSQL and Redis adversarial persistence
         env:
           ORES_LOCKS_TEST_DATABASE_URL: postgres://postgres:locks@localhost:5432/locks
@@ -151,6 +161,7 @@ jobs:
             target/adversarial/runtime-receipt.json
             target/adversarial/runtime-*.log
             target/adversarial/store-receipt.json
+            target/adversarial/cloudflare-do-receipt.json
             target/adversarial/fence-decision.json
           if-no-files-found: error
           retention-days: 30
