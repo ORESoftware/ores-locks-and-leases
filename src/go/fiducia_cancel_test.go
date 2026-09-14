@@ -159,7 +159,7 @@ func TestFiduciaRacedGrantReleaseNoopIsSafetyFailure(t *testing.T) {
 			writeFiduciaOutput(w, http.StatusOK, map[string]any{
 				"cancelled": false,
 				"acquired":  true,
-				"grant": map[string]any{"holder": "worker-a", "fencing_token": "41"},
+				"grant":     map[string]any{"holder": "worker-a", "fencing_token": "41"},
 			})
 		case "/v1/locks/release":
 			writeFiduciaOutput(w, http.StatusOK, map[string]any{"released": false})
