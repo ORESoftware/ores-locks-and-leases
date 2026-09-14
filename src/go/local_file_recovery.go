@@ -27,6 +27,9 @@ type LocalFileLockInspection struct {
 
 // InspectLocalFileLock reports portable-lock shape without mutating it.
 func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
+	if err := validateLocalPath(path); err != nil {
+		return LocalFileLockInspection{}, err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -36,6 +39,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	}
 	if !info.IsDir() || localFileInfoIsAlias(info) {
 		return compromisedInspection("lock path is not an unaliased directory"), nil
+	}
+	if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
+		return compromisedInspection(err.Error()), nil
 	}
 
 	// Two names are enough to distinguish empty, exactly-owner, and dirty.
@@ -97,6 +103,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 	if !pathInfo.Mode().IsRegular() || localFileInfoIsAlias(pathInfo) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token is not an unaliased regular file", nil)
 	}
+	if err := validateLocalPOSIXPrivateMode(lockPath, pathInfo, "owner token", 0o077); err != nil {
+		return nil, err
+	}
 	if pathInfo.Size() > int64(localFileOwnerMaxUTF8Bytes) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token exceeds the portable 2048-byte UTF-8 storage bound", nil)
 	}
@@ -115,6 +124,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 	}
 	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token identity changed while opening; refusing raced path-to-handle state", nil)
+	}
+	if err := validateLocalPOSIXPrivateMode(lockPath, openedInfo, "opened owner token", 0o077); err != nil {
+		return nil, err
 	}
 	if openedInfo.Size() > int64(localFileOwnerMaxUTF8Bytes) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token exceeds the portable 2048-byte UTF-8 storage bound", nil)
@@ -139,6 +151,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 // ownerless crash-window state is never auto-recovered because owner identity
 // can no longer be authenticated.
 func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (bool, error) {
+	if err := validateLocalPath(path); err != nil {
+		return false, err
+	}
 	if !confirmedInactive {
 		return false, localFileError(LocalFileInvalidInput, path, "explicit confirmed_inactive=true is required for recovery", nil)
 	}

@@ -3,8 +3,10 @@ package oreslocks
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +103,27 @@ func TestLocalFileLockInspectionRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestLocalFileLockRejectsInvalidUTF8OwnerAtAdmission(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	invalidOwner := string([]byte{0xff})
+	lock, acquired, err := TryAcquireLocalFileLock(path, invalidOwner)
+	if lock != nil || acquired {
+		t.Fatalf("invalid UTF-8 owner unexpectedly acquired: lock=%#v acquired=%v", lock, acquired)
+	}
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected invalid_input for invalid UTF-8 owner, got %v", err)
+	}
+	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid owner must not create lock state; stat err=%v", statErr)
+	}
+
+	_, err = RecoverLocalFileLock(path, invalidOwner, true)
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected recovery owner to share invalid UTF-8 admission, got %v", err)
+	}
+}
+
 func TestLocalFileLockExistsFailsClosedForIncompleteState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	if err := os.Mkdir(path, 0o700); err != nil {
@@ -144,5 +167,122 @@ func TestLocalFileLockErrorsDoNotRenderOwnerTokens(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secretOwner) {
 		t.Fatalf("owner token leaked in error: %v", err)
+	}
+}
+
+func TestLocalFileLockRejectsWritableExistingParentOnPOSIX(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL policy is separate from POSIX mode bits")
+	}
+	root := t.TempDir()
+	parent := filepath.Join(root, "shared")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := TryAcquireLocalFileLock(filepath.Join(parent, "install.lock"), "owner-a")
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileCompromised || !strings.Contains(localErr.Message, "permissions widened") {
+		t.Fatalf("expected writable-parent compromise, got %v", err)
+	}
+}
+
+func TestLocalFileLockDetectsLivePermissionWideningOnPOSIX(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL policy is separate from POSIX mode bits")
+	}
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(path, localFileOwnerName), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = lock.Release()
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileCompromised || !strings.Contains(localErr.Message, "permissions widened") {
+		t.Fatalf("expected widened-owner compromise, got %v", err)
+	}
+}
+
+func TestLocalFileLockRejectsContractInvalidPaths(t *testing.T) {
+	invalid := []string{"", "bad\x00path", string([]byte{0xff})}
+	for _, path := range invalid {
+		t.Run(fmt.Sprintf("%q", []byte(path)), func(t *testing.T) {
+			_, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+			if acquired {
+				t.Fatal("invalid path unexpectedly acquired")
+			}
+			var localErr *LocalFileLockError
+			if !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+				t.Fatalf("try acquire expected invalid_input, got %v", err)
+			}
+			if _, err := InspectLocalFileLock(path); !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+				t.Fatalf("inspect expected invalid_input, got %v", err)
+			}
+			if _, err := LocalFileLockExists(path); !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+				t.Fatalf("exists expected invalid_input, got %v", err)
+			}
+			if _, err := RecoverLocalFileLock(path, "owner-a", true); !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+				t.Fatalf("recover expected invalid_input, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLocalFileLockSameOwnerIsNotReentrant(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	first, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("first acquire: %v", err)
+	}
+	second, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || acquired || second != nil {
+		t.Fatalf("same-owner reacquire must contend, lock=%#v acquired=%v err=%v", second, acquired, err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocalFileLockDirectoryIsPrivateOnPOSIX(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL policy is separate from POSIX mode bits")
+	}
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("lock directory not private: mode=%#o", info.Mode().Perm())
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocalFileLockOwnerIdentityDoesNotNormalizeUnicode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	composed := "owner-é"
+	decomposed := "owner-e\u0301"
+	lock, acquired, err := TryAcquireLocalFileLock(path, composed)
+	if err != nil || !acquired {
+		t.Fatalf("acquire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, localFileOwnerName), []byte(decomposed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = lock.Release()
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileCompromised {
+		t.Fatalf("normalization-equivalent but byte-distinct owner must fail release: %v", err)
 	}
 }

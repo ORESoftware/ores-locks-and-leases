@@ -13,6 +13,10 @@ import {
   recover_local_file_lock,
   try_acquire_local_file_lock,
 } from "../dist/index.js";
+import {
+  MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS,
+  local_file_lock_sleep_delay_ms,
+} from "../dist/local-file.js";
 
 async function withTempDir(run) {
   const root = await mkdtemp(join(tmpdir(), "ores-local-lock-v2-"));
@@ -59,6 +63,15 @@ test("millisecond options reject values outside JavaScript safe integer range", 
       );
     }
   });
+});
+
+test("Node timer scheduling caps huge valid waits without collapsing them", () => {
+  assert.equal(
+    local_file_lock_sleep_delay_ms(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
+    MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS,
+  );
+  assert.equal(local_file_lock_sleep_delay_ms(50, 7), 7);
+  assert.equal(local_file_lock_sleep_delay_ms(5, 500), 5);
 });
 
 test("owner input rejects lone UTF-16 surrogates before persistence", async () => {
