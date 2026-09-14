@@ -38,14 +38,45 @@ fn inspect_absent_and_clean_held_states() {
 }
 
 #[test]
-fn inspect_missing_owner_and_dirty_directory_are_compromised() {
+fn inspect_empty_directory_is_explicit_incomplete_crash_state() {
+    let path = test_path("incomplete");
+    fs::create_dir(&path).expect("seed mkdir-before-owner crash window");
+    let inspection = inspect_local_file_lock(&path).expect("inspect incomplete");
+    assert_eq!(inspection.state, LocalFileLockInspectionState::Incomplete);
+    assert!(inspection.owner.is_none());
+
+    let recovery = recover_local_file_lock(&path, "owner-a", true)
+        .expect_err("ownerless crash state must never stale-steal");
+    assert_eq!(recovery.kind, LocalFileLockErrorKind::Compromised);
+    assert!(path.exists());
+    fs::remove_dir(path).expect("cleanup incomplete lock");
+}
+
+#[test]
+fn owner_removed_before_rmdir_is_the_same_incomplete_crash_state() {
+    let path = test_path("release-crash");
+    let lock = LocalFileLock::try_acquire(&path, "owner-a")
+        .expect("acquire")
+        .expect("holder");
+    std::mem::forget(lock);
+    fs::remove_file(path.join("owner")).expect("simulate release crash after owner deletion");
+
+    let inspection = inspect_local_file_lock(&path).expect("inspect release crash");
+    assert_eq!(inspection.state, LocalFileLockInspectionState::Incomplete);
+    let recovery = recover_local_file_lock(&path, "owner-a", true)
+        .expect_err("ownerless release crash must not be auto-recovered");
+    assert_eq!(recovery.kind, LocalFileLockErrorKind::Compromised);
+    assert!(path.exists());
+    fs::remove_dir(path).expect("cleanup release crash");
+}
+
+#[test]
+fn inspect_dirty_directory_is_compromised() {
     let path = test_path("compromised");
     let lock = LocalFileLock::try_acquire(&path, "owner-a")
         .expect("acquire")
         .expect("holder");
     fs::remove_file(path.join("owner")).expect("remove owner");
-    let missing = inspect_local_file_lock(&path).expect("inspect missing owner");
-    assert_eq!(missing.state, LocalFileLockInspectionState::Compromised);
     fs::write(path.join("unexpected"), b"x").expect("write unexpected");
     let dirty = inspect_local_file_lock(&path).expect("inspect dirty");
     assert_eq!(dirty.state, LocalFileLockInspectionState::Compromised);
