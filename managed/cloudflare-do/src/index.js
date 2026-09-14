@@ -16,7 +16,9 @@ function parseBearer(request) {
 }
 
 function validKey(key) {
-  return typeof key === "string" && encoder.encode(key).length <= MAX_LOCK_KEY_BYTES;
+  if (typeof key !== "string") return false;
+  const bytes = encoder.encode(key).length;
+  return bytes > 0 && bytes <= MAX_LOCK_KEY_BYTES;
 }
 
 function validHolder(holder) {
