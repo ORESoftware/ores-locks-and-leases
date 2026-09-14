@@ -9,6 +9,7 @@ on:
       - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
+      - 'scripts/verify-shared-interfaces-pin.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   push:
     branches: [main]
@@ -19,6 +20,7 @@ on:
       - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
+      - 'scripts/verify-shared-interfaces-pin.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   workflow_dispatch:
 
@@ -62,6 +64,40 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: '22' }
+
+      - name: Resolve immutable ores-interfaces dependency pin
+        id: shared_pin
+        continue-on-error: true
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('contracts/shared-interfaces.json', 'utf8'));
+          if (pin.schema !== 'ores.locks.shared-interfaces-pin/v1') throw new Error('unsupported shared-interface pin schema');
+          if (!/^[0-9a-f]{40}$/.test(pin.commit ?? '')) throw new Error('shared-interface dependency must use an immutable SHA');
+          appendFileSync(process.env.GITHUB_OUTPUT, `commit=${pin.commit}\n`);
+          NODE
+
+      - name: Check out exact ores-interfaces dependency
+        id: shared_checkout
+        if: steps.shared_pin.outcome == 'success'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/ores-interfaces
+          ref: ${{ steps.shared_pin.outputs.commit }}
+          path: target/ores-interfaces-source
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Verify shared-interface policy and tamper canaries
+        id: shared_interfaces
+        if: always()
+        continue-on-error: true
+        env:
+          ORES_INTERFACES_ROOT: target/ores-interfaces-source
+        run: node scripts/verify-shared-interfaces-pin.mjs
+
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with: { toolchain: '1.85.1', components: 'rustfmt,clippy' }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -171,6 +207,9 @@ jobs:
       - name: Enforce every native and TJSV gate
         if: always()
         env:
+          SHARED_PIN_OUTCOME: ${{ steps.shared_pin.outcome }}
+          SHARED_CHECKOUT_OUTCOME: ${{ steps.shared_checkout.outcome }}
+          SHARED_INTERFACES_OUTCOME: ${{ steps.shared_interfaces.outcome }}
           CONTRACTS_OUTCOME: ${{ steps.contracts.outcome }}
           RUST_OUTCOME: ${{ steps.rust.outcome }}
           GO_OUTCOME: ${{ steps.go.outcome }}
@@ -180,7 +219,7 @@ jobs:
           VALIDATOR_OUTCOME: ${{ steps.validator.outcome }}
           BOUNDARY_OUTCOME: ${{ steps.boundary.outcome }}
         run: |
-          for name in CONTRACTS RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY; do
+          for name in SHARED_PIN SHARED_CHECKOUT SHARED_INTERFACES CONTRACTS RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY; do
             eval "value=\${${name}_OUTCOME}"
             printf '%s=%s\n' "$name" "$value"
             test "$value" = success
