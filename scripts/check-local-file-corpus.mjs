@@ -78,15 +78,26 @@ assert.equal(scoped.cases.length, 5);
 assert.deepEqual(scoped.cases.at(-1).must_preserve, ["work_error", "release_error"]);
 
 assert.equal(recovery.schema, "ores.locks.local-file.recovery.v1");
-assert.deepEqual(recovery.inspection_states, ["absent", "held", "compromised"]);
+assert.deepEqual(recovery.inspection_states, ["absent", "held", "incomplete", "compromised"]);
 assert.equal(recovery.inspection.claims_ownership, false);
 assert.equal(recovery.inspection.follows_rendezvous_symlink, false);
 assert.deepEqual(recovery.inspection.expected_entries_when_held, ["owner"]);
+assert.equal(recovery.inspection.empty_directory, "incomplete");
+assert.equal(recovery.inspection.missing_owner_after_observed_owner_entry, "incomplete");
 assert.equal(recovery.recovery.automatic, false);
 assert.equal(recovery.recovery.requires_explicit_confirmation, true);
 assert.equal(recovery.recovery.requires_expected_owner, true);
 assert.equal(recovery.recovery.recursive_delete, false);
-assert.equal(recovery.cases.length, 9);
+assert.equal(recovery.recovery.incomplete_is_auto_recoverable, false);
+assert.equal(recovery.cases.length, 11);
+assert.deepEqual(
+  recovery.cases.filter(({ state }) => state === "incomplete").map(({ name }) => name),
+  ["inspect-mkdir-before-owner-crash", "inspect-owner-removed-before-rmdir-crash"],
+);
+assert.equal(
+  recovery.cases.find(({ name }) => name === "recover-incomplete").must_preserve_directory,
+  true,
+);
 
 assert.equal(identity.schema, "ores.locks.local-file.path-identity.v1");
 assert.deepEqual(identity.rules, {
