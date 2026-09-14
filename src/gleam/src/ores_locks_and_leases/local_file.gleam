@@ -79,25 +79,42 @@ pub fn try_acquire(
         "create lock root failed: " <> simplifile.describe_error(error),
       ))
     Ok(Nil) ->
-      case simplifile.create_directory(path) {
-        Error(simplifile.Eexist) ->
-          case path_is_directory(path) {
-            True -> Ok(None)
-            False ->
-              Error(LocalFileLockError(
-                Compromised,
-                path,
-                "lock path already exists but is not a directory",
-              ))
-          }
-        Error(error) ->
-          Error(io_error(
+      case path_kind(lock_root) {
+        1 -> create_lock_directory(path, owner)
+        4 -> Error(io_error(path, "inspect lock root failed"))
+        _ ->
+          Error(LocalFileLockError(
+            Compromised,
             path,
-            "atomically create local lock directory failed: "
-              <> simplifile.describe_error(error),
+            "lock root is not an unaliased directory",
           ))
-        Ok(Nil) -> write_owner_or_unwind(path, owner)
       }
+  }
+}
+
+fn create_lock_directory(
+  path: String,
+  owner: String,
+) -> Result(Option(LocalFileLock), LocalFileLockError) {
+  case simplifile.create_directory(path) {
+    Error(simplifile.Eexist) ->
+      case path_kind(path) {
+        1 -> Ok(None)
+        4 -> Error(io_error(path, "inspect contended local lock path failed"))
+        _ ->
+          Error(LocalFileLockError(
+            Compromised,
+            path,
+            "lock path already exists but is not an unaliased directory",
+          ))
+      }
+    Error(error) ->
+      Error(io_error(
+        path,
+        "atomically create local lock directory failed: "
+          <> simplifile.describe_error(error),
+      ))
+    Ok(Nil) -> write_owner_or_unwind(path, owner)
   }
 }
 
@@ -155,6 +172,24 @@ fn acquire_loop(
 pub fn release(lock: LocalFileLock) -> Result(Nil, LocalFileLockError) {
   let path = lock.path
   let owner_path = path <> "/" <> owner_file
+  case path_kind(path), path_kind(owner_path) {
+    1, 2 -> release_verified_shape(lock, path, owner_path)
+    4, _ -> Error(io_error(path, "inspect lock directory failed"))
+    _, 4 -> Error(io_error(path, "inspect owner token failed"))
+    _, _ ->
+      Error(LocalFileLockError(
+        Compromised,
+        path,
+        "lock directory or owner token has ambiguous path identity",
+      ))
+  }
+}
+
+fn release_verified_shape(
+  lock: LocalFileLock,
+  path: String,
+  owner_path: String,
+) -> Result(Nil, LocalFileLockError) {
   case simplifile.read(owner_path) {
     Ok(observed) if observed == lock.owner ->
       remove_owned_lock(path, owner_path)
@@ -186,12 +221,15 @@ pub fn exists(
   lock_name: String,
 ) -> Result(Bool, LocalFileLockError) {
   let path = lock_path(lock_root, lock_name)
-  case simplifile.exists(path, False) {
-    Ok(value) -> Ok(value)
-    Error(error) ->
-      Error(io_error(
+  case path_kind(path) {
+    0 -> Ok(False)
+    1 -> Ok(True)
+    4 -> Error(io_error(path, "inspect local lock path failed"))
+    _ ->
+      Error(LocalFileLockError(
+        Compromised,
         path,
-        "inspect local lock path failed: " <> simplifile.describe_error(error),
+        "lock path exists but is not an unaliased directory",
       ))
   }
 }
@@ -200,15 +238,21 @@ fn write_owner_or_unwind(
   path: String,
   owner: String,
 ) -> Result(Option(LocalFileLock), LocalFileLockError) {
-  case simplifile.write(to: path <> "/" <> owner_file, contents: owner) {
-    Ok(Nil) -> Ok(Some(LocalFileLock(path: path, owner: owner)))
-    Error(error) -> {
+  let owner_path = path <> "/" <> owner_file
+  case write_new_file_status(owner_path, owner) {
+    0 -> Ok(Some(LocalFileLock(path: path, owner: owner)))
+    1 -> {
       let _ = delete_empty_directory(path)
-      Error(io_error(
+      Error(LocalFileLockError(
+        Compromised,
         path,
-        "write local lock owner token failed: "
-          <> simplifile.describe_error(error),
+        "owner token already exists after winning lock directory creation",
       ))
+    }
+    _ -> {
+      let _ = simplifile.delete_file(at: owner_path)
+      let _ = delete_empty_directory(path)
+      Error(io_error(path, "write local lock owner token failed"))
     }
   }
 }
@@ -246,7 +290,7 @@ fn validate_inputs(
   case
     string.is_empty(lock_root),
     string.is_empty(lock_name),
-    string.contains(lock_name, "/") || string.contains(lock_name, "\\"),
+    lock_name == "." || lock_name == ".." || string.contains(lock_name, "/") || string.contains(lock_name, "\\"),
     string.is_empty(owner)
   {
     True, _, _, _ ->
@@ -265,7 +309,7 @@ fn validate_inputs(
       Error(LocalFileLockError(
         InvalidInput,
         path,
-        "lock name must be one path component",
+        "lock name must be one non-dot path component",
       ))
     _, _, _, True ->
       Error(LocalFileLockError(
@@ -318,5 +362,8 @@ fn io_error(path: String, message: String) -> LocalFileLockError {
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "delete_empty_directory")
 fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)
 
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "is_directory")
-fn path_is_directory(path: String) -> Bool
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "path_kind")
+fn path_kind(path: String) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "write_new_file_status")
+fn write_new_file_status(path: String, contents: String) -> Int
