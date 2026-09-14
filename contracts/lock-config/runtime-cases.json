@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Portable runtime-admission corpus for .ores-lock.toml. Config snippets are TOML text so every runtime and repository auditor can exercise the same cases without deriving one peer authority from the other.",
+  "cases": [
+    {
+      "id": "accept-local-install",
+      "accept": true,
+      "selected_profile": null,
+      "expected_profile": "local-install",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"local-install\"\nselected_profile_env = \"ORES_LOCK_PROFILE\"\n\n[[env]]\nkey = \"ORES_LOCK_PROFILE\"\nkind = \"string\"\nrequired = false\nsecret = false\n\n[[env]]\nkey = \"ORES_LOCK_ROOT\"\nkind = \"path\"\nrequired = false\nsecret = false\n\n[[profiles]]\nprofile_id = \"local-install\"\nwait = true\nwait_timeout_ms = 30000\nretry_interval_ms = 50\n\n[profiles.providers]\nlocal_file = true\nfiducia = false\npg_advisory = false\n\n[profiles.local_file]\nroot_env = \"ORES_LOCK_ROOT\"\nrequire_existing_root = false\n"
+    },
+    {
+      "id": "accept-service-composed",
+      "accept": true,
+      "selected_profile": "service-composed",
+      "expected_profile": "service-composed",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"service-composed\"\nselected_profile_env = \"ORES_LOCK_PROFILE\"\n\n[[env]]\nkey = \"ORES_LOCK_PROFILE\"\nkind = \"string\"\nrequired = false\nsecret = false\n\n[[env]]\nkey = \"FIDUCIA_BASE_URL\"\nkind = \"url\"\nrequired = false\nsecret = false\n\n[[env]]\nkey = \"FIDUCIA_AUTH_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = true\n\n[[env]]\nkey = \"DATABASE_URL\"\nkind = \"string\"\nrequired = false\nsecret = true\n\n[[profiles]]\nprofile_id = \"service-composed\"\nwait = true\nwait_timeout_ms = 30000\nretry_interval_ms = 50\nttl_ms = 30000\nrenew_interval_ms = 10000\n\n[profiles.providers]\nlocal_file = false\nfiducia = true\npg_advisory = true\n\n[profiles.fiducia]\nendpoint_env = \"FIDUCIA_BASE_URL\"\nauth_token_env = \"FIDUCIA_AUTH_TOKEN\"\n\n[profiles.postgres]\ndatabase_url_env = \"DATABASE_URL\"\nscope = \"transaction\"\n"
+    },
+    {
+      "id": "reject-unknown-default-profile",
+      "accept": false,
+      "expected_error": "default_profile",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"missing\"\n\n[[profiles]]\nprofile_id = \"local-install\"\nwait = true\n\n[profiles.providers]\nlocal_file = true\nfiducia = false\npg_advisory = false\n\n[profiles.local_file]\nrequire_existing_root = false\n"
+    },
+    {
+      "id": "reject-no-provider",
+      "accept": false,
+      "expected_error": "provider_selection",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"none\"\n\n[[profiles]]\nprofile_id = \"none\"\nwait = false\n\n[profiles.providers]\nlocal_file = false\nfiducia = false\npg_advisory = false\n"
+    },
+    {
+      "id": "reject-dormant-local-table",
+      "accept": false,
+      "expected_error": "local_file_dormant",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"pg\"\n\n[[env]]\nkey = \"DATABASE_URL\"\nkind = \"string\"\nrequired = false\nsecret = true\n\n[[profiles]]\nprofile_id = \"pg\"\nwait = false\n\n[profiles.providers]\nlocal_file = false\nfiducia = false\npg_advisory = true\n\n[profiles.local_file]\nrequire_existing_root = false\n\n[profiles.postgres]\ndatabase_url_env = \"DATABASE_URL\"\nscope = \"transaction\"\n"
+    },
+    {
+      "id": "reject-secret-selector",
+      "accept": false,
+      "expected_error": "env_reference_policy",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"local\"\nselected_profile_env = \"SECRET_SELECTOR\"\n\n[[env]]\nkey = \"SECRET_SELECTOR\"\nkind = \"string\"\nrequired = false\nsecret = true\n\n[[profiles]]\nprofile_id = \"local\"\nwait = false\n\n[profiles.providers]\nlocal_file = true\nfiducia = false\npg_advisory = false\n\n[profiles.local_file]\nrequire_existing_root = false\n"
+    },
+    {
+      "id": "reject-renewal-above-half-ttl",
+      "accept": false,
+      "expected_error": "renew_interval",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"service\"\n\n[[env]]\nkey = \"FIDUCIA_BASE_URL\"\nkind = \"url\"\nrequired = false\nsecret = false\n\n[[env]]\nkey = \"FIDUCIA_AUTH_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = true\n\n[[profiles]]\nprofile_id = \"service\"\nwait = true\nttl_ms = 30000\nrenew_interval_ms = 20000\n\n[profiles.providers]\nlocal_file = false\nfiducia = true\npg_advisory = false\n\n[profiles.fiducia]\nendpoint_env = \"FIDUCIA_BASE_URL\"\nauth_token_env = \"FIDUCIA_AUTH_TOKEN\"\n"
+    },
+    {
+      "id": "reject-unknown-root-field",
+      "accept": false,
+      "expected_error": "invalid_toml",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"local\"\nundeclared_setting = true\n\n[[profiles]]\nprofile_id = \"local\"\nwait = false\n\n[profiles.providers]\nlocal_file = true\nfiducia = false\npg_advisory = false\n\n[profiles.local_file]\nrequire_existing_root = false\n"
+    },
+    {
+      "id": "reject-local-root-kind-drift",
+      "accept": false,
+      "expected_error": "env_reference_policy",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"local\"\n\n[[env]]\nkey = \"ORES_LOCK_ROOT\"\nkind = \"string\"\nrequired = false\nsecret = false\n\n[[profiles]]\nprofile_id = \"local\"\nwait = false\n\n[profiles.providers]\nlocal_file = true\nfiducia = false\npg_advisory = false\n\n[profiles.local_file]\nroot_env = \"ORES_LOCK_ROOT\"\nrequire_existing_root = false\n"
+    },
+    {
+      "id": "reject-fiducia-endpoint-kind-drift",
+      "accept": false,
+      "expected_error": "env_reference_policy",
+      "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"service\"\n\n[[env]]\nkey = \"FIDUCIA_BASE_URL\"\nkind = \"string\"\nrequired = false\nsecret = false\n\n[[env]]\nkey = \"FIDUCIA_AUTH_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = true\n\n[[profiles]]\nprofile_id = \"service\"\nwait = false\nttl_ms = 30000\nrenew_interval_ms = 10000\n\n[profiles.providers]\nlocal_file = false\nfiducia = true\npg_advisory = false\n\n[profiles.fiducia]\nendpoint_env = \"FIDUCIA_BASE_URL\"\nauth_token_env = \"FIDUCIA_AUTH_TOKEN\"\n"
+    }
+  ]
+}
