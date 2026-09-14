@@ -28,6 +28,7 @@ export {
   DEFAULT_LOCAL_FILE_LOCK_OPTIONS,
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
   MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
+  MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS,
   acquire_local_file_lock,
   generated_local_file_lock_owner,
   local_file_lock_exists,
