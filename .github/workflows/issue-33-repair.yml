@@ -34,44 +34,28 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
-      - name: Repair cancellation cleanup and legacy fakes
+      - name: Teach legacy Go fake the mandatory cancel protocol
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          fiducia = Path('src/go/fiducia.go')
-          text = fiducia.read_text()
-          old = '''\t\tout, err := f.post(ctx, "/v1/locks/acquire", body)\n\t\tif err != nil {\n\t\t\treturn LeaseGrant{}, transportErr(key, err)\n\t\t}\n'''
-          new = '''\t\tout, err := f.post(ctx, "/v1/locks/acquire", body)\n\t\tif err != nil {\n\t\t\t// A caller cancellation can abort the in-flight HTTP request after the\n\t\t\t// authority has already accepted/promoted this stable request_id.\n\t\t\t// Reconcile that ambiguity on an independent cleanup context before\n\t\t\t// returning cancellation to the caller.\n\t\t\tif ctx.Err() != nil && attempted {\n\t\t\t\tif cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {\n\t\t\t\t\treturn LeaseGrant{}, transportErr(key, cleanupErr)\n\t\t\t\t}\n\t\t\t\treturn LeaseGrant{}, transportErr(key, ctx.Err())\n\t\t\t}\n\t\t\treturn LeaseGrant{}, transportErr(key, err)\n\t\t}\n'''
-          if old not in text:
-              raise SystemExit('fiducia acquire error anchor not found')
-          fiducia.write_text(text.replace(old, new, 1))
-
           gotest = Path('src/go/oreslocks_test.go')
           text = gotest.read_text()
-          old = '''\tcase "/v1/locks/renew":\n\t\tout = map[string]any{"renewed": body["holder"] == n.holder, "lease_expires_ms": 234567}\n\tcase "/v1/locks/release":\n'''
-          new = '''\tcase "/v1/locks/cancel":\n\t\tout = map[string]any{"cancelled": true, "acquired": false}\n\tcase "/v1/locks/renew":\n\t\tout = map[string]any{"renewed": body["holder"] == n.holder, "lease_expires_ms": 234567}\n\tcase "/v1/locks/release":\n'''
-          if old not in text:
-              raise SystemExit('go fake-node anchor not found')
-          gotest.write_text(text.replace(old, new, 1))
-
-          tstest = Path('src/ts/test/locks.test.mjs')
-          text = tstest.read_text()
-          if 'path === "/v1/locks/cancel"' not in text:
-              old = '''    } else if (path === "/v1/locks/renew") {\n      output = { renewed: body.holder === node.holder, lease_expires_ms: 234567 };\n    } else if (path === "/v1/locks/release") {'''
-              new = '''    } else if (path === "/v1/locks/cancel") {\n      output = { cancelled: true, acquired: false };\n    } else if (path === "/v1/locks/renew") {\n      output = { renewed: body.holder === node.holder, lease_expires_ms: 234567 };\n    } else if (path === "/v1/locks/release") {'''
+          if 'case "/v1/locks/cancel":' not in text:
+              old = '''\tcase "/v1/locks/renew":\n\t\tout = map[string]any{"renewed": body["holder"] == n.holder, "lease_expires_ms": 234567}\n\tcase "/v1/locks/release":\n'''
+              new = '''\tcase "/v1/locks/cancel":\n\t\tout = map[string]any{"cancelled": true, "acquired": false}\n\tcase "/v1/locks/renew":\n\t\tout = map[string]any{"renewed": body["holder"] == n.holder, "lease_expires_ms": 234567}\n\tcase "/v1/locks/release":\n'''
               if old not in text:
-                  raise SystemExit('typescript fake-node anchor not found')
-              tstest.write_text(text.replace(old, new, 1))
+                  raise SystemExit('go fake-node anchor not found')
+              gotest.write_text(text.replace(old, new, 1))
           PY
 
       - name: Normalize and run focused tests
         shell: bash
         run: |
           set -euo pipefail
-          gofmt -w src/go/lease.go src/go/fiducia.go src/go/fiducia_cancel_test.go src/go/oreslocks_test.go
+          gofmt -w src/go/fiducia.go src/go/fiducia_cancel_test.go src/go/oreslocks_test.go
           (cd src/go && go vet ./... && go test ./...)
           (cd src/ts && npm ci --no-audit --no-fund && npm test)
           git diff --check
@@ -81,9 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/workflows/issue-33-repair.yml
-          git add src/go/lease.go src/go/fiducia.go src/go/fiducia_cancel_test.go src/go/oreslocks_test.go src/ts/test/locks.test.mjs .github/workflows/issue-33-repair.yml
+          git add src/go/fiducia.go src/go/fiducia_cancel_test.go src/go/oreslocks_test.go src/ts/test/locks.test.mjs .github/workflows/issue-33-repair.yml
           git diff --cached --check
           git config user.name 'ORESoftware'
           git config user.email 'alex@oresoftware.com'
-          git commit -m 'fix(issue-33): reconcile cancellation after aborted acquire'
+          git commit -m 'test(issue-33): align legacy Go fake with cancel protocol'
           git push origin HEAD:issue-33-cancel-raced-grant-v2
