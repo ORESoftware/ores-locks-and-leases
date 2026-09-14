@@ -20,6 +20,19 @@ enum LocalFileLockErrorKind {
   invalidInput: "invalid_input",
 }
 
+enum LocalFileLockInspectionState {
+  absent: "absent",
+  held: "held",
+  compromised: "compromised",
+}
+
+enum ScopedLocalFileLockOutcomeKind {
+  success: "success",
+  lockError: "lock_error",
+  workError: "work_error",
+  workAndReleaseError: "work_and_release_error",
+}
+
 model LocalFileLockOptions {
   wait: boolean;
 
@@ -39,6 +52,28 @@ model LocalFileLockSnapshot {
   path: LocalFileLockPath;
   owner: LocalFileLockOwner;
   released: boolean;
+}
+
+model LocalFileLockInspection {
+  state: LocalFileLockInspectionState;
+  owner?: LocalFileLockOwner;
+
+  @minLength(1)
+  message?: string;
+}
+
+model LocalFileLockRecoveryRequest {
+  path: LocalFileLockPath;
+  expectedOwner: LocalFileLockOwner;
+  confirmedInactive: boolean;
+}
+
+model LocalFileLockRecoveryResult {
+  recovered: boolean;
+}
+
+model ScopedLocalFileLockOutcome {
+  kind: ScopedLocalFileLockOutcomeKind;
 }
 
 model LocalFileLockFailure {
