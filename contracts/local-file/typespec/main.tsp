@@ -55,12 +55,26 @@ model LocalFileLockSnapshot {
   released: boolean;
 }
 
-model LocalFileLockInspection {
-  state: LocalFileLockInspectionState;
-  owner?: LocalFileLockOwner;
+union LocalFileLockInspection {
+  absent: {
+    state: "absent";
+  },
+  held: {
+    state: "held";
+    owner: LocalFileLockOwner;
+  },
+  incomplete: {
+    state: "incomplete";
 
-  @minLength(1)
-  message?: string;
+    @minLength(1)
+    message: string;
+  },
+  compromised: {
+    state: "compromised";
+
+    @minLength(1)
+    message: string;
+  },
 }
 
 model LocalFileLockRecoveryRequest {
