@@ -28,7 +28,7 @@ jobs:
           toolchain: '1.85.1'
           components: rustfmt,clippy
 
-      - name: Wire config feature and repair generated source typo
+      - name: Wire config feature and repair source fixture
         shell: bash
         run: |
           set -euo pipefail
@@ -70,6 +70,10 @@ jobs:
 
           config = Path('src/rust/config.rs')
           text = config.read_text().replace(')]\\#[serde', ')]\n#[serde')
+          old = '''        let dormant = ROOT_CONFIG.replace(\n            "local_file = true\\nfiducia = false",\n            "local_file = false\\nfiducia = false",\n        );'''
+          new = '''        let dormant = ROOT_CONFIG.replace(\n            "local_file = true\\nfiducia = false\\npg_advisory = false",\n            "local_file = false\\nfiducia = false\\npg_advisory = true",\n        );'''
+          assert old in text
+          text = text.replace(old, new, 1)
           config.write_text(text)
           PY
 
