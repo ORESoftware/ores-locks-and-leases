@@ -1,0 +1,58 @@
+name: DEN-1154 refresh rustls lock
+
+on:
+  push:
+    branches: [DEN-1154-durable-object-hardening]
+    paths:
+      - .github/workflows/den-1154-refresh-rustls-lock.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: DEN-1154-durable-object-hardening
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+      - name: Resolve patched rustls only
+        run: |
+          set -euo pipefail
+          cd src/rust
+          cargo update -p rustls@0.23.43 --precise 0.23.45
+          grep -A4 -B1 'name = "rustls"' Cargo.lock | grep -F 'version = "0.23.45"'
+          cd ../..
+          python3 - <<'PY'
+          import subprocess, sys
+          diff = subprocess.check_output(["git", "diff", "--", "src/rust/Cargo.lock"], text=True)
+          allowed_removed = {
+              '-version = "0.23.43"',
+              '-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"',
+          }
+          allowed_added = {
+              '+version = "0.23.45"',
+              '+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"',
+          }
+          changed = [line for line in diff.splitlines() if (line.startswith('+') or line.startswith('-')) and not line.startswith(('+++', '---'))]
+          if set(x for x in changed if x.startswith('-')) != allowed_removed or set(x for x in changed if x.startswith('+')) != allowed_added:
+              print(diff)
+              sys.exit('cargo update changed more than the audited rustls version/checksum pair')
+          print(diff)
+          PY
+      - name: Commit the lock repair and remove this one-shot workflow
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/den-1154-refresh-rustls-lock.yml
+          git add src/rust/Cargo.lock
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'security: update rustls to 0.23.45'
+          git push origin HEAD:DEN-1154-durable-object-hardening
