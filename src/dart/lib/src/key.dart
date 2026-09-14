@@ -10,9 +10,12 @@ final class LockKey {
 
   LockKey._(this.value);
 
-  /// Validate the contract's length bound.
+  /// Validate the contract's non-empty 1..512-byte bound.
   factory LockKey(String key) {
     final bytes = utf8.encode(key).length;
+    if (bytes == 0) {
+      throw ArgumentError.value(key, 'key', 'lock key must not be empty');
+    }
     if (bytes > maxLockKeyBytes) {
       throw ArgumentError.value(
         key,
