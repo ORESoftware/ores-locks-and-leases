@@ -5,6 +5,24 @@
     "wait_timeout_ms": 30000,
     "retry_interval_ms": 50
   },
+  "bounds": {
+    "owner_max_codepoints": 512,
+    "retry_interval_ms_min": 0,
+    "zero_retry_interval_allowed_when_wait_false": true,
+    "owner_file_private_on_posix": true
+  },
+  "valid_edge_cases": [
+    {
+      "name": "zero-retry-no-wait",
+      "wait": false,
+      "wait_timeout_ms": 30000,
+      "retry_interval_ms": 0
+    },
+    {
+      "name": "owner-at-max",
+      "owner_codepoints": 512
+    }
+  ],
   "owner_file": "owner",
   "error_kinds": [
     "contention",
