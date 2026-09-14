@@ -69,7 +69,7 @@ fn rejects_secret_profile_selector_binding() {
         "selected_profile_env = \"FIDUCIA_AUTH_TOKEN\"",
     );
     let error = OresLockConfigV1::from_toml_str(&source).expect_err("secret selector must fail");
-    assert_eq!(error.code, "env_binding");
+    assert_eq!(error.code, "env_reference_policy");
 }
 
 #[test]
