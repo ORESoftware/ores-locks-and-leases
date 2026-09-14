@@ -9,7 +9,7 @@ import {
 const OWNER_FILE = "owner";
 export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES = 2048;
 
-export type LocalFileLockInspectionState = "absent" | "held" | "compromised";
+export type LocalFileLockInspectionState = "absent" | "held" | "incomplete" | "compromised";
 
 export interface LocalFileLockInspection {
   state: LocalFileLockInspectionState;
@@ -36,6 +36,11 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   } catch (error) {
     throw io_error(path, "list local lock directory", error);
   }
+  if (entries.length === 0) {
+    return incomplete(
+      "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+    );
+  }
   if (entries.length !== 1 || entries[0] !== OWNER_FILE) {
     return compromised("lock directory must contain exactly one owner marker");
   }
@@ -48,7 +53,7 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
       return compromised("owner token is not an unaliased regular file");
     }
   } catch (error) {
-    if (error_code(error) === "ENOENT") return compromised("owner token is missing");
+    if (error_code(error) === "ENOENT") return incomplete("owner token disappeared during inspection");
     throw io_error(path, "inspect local lock owner token", error);
   }
   if (ownerMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
@@ -61,6 +66,9 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   } catch (error) {
     if (error instanceof LocalFileLockError && error.kind === "compromised") {
       return compromised(error.message);
+    }
+    if (error instanceof LocalFileLockError && error.kind === "incomplete") {
+      return incomplete(error.message);
     }
     throw error;
   }
@@ -75,6 +83,7 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
  * Explicit operator-driven recovery. `confirmed_inactive` asserts that the
  * caller independently established the previous owner is inactive and the
  * protected local state is quiescent. Missing locks are idempotent no-ops.
+ * Ownerless incomplete crash-window state is never auto-recovered.
  */
 export async function recover_local_file_lock(
   path: string,
@@ -101,6 +110,13 @@ export async function recover_local_file_lock(
 
   const inspection = await inspect_local_file_lock(path);
   if (inspection.state === "absent") return false;
+  if (inspection.state === "incomplete") {
+    throw new LocalFileLockError(
+      "compromised",
+      path,
+      "incomplete lock state has no owner identity; refusing automatic recovery",
+    );
+  }
   if (inspection.state === "compromised") {
     throw new LocalFileLockError(
       "compromised",
@@ -145,12 +161,7 @@ async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Pro
   try {
     handle = await open(ownerPath, "r");
     const buffer = new Uint8Array(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
-    const { bytesRead } = await handle.read(
-      buffer,
-      0,
-      buffer.byteLength,
-      0,
-    );
+    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, 0);
     if (bytesRead > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
@@ -171,12 +182,16 @@ async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Pro
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "ENOENT") {
-      throw new LocalFileLockError("compromised", lockPath, "owner token is missing", error);
+      throw new LocalFileLockError("incomplete", lockPath, "owner token disappeared during inspection", error);
     }
     throw io_error(lockPath, "read local lock owner token", error);
   } finally {
     await handle?.close();
   }
+}
+
+function incomplete(message: string): LocalFileLockInspection {
+  return { state: "incomplete", message };
 }
 
 function compromised(message: string): LocalFileLockInspection {
