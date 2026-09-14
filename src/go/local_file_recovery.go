@@ -103,6 +103,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 	if !pathInfo.Mode().IsRegular() || localFileInfoIsAlias(pathInfo) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token is not an unaliased regular file", nil)
 	}
+	if localFileInfoHasMultipleHardLinks(pathInfo) {
+		return nil, localFileError(LocalFileCompromised, lockPath, "owner token has multiple hard links; refusing aliased ownership state", nil)
+	}
 	if err := validateLocalPOSIXPrivateMode(lockPath, pathInfo, "owner token", 0o077); err != nil {
 		return nil, err
 	}
@@ -124,6 +127,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 	}
 	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token identity changed while opening; refusing raced path-to-handle state", nil)
+	}
+	if localFileInfoHasMultipleHardLinks(openedInfo) {
+		return nil, localFileError(LocalFileCompromised, lockPath, "opened owner token has multiple hard links; refusing aliased ownership state", nil)
 	}
 	if err := validateLocalPOSIXPrivateMode(lockPath, openedInfo, "opened owner token", 0o077); err != nil {
 		return nil, err
