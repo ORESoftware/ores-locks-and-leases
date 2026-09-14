@@ -61,23 +61,8 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     );
   }
 
-  let entries: string[];
-  try {
-    entries = await read_local_file_lock_entry_names_bounded(path);
-  } catch (error) {
-    // A clean release can remove the rendezvous after the lstat above but
-    // before opendir. That observation has a valid linearization point after
-    // removal, so report `absent` instead of inventing an IO failure. This is
-    // diagnostic only and never grants ownership or performs stale recovery.
-    if (
-      error instanceof LocalFileLockError &&
-      error.kind === "io" &&
-      caused_by_error_code(error, "ENOENT")
-    ) {
-      return { state: "absent" };
-    }
-    throw error;
-  }
+  const entries = await read_inspection_entry_names(path);
+  if (entries === null) return { state: "absent" };
   if (entries.length === 0) {
     return incomplete(
       "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
@@ -201,6 +186,48 @@ export async function recover_local_file_lock(
   return true;
 }
 
+/**
+ * Read the bounded directory shape while tolerating only the two OS-level
+ * disappearance signals produced by a concurrent clean release.
+ *
+ * POSIX typically reports ENOENT when rmdir wins between lstat and opendir.
+ * Windows can transiently report EPERM while the directory is deletion-pending.
+ * For Windows EPERM we perform a tiny bounded retry: disappearance linearizes
+ * as `absent`; a persistent EPERM on an extant path remains a genuine IO error.
+ */
+async function read_inspection_entry_names(path: string): Promise<string[] | null> {
+  const maxAttempts = process.platform === "win32" ? 4 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await read_local_file_lock_entry_names_bounded(path);
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof LocalFileLockError) || error.kind !== "io") throw error;
+      if (caused_by_error_code(error, "ENOENT")) return null;
+
+      if (process.platform !== "win32" || !caused_by_error_code(error, "EPERM")) {
+        throw error;
+      }
+
+      try {
+        await lstat(path);
+      } catch (probeError) {
+        if (error_code(probeError) === "ENOENT") return null;
+        throw io_error(path, "recheck Windows deletion-pending local lock path", probeError);
+      }
+
+      if (attempt + 1 < maxAttempts) {
+        await sleep_ms(1);
+        continue;
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 function incomplete(message: string): LocalFileLockInspection {
   return { state: "incomplete", reason: "owner_marker_missing", message };
 }
@@ -221,6 +248,10 @@ function classify_bounded_owner_error(error: LocalFileLockError): LocalFileLockI
   }
   if (error.message.includes("regular file")) return "owner_not_regular_file";
   return "owner_contract_violation";
+}
+
+function sleep_ms(delay: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 function caused_by_error_code(error: Error, code: string): boolean {
