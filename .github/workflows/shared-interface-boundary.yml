@@ -1,0 +1,124 @@
+name: shared-interface dependency boundary
+
+on:
+  pull_request:
+    paths:
+      - '.zpkg.toml'
+      - '.zpkg.lock'
+      - 'contracts/shared-interfaces.json'
+      - 'contracts/typespec/**'
+      - 'contracts/json-schema/**'
+      - 'scripts/verify-shared-interface-boundary.mjs'
+      - 'scripts/check-tjsv-contracts.sh'
+      - '.github/workflows/shared-interface-boundary.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.zpkg.toml'
+      - '.zpkg.lock'
+      - 'contracts/shared-interfaces.json'
+      - 'contracts/typespec/**'
+      - 'contracts/json-schema/**'
+      - 'scripts/verify-shared-interface-boundary.mjs'
+      - 'scripts/check-tjsv-contracts.sh'
+      - '.github/workflows/shared-interface-boundary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-interface-boundary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  ZED_CLI_COMMIT: a1c5b7a3c72b957944b76911fcbc723dd9c16541
+
+jobs:
+  boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact lock-lib revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Resolve immutable ores-interfaces pin
+        id: shared_pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('contracts/shared-interfaces.json', 'utf8'));
+          if (pin.schema !== 'ores.locks.shared-interfaces-pin/v2') throw new Error('unsupported shared-interface pin schema');
+          if (!/^[0-9a-f]{40}$/.test(pin.commit ?? '')) throw new Error('shared-interface dependency must use an immutable SHA');
+          appendFileSync(process.env.GITHUB_OUTPUT, `commit=${pin.commit}\n`);
+          NODE
+
+      - name: Check out exact ores-interfaces dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/ores-interfaces
+          ref: ${{ steps.shared_pin.outputs.commit }}
+          path: target/ores-interfaces-source
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Verify semantic/tooling dependency boundary
+        run: |
+          mkdir -p target/shared-interface-boundary
+          ORES_INTERFACES_ROOT=target/ores-interfaces-source \
+            node scripts/verify-shared-interface-boundary.mjs \
+            | tee target/shared-interface-boundary/receipt.json
+
+      - name: Re-prove independent TypeSpec and JSON Schema authorities
+        run: sh scripts/check-tjsv-contracts.sh all
+
+      - name: Check out pinned canonical Zed resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.ZED_CLI_COMMIT }}
+          path: target/zed-cli
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Install Rust for Zed metadata validation
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.95.0'
+
+      - name: Require canonical generated lock metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s .zpkg.lock
+          cargo run --quiet --manifest-path target/zed-cli/Cargo.toml --bin zed -- \
+            validate --require-lock --manifest .zpkg.toml --lock .zpkg.lock
+
+      - name: Retain dependency-boundary evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: shared-interface-boundary-${{ env.EXPECTED_SHA }}
+          path: |
+            target/shared-interface-boundary/
+            target/tjsv/
+          if-no-files-found: warn
+          retention-days: 30
