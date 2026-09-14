@@ -343,6 +343,7 @@ export async function read_bounded_local_file_lock_owner(
       );
     }
     validate_posix_private_mode(lockPath, pathMetadata.mode, "owner token");
+    validate_posix_single_link(lockPath, pathMetadata.nlink, "owner token");
     if (pathMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
@@ -366,6 +367,7 @@ export async function read_bounded_local_file_lock_owner(
       );
     }
     validate_posix_private_mode(lockPath, openedMetadata.mode, "opened owner token");
+    validate_posix_single_link(lockPath, openedMetadata.nlink, "opened owner token");
     if (openedMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
@@ -540,6 +542,17 @@ function validate_posix_private_mode(lockPath: string, mode: number, label: stri
       "compromised",
       lockPath,
       `${label} permissions widened beyond the private POSIX contract`,
+    );
+  }
+}
+
+function validate_posix_single_link(lockPath: string, nlink: number, label: string): void {
+  if (process.platform === "win32") return;
+  if (nlink !== 1) {
+    throw new LocalFileLockError(
+      "compromised",
+      lockPath,
+      `${label} has multiple hard links; refusing aliased ownership state`,
     );
   }
 }
