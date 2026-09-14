@@ -28,7 +28,11 @@ fn runtime_admission_matches_portable_lock_config_corpus() {
     ))
     .expect("runtime corpus must be valid JSON");
 
-    assert_eq!(corpus.cases.len(), 20, "keep the full admission corpus intact");
+    assert_eq!(
+        corpus.cases.len(),
+        20,
+        "keep the full admission corpus intact"
+    );
 
     for case in corpus.cases {
         match OresLockConfigV1::from_toml_str(&case.toml) {
@@ -47,7 +51,7 @@ fn runtime_admission_matches_portable_lock_config_corpus() {
             Err(error) => {
                 assert!(!case.accept, "{} unexpectedly rejected: {error}", case.id);
                 assert_eq!(
-                    Some(error.code.as_str()),
+                    Some(error.code),
                     case.expected_error.as_deref(),
                     "{} rejected with the wrong policy code",
                     case.id
