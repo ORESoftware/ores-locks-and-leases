@@ -84,7 +84,14 @@ export {
   type LeaseMaintenanceOptions,
   type MaintainedXactGuarded,
 } from "./maintained.js";
-export { FiduciaLease, cleartextRefusal, generatedHolder, type FetchLike, type FiduciaLeaseOptions } from "./fiducia.js";
+export {
+  FiduciaLease,
+  cleartextRefusal,
+  generatedHolder,
+  generatedRequestId,
+  type FetchLike,
+  type FiduciaLeaseOptions,
+} from "./fiducia.js";
 export {
   CloudflareDurableObjectLease,
   type CloudflareDurableObjectLeaseOptions,
