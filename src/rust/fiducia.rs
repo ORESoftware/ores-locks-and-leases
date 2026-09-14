@@ -1,10 +1,13 @@
 //! [`Lease`] over the official fiducia-cloud async Rust client.
 //!
-//! The fiducia node never holds a request open: `acquire` returns at once
-//! with `acquired: false` when the key is held, so the *client* owns the
-//! wait. This adapter polls at `opts.retry_interval` until the grant arrives
-//! or `opts.wait_timeout` elapses — the same cadence the official sync
-//! client's `must_lock` uses.
+//! This wrapper is intentionally pinned to a known `fiducia-client` revision.
+//! Its hand-written [`AsyncFiduciaClient`] lock methods still expose the older
+//! thin acquire/renew/release surface rather than the current
+//! `wait`/`wait_timeout_ms`/`request_id` plus cancel contract declared by
+//! `fiducia-clients/operations.json`. Until the upstream async Rust surface
+//! converges, this adapter preserves its existing client-side polling behavior
+//! and must not be used as the compatibility oracle for new lock integrations.
+//! See `docs/fiducia-client-integration.md` and fiducia-cloud/fiducia-clients#123.
 
 use std::time::{Duration, Instant};
 
@@ -49,9 +52,9 @@ fn transport(key: &LockKey, err: fiducia_client::Error) -> LockError {
     LockError::new(LockErrorKind::Transport, key, format!("{err:?}"))
 }
 
-/// An unguessable-enough holder identity. Holder names participate in queue
-/// identity and cancellation authority, so a bare pid/counter is not enough;
-/// callers with a real identity should set `AcquireOptions::holder`.
+/// Collision-resistant process-local holder identity, not a credential or
+/// secret. Callers with a stable service identity should set
+/// `AcquireOptions::holder` explicitly.
 fn generated_holder() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
