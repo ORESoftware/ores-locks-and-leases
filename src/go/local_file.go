@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -106,6 +107,9 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 				return nil, false, localFileError(LocalFileIO, path, "inspect contended local lock path failed", inspectErr)
 			}
 			if info.IsDir() && !localFileInfoIsAlias(info) {
+				if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
+					return nil, false, err
+				}
 				return nil, false, nil
 			}
 			return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not an unaliased directory", err)
@@ -211,8 +215,6 @@ func (l *LocalFileLock) Release() error {
 	}
 	if err := os.Remove(l.path); err != nil {
 		kind := LocalFileIO
-		// Read at most one entry: a single unexpected child is sufficient to
-		// classify the state as compromised without enumerating a hostile tree.
 		if dir, openErr := os.Open(l.path); openErr == nil {
 			names, readErr := dir.Readdirnames(1)
 			_ = dir.Close()
@@ -283,7 +285,7 @@ func validateLocalRealDirectory(lockPath, path, label string) error {
 	if !info.IsDir() || localFileInfoIsAlias(info) {
 		return localFileError(LocalFileCompromised, lockPath, label+" is not an unaliased directory", nil)
 	}
-	return nil
+	return validateLocalPOSIXPrivateMode(lockPath, info, label, 0o022)
 }
 
 func validateLocalRegularFile(lockPath, path, label string) error {
@@ -296,6 +298,16 @@ func validateLocalRegularFile(lockPath, path, label string) error {
 	}
 	if !info.Mode().IsRegular() || localFileInfoIsAlias(info) {
 		return localFileError(LocalFileCompromised, lockPath, label+" is not an unaliased regular file", nil)
+	}
+	return validateLocalPOSIXPrivateMode(lockPath, info, label, 0o077)
+}
+
+func validateLocalPOSIXPrivateMode(lockPath string, info os.FileInfo, label string, forbidden os.FileMode) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	if info.Mode().Perm()&forbidden != 0 {
+		return localFileError(LocalFileCompromised, lockPath, label+" permissions widened beyond the portable private-state policy", nil)
 	}
 	return nil
 }
