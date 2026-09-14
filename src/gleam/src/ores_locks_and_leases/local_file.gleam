@@ -34,11 +34,7 @@ pub type LocalFileLockError {
 
 /// Waiting policy for `acquire`.
 pub type LocalFileLockOptions {
-  LocalFileLockOptions(
-    wait: Bool,
-    wait_timeout_ms: Int,
-    retry_interval_ms: Int,
-  )
+  LocalFileLockOptions(wait: Bool, wait_timeout_ms: Int, retry_interval_ms: Int)
 }
 
 /// Cross-runtime convenience defaults: 30s wait budget, 50ms retry interval.
@@ -77,18 +73,20 @@ pub fn try_acquire(
   let path = lock_path(lock_root, lock_name)
 
   case simplifile.create_directory_all(lock_root) {
-    Error(error) -> Error(io_error(
-      path,
-      "create lock root failed: " <> simplifile.describe_error(error),
-    ))
+    Error(error) ->
+      Error(io_error(
+        path,
+        "create lock root failed: " <> simplifile.describe_error(error),
+      ))
     Ok(Nil) ->
       case simplifile.create_directory(path) {
         Error(simplifile.Eexist) -> Ok(None)
-        Error(error) -> Error(io_error(
-          path,
-          "atomically create local lock directory failed: "
-            <> simplifile.describe_error(error),
-        ))
+        Error(error) ->
+          Error(io_error(
+            path,
+            "atomically create local lock directory failed: "
+              <> simplifile.describe_error(error),
+          ))
         Ok(Nil) -> write_owner_or_unwind(path, owner)
       }
   }
@@ -136,13 +134,7 @@ fn acquire_loop(
         False -> remaining_ms
       }
       process.sleep(delay)
-      acquire_loop(
-        lock_root,
-        lock_name,
-        owner,
-        options,
-        remaining_ms - delay,
-      )
+      acquire_loop(lock_root, lock_name, owner, options, remaining_ms - delay)
     }
   }
 }
@@ -155,7 +147,8 @@ pub fn release(lock: LocalFileLock) -> Result(Nil, LocalFileLockError) {
   let path = lock.path
   let owner_path = path <> "/" <> owner_file
   case simplifile.read(owner_path) {
-    Ok(observed) if observed == lock.owner -> remove_owned_lock(path, owner_path)
+    Ok(observed) if observed == lock.owner ->
+      remove_owned_lock(path, owner_path)
     Ok(_) ->
       Error(LocalFileLockError(
         Compromised,
@@ -165,32 +158,41 @@ pub fn release(lock: LocalFileLock) -> Result(Nil, LocalFileLockError) {
     Error(simplifile.Enoent) ->
       case simplifile.exists(path, False) {
         Ok(False) -> Ok(Nil)
-        Ok(True) -> Error(io_error(
-          path,
-          "owner token is missing while the lock directory still exists",
-        ))
-        Error(error) -> Error(io_error(
-          path,
-          "inspect local lock path failed: " <> simplifile.describe_error(error),
-        ))
+        Ok(True) ->
+          Error(io_error(
+            path,
+            "owner token is missing while the lock directory still exists",
+          ))
+        Error(error) ->
+          Error(io_error(
+            path,
+            "inspect local lock path failed: "
+              <> simplifile.describe_error(error),
+          ))
       }
-    Error(error) -> Error(io_error(
-      path,
-      "read local lock owner token failed: " <> simplifile.describe_error(error),
-    ))
+    Error(error) ->
+      Error(io_error(
+        path,
+        "read local lock owner token failed: "
+          <> simplifile.describe_error(error),
+      ))
   }
 }
 
 /// Diagnostics only. Callers must still acquire before treating themselves as
 /// the owner.
-pub fn exists(lock_root: String, lock_name: String) -> Result(Bool, LocalFileLockError) {
+pub fn exists(
+  lock_root: String,
+  lock_name: String,
+) -> Result(Bool, LocalFileLockError) {
   let path = lock_path(lock_root, lock_name)
   case simplifile.exists(path, False) {
     Ok(value) -> Ok(value)
-    Error(error) -> Error(io_error(
-      path,
-      "inspect local lock path failed: " <> simplifile.describe_error(error),
-    ))
+    Error(error) ->
+      Error(io_error(
+        path,
+        "inspect local lock path failed: " <> simplifile.describe_error(error),
+      ))
   }
 }
 
@@ -204,7 +206,8 @@ fn write_owner_or_unwind(
       let _ = delete_empty_directory(path)
       Error(io_error(
         path,
-        "write local lock owner token failed: " <> simplifile.describe_error(error),
+        "write local lock owner token failed: "
+          <> simplifile.describe_error(error),
       ))
     }
   }
@@ -215,18 +218,21 @@ fn remove_owned_lock(
   owner_path: String,
 ) -> Result(Nil, LocalFileLockError) {
   case simplifile.delete_file(at: owner_path) {
-    Error(error) -> Error(io_error(
-      path,
-      "remove local lock owner token failed: " <> simplifile.describe_error(error),
-    ))
+    Error(error) ->
+      Error(io_error(
+        path,
+        "remove local lock owner token failed: "
+          <> simplifile.describe_error(error),
+      ))
     Ok(Nil) ->
       case delete_empty_directory(path) {
         Ok(Nil) -> Ok(Nil)
-        Error(_) -> Error(LocalFileLockError(
-          Compromised,
-          path,
-          "remove local lock directory failed; refusing recursive deletion of an unexpectedly non-empty directory",
-        ))
+        Error(_) ->
+          Error(LocalFileLockError(
+            Compromised,
+            path,
+            "remove local lock directory failed; refusing recursive deletion of an unexpectedly non-empty directory",
+          ))
       }
   }
 }
@@ -243,26 +249,30 @@ fn validate_inputs(
     string.contains(lock_name, "/") || string.contains(lock_name, "\\"),
     string.is_empty(owner)
   {
-    True, _, _, _ -> Error(LocalFileLockError(
-      InvalidInput,
-      path,
-      "lock root must not be empty",
-    ))
-    _, True, _, _ -> Error(LocalFileLockError(
-      InvalidInput,
-      path,
-      "lock name must not be empty",
-    ))
-    _, _, True, _ -> Error(LocalFileLockError(
-      InvalidInput,
-      path,
-      "lock name must be one path component",
-    ))
-    _, _, _, True -> Error(LocalFileLockError(
-      InvalidInput,
-      path,
-      "owner token must not be empty",
-    ))
+    True, _, _, _ ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "lock root must not be empty",
+      ))
+    _, True, _, _ ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "lock name must not be empty",
+      ))
+    _, _, True, _ ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "lock name must be one path component",
+      ))
+    _, _, _, True ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "owner token must not be empty",
+      ))
     False, False, False, False -> Ok(Nil)
   }
 }
@@ -271,23 +281,30 @@ fn validate_options(
   path: String,
   options: LocalFileLockOptions,
 ) -> Result(Nil, LocalFileLockError) {
-  case options.wait_timeout_ms < 0, options.wait && options.retry_interval_ms <= 0 {
-    True, _ -> Error(LocalFileLockError(
-      InvalidInput,
-      path,
-      "wait timeout must not be negative",
-    ))
-    _, True -> Error(LocalFileLockError(
-      InvalidInput,
-      path,
-      "retry interval must be greater than zero when waiting",
-    ))
+  case
+    options.wait_timeout_ms < 0,
+    options.wait && options.retry_interval_ms <= 0
+  {
+    True, _ ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "wait timeout must not be negative",
+      ))
+    _, True ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "retry interval must be greater than zero when waiting",
+      ))
     False, False -> Ok(Nil)
   }
 }
 
 fn lock_path(lock_root: String, lock_name: String) -> String {
-  let root = case string.ends_with(lock_root, "/") || string.ends_with(lock_root, "\\") {
+  let root = case
+    string.ends_with(lock_root, "/") || string.ends_with(lock_root, "\\")
+  {
     True -> string.drop_end(lock_root, 1)
     False -> lock_root
   }
