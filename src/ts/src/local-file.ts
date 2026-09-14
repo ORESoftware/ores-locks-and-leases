@@ -2,6 +2,7 @@ import { lstat, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promis
 import { dirname, join } from "node:path";
 
 const OWNER_FILE = "owner";
+export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
 
 export type LocalFileLockErrorKind =
   | "contention"
@@ -209,20 +210,31 @@ function validate_owner(path: string, owner: string): void {
   if (owner.length === 0) {
     throw new LocalFileLockError("invalid_input", path, "owner token must not be empty");
   }
+  if (Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      `owner token must not exceed ${MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS} Unicode code points`,
+    );
+  }
 }
 
 function validate_options(path: string, options: Required<LocalFileLockOptions>): void {
   if (!Number.isFinite(options.wait_timeout_ms) || options.wait_timeout_ms < 0) {
     throw new LocalFileLockError("invalid_input", path, "wait timeout must be a finite non-negative number");
   }
-  if (
-    !Number.isFinite(options.retry_interval_ms) ||
-    (options.wait && options.retry_interval_ms <= 0)
-  ) {
+  if (!Number.isFinite(options.retry_interval_ms) || options.retry_interval_ms < 0) {
     throw new LocalFileLockError(
       "invalid_input",
       path,
-      "retry interval must be a finite positive number when waiting",
+      "retry interval must be a finite non-negative number",
+    );
+  }
+  if (options.wait && options.retry_interval_ms === 0) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      "retry interval must be greater than zero when waiting",
     );
   }
 }
