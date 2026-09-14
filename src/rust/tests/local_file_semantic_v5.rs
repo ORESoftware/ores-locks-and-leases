@@ -60,8 +60,14 @@ fn owner_token_is_redacted_from_release_diagnostics() {
 
     let error = lock.release().expect_err("mismatch must fail closed");
     assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
-    assert!(!error.message.contains(secret), "structured message leaked owner token");
-    assert!(!error.to_string().contains(secret), "Display leaked owner token");
+    assert!(
+        !error.message.contains(secret),
+        "structured message leaked owner token"
+    );
+    assert!(
+        !error.to_string().contains(secret),
+        "Display leaked owner token"
+    );
     assert!(
         !format!("{error:?}").contains(secret),
         "Debug representation leaked owner token"
