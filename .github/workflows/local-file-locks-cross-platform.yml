@@ -6,6 +6,7 @@ on:
     paths:
       - "src/rust/local_file.rs"
       - "src/rust/lib.rs"
+      - "src/rust/tests/local_file_fail_closed.rs"
       - "src/go/local_file.go"
       - "src/go/local_file_test.go"
       - "src/ts/src/local-file.ts"
@@ -24,6 +25,7 @@ on:
     paths:
       - "src/rust/local_file.rs"
       - "src/rust/lib.rs"
+      - "src/rust/tests/local_file_fail_closed.rs"
       - "src/go/local_file.go"
       - "src/go/local_file_test.go"
       - "src/ts/src/local-file.ts"
@@ -83,7 +85,7 @@ jobs:
 
       - name: Rust portable local lock tests
         working-directory: src/rust
-        run: cargo test --locked --no-default-features local_file::tests
+        run: cargo test --locked --no-default-features local_file
 
       - name: Go portable local lock tests
         working-directory: src/go
