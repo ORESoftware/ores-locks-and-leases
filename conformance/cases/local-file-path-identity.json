@@ -1,0 +1,28 @@
+{
+  "schema": "ores.locks.local-file.path-identity.v1",
+  "rules": {
+    "rendezvous_symlink": "compromised",
+    "rendezvous_non_directory": "compromised",
+    "owner_symlink": "compromised",
+    "immediate_parent_symlink_or_reparse_point": "compromised",
+    "recursive_delete": false,
+    "name_based_helpers_reject_dot": true,
+    "name_based_helpers_reject_dot_dot": true,
+    "name_based_helpers_reject_path_separators": true
+  },
+  "cases": [
+    {"name": "regular-file-rendezvous", "expect_error": "compromised"},
+    {"name": "symlink-rendezvous", "expect_error": "compromised"},
+    {"name": "symlink-owner-marker", "expect_error": "compromised"},
+    {"name": "symlink-or-reparse-immediate-parent", "expect_error": "compromised"},
+    {"name": "dot-lock-name", "expect_error": "invalid_input"},
+    {"name": "dot-dot-lock-name", "expect_error": "invalid_input"},
+    {"name": "slash-in-lock-name", "expect_error": "invalid_input"},
+    {"name": "backslash-in-lock-name", "expect_error": "invalid_input"},
+    {
+      "name": "case-insensitive-alias",
+      "when_filesystem_case_insensitive": true,
+      "expect": "same_lock_identity"
+    }
+  ]
+}
