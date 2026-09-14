@@ -9,21 +9,40 @@ import {
   try_acquire_local_file_lock,
 } from "../dist/index.js";
 
+const inspectionReasons = new Set([
+  "owner_marker_missing",
+  "path_not_directory",
+  "dirty_directory",
+  "owner_not_regular_file",
+  "owner_too_large",
+  "owner_invalid_utf8",
+  "owner_identity_changed",
+  "permissions_widened",
+  "owner_contract_violation",
+]);
+
 function validateInspection(inspection) {
   assert.ok(["absent", "held", "incomplete", "compromised"].includes(inspection.state));
   if (inspection.state === "held") {
     assert.equal(typeof inspection.owner, "string");
     assert.ok(inspection.owner.length > 0);
     assert.equal("message" in inspection, false);
+    assert.equal("reason" in inspection, false);
     return;
   }
   assert.equal("owner" in inspection, false);
   if (inspection.state === "absent") {
     assert.equal("message" in inspection, false);
+    assert.equal("reason" in inspection, false);
     return;
   }
   assert.equal(typeof inspection.message, "string");
   assert.ok(inspection.message.length > 0);
+  assert.equal(typeof inspection.reason, "string");
+  assert.equal(inspectionReasons.has(inspection.reason), true);
+  if (inspection.state === "incomplete") {
+    assert.equal(inspection.reason, "owner_marker_missing");
+  }
 }
 
 function yieldTurn() {
@@ -64,7 +83,9 @@ test("inspection remains state-valid during repeated live acquire/release transi
     done = true;
     await observer;
     assert.ok(observations > 0);
-    assert.equal((await inspect_local_file_lock(path)).state, "absent");
+    const finalInspection = await inspect_local_file_lock(path);
+    validateInspection(finalInspection);
+    assert.equal(finalInspection.state, "absent");
   } finally {
     done = true;
     await rm(root, { recursive: true, force: true });
