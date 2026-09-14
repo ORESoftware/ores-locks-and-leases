@@ -1,0 +1,66 @@
+name: DEN-3828 canonical zpkg lock repair
+
+on:
+  push:
+    branches:
+      - den-3828-dependency-boundary-v2
+    paths:
+      - '.github/workflows/den-3828-zpkg-lock-repair.yml'
+
+permissions:
+  contents: write
+
+env:
+  ZED_CLI_COMMIT: a1c5b7a3c72b957944b76911fcbc723dd9c16541
+
+jobs:
+  generate-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out dependency-boundary branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: den-3828-dependency-boundary-v2
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Check out pinned canonical Zed resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.ZED_CLI_COMMIT }}
+          path: target/zed-cli
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.95.0'
+
+      - name: Generate and validate canonical lockfile
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: /tmp/zed-cli-target
+        run: |
+          set -euo pipefail
+          rm -f .zpkg.lock
+          cargo run --quiet --manifest-path target/zed-cli/Cargo.toml --bin zed -- install
+          test -s .zpkg.lock
+          cargo run --quiet --manifest-path target/zed-cli/Cargo.toml --bin zed -- \
+            validate --require-lock --manifest .zpkg.toml --lock .zpkg.lock
+          git diff --exit-code -- .zpkg.toml
+
+      - name: Commit resolver output and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/den-3828-zpkg-lock-repair.yml
+          git add .zpkg.lock .github/workflows/den-3828-zpkg-lock-repair.yml
+          git diff --cached --check
+          git config user.name 'ORESoftware'
+          git config user.email 'alex@oresoftware.com'
+          git commit -m 'build(DEN-3828): add canonical zpkg lock provenance'
+          git push origin HEAD:den-3828-dependency-boundary-v2
