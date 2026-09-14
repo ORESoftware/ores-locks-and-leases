@@ -65,9 +65,11 @@ fn inspect_owner(
     4 -> Error(io_error(path, "inspect local lock owner token failed"))
     2 ->
       case simplifile.read(owner_path) {
-        Ok(owner) if string.is_empty(owner) ->
-          Ok(compromised("owner token is empty"))
-        Ok(owner) -> Ok(LocalFileLockInspection(Held, Some(owner), None))
+        Ok(owner) ->
+          case string.is_empty(owner) {
+            True -> Ok(compromised("owner token is empty"))
+            False -> Ok(LocalFileLockInspection(Held, Some(owner), None))
+          }
         Error(error) ->
           Error(io_error(
             path,
@@ -91,19 +93,22 @@ pub fn recover(
   let path = lock_path(lock_root, lock_name)
   case validate_inputs(lock_root, lock_name, path) {
     Error(error) -> Error(error)
-    Ok(Nil) if !confirmed_inactive ->
-      Error(local_file.LocalFileLockError(
-        local_file.InvalidInput,
-        path,
-        "explicit confirmed_inactive=true is required for recovery",
-      ))
-    Ok(Nil) if string.is_empty(expected_owner) ->
-      Error(local_file.LocalFileLockError(
-        local_file.InvalidInput,
-        path,
-        "expected owner must not be empty",
-      ))
-    Ok(Nil) -> recover_inspected(path, expected_owner)
+    Ok(Nil) ->
+      case confirmed_inactive, string.is_empty(expected_owner) {
+        False, _ ->
+          Error(local_file.LocalFileLockError(
+            local_file.InvalidInput,
+            path,
+            "explicit confirmed_inactive=true is required for recovery",
+          ))
+        True, True ->
+          Error(local_file.LocalFileLockError(
+            local_file.InvalidInput,
+            path,
+            "expected owner must not be empty",
+          ))
+        True, False -> recover_inspected(path, expected_owner)
+      }
   }
 }
 
