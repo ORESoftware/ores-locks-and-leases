@@ -66,6 +66,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		if errors.As(err, &localErr) && localErr.Kind == LocalFileCompromised && errors.Is(localErr.Cause, os.ErrNotExist) {
 			return incompleteInspection("owner token disappeared during inspection"), nil
 		}
+		if errors.As(err, &localErr) && localErr.Kind == LocalFileCompromised {
+			return compromisedInspection(localErr.Message), nil
+		}
 		return LocalFileLockInspection{}, err
 	}
 	if len(owner) == 0 {
