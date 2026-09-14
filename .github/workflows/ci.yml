@@ -40,6 +40,9 @@ jobs:
       - name: Managed maintained path compiles without Fiducia
         working-directory: src/rust
         run: cargo check --locked --no-default-features --features maintained
+      - name: Package Rust crate from the locked graph
+        working-directory: src/rust
+        run: cargo package --locked --allow-dirty --no-verify
       - name: Clippy (all features)
         working-directory: src/rust
         run: cargo clippy --locked --all-targets --features full -- -D warnings
