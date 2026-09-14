@@ -16,6 +16,7 @@ type LocalFileLockInspectionState string
 const (
 	LocalFileLockAbsent      LocalFileLockInspectionState = "absent"
 	LocalFileLockHeld        LocalFileLockInspectionState = "held"
+	LocalFileLockIncomplete  LocalFileLockInspectionState = "incomplete"
 	LocalFileLockCompromised LocalFileLockInspectionState = "compromised"
 )
 
@@ -43,6 +44,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	if err != nil {
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "list local lock directory failed", err)
 	}
+	if len(entries) == 0 {
+		return incompleteInspection("lock directory has no owner marker; acquisition or release may have crashed mid-transition"), nil
+	}
 	if len(entries) != 1 || entries[0].Name() != localFileOwnerName {
 		return compromisedInspection("lock directory must contain exactly one owner marker"), nil
 	}
@@ -51,7 +55,7 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	ownerInfo, err := os.Lstat(ownerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return compromisedInspection("owner token is missing"), nil
+			return incompleteInspection("owner token disappeared during inspection"), nil
 		}
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "inspect local lock owner token failed", err)
 	}
@@ -65,7 +69,7 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	ownerFile, err := os.Open(ownerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return compromisedInspection("owner token is missing"), nil
+			return incompleteInspection("owner token disappeared during inspection"), nil
 		}
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "open local lock owner token failed", err)
 	}
@@ -94,7 +98,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 
 // RecoverLocalFileLock explicitly removes one clean portable lock after the
 // operator independently confirms the former owner is inactive and local state
-// is quiescent. An absent lock is an idempotent false/no-op result.
+// is quiescent. An absent lock is an idempotent false/no-op result. Incomplete
+// ownerless crash-window state is never auto-recovered because owner identity
+// can no longer be authenticated.
 func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (bool, error) {
 	if !confirmedInactive {
 		return false, localFileError(LocalFileInvalidInput, path, "explicit confirmed_inactive=true is required for recovery", nil)
@@ -110,6 +116,8 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 	switch inspection.State {
 	case LocalFileLockAbsent:
 		return false, nil
+	case LocalFileLockIncomplete:
+		return false, localFileError(LocalFileCompromised, path, "incomplete lock state has no owner identity; refusing automatic recovery", nil)
 	case LocalFileLockCompromised:
 		return false, localFileError(LocalFileCompromised, path, inspection.Message, nil)
 	}
@@ -137,6 +145,10 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 		return false, localFileError(kind, path, "remove recovered lock directory failed", err)
 	}
 	return true, nil
+}
+
+func incompleteInspection(message string) LocalFileLockInspection {
+	return LocalFileLockInspection{State: LocalFileLockIncomplete, Message: message}
 }
 
 func compromisedInspection(message string) LocalFileLockInspection {
