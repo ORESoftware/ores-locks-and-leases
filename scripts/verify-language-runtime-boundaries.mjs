@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, mkdir, writeFile } from "node:fs/promises";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const TJSV_COMMIT = "dfc28bfc000faba5a963f23c708171dfd5f8debf";
+const TJSV_COMMIT = "1614779275115258db73b92c938313e8ae437936";
+const ORES_INTERFACES_COMMIT = "82da36fde70ed09f478201979ee9009b92cb86de";
 const REVISION_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const EVIDENCE_SCHEMA =
@@ -12,6 +13,9 @@ const MANIFEST_SCHEMA =
   "ores.typespec-json-schema-validator.language-boundaries/v1";
 const VERIFICATION_SCHEMA =
   "ores.typespec-json-schema-validator.language-boundary-verification/v1";
+const SHARED_PIN_SCHEMA = "ores.locks.shared-interfaces-pin/v1";
+const MANIFEST_PATH = "contracts/language-boundaries.json";
+const SHARED_INTERFACES_PATH = "contracts/shared-interfaces.json";
 
 const expectedRevision = process.env.EXPECTED_SHA;
 if (typeof expectedRevision !== "string" || !REVISION_PATTERN.test(expectedRevision)) {
@@ -35,38 +39,28 @@ const runtimeOutcomes = Object.freeze({
   gleam: process.env.GLEAM_OUTCOME,
 });
 
-const targets = Object.freeze([
-  {
-    language: "rust",
-    runtime: "native",
+const targetMetadata = Object.freeze({
+  "rust/native": {
     sourceRoot: "src/rust",
     toolchain: { name: "rustc", version: "1.85.1" },
   },
-  {
-    language: "go",
-    runtime: "native",
-    sourceRoot: "src/go",
-    toolchain: { name: "go", version: "1.22" },
-  },
-  {
-    language: "typescript",
-    runtime: "node",
+  "typescript/node": {
     sourceRoot: "src/ts",
     toolchain: { name: "node", version: "22" },
   },
-  {
-    language: "dart",
-    runtime: "dart-vm",
-    sourceRoot: "src/dart",
-    toolchain: { name: "dart", version: "3.13" },
+  "go/native": {
+    sourceRoot: "src/go",
+    toolchain: { name: "go", version: "1.22" },
   },
-  {
-    language: "gleam",
-    runtime: "beam",
+  "gleam/beam": {
     sourceRoot: "src/gleam",
     toolchain: { name: "gleam+otp", version: "1.16.0+27" },
   },
-]);
+  "dart/dart-vm": {
+    sourceRoot: "src/dart",
+    toolchain: { name: "dart", version: "3.13" },
+  },
+});
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -81,6 +75,76 @@ function canonicalJson(value) {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+async function loadJson(path) {
+  const bytes = await readFile(path);
+  return JSON.parse(bytes.toString("utf8"));
+}
+
+function assertStoppedForRule(label, verification, expectedRuleId) {
+  if (
+    verification.schema !== VERIFICATION_SCHEMA ||
+    verification.status !== "stopped_for_evaluation" ||
+    verification.zeroUnexplainedFindings !== false ||
+    !verification.findings?.some((finding) => finding.ruleId === expectedRuleId)
+  ) {
+    throw new Error(`${label}: negative canary was not rejected with ${expectedRuleId}`);
+  }
+}
+
+const manifest = await loadJson(MANIFEST_PATH);
+if (manifest?.schema !== MANIFEST_SCHEMA) {
+  throw new Error(`language boundary manifest must use ${MANIFEST_SCHEMA}`);
+}
+if (
+  manifest.authorities?.typeSpec !== "peer" ||
+  manifest.authorities?.jsonSchema !== "peer" ||
+  manifest.authorities?.generatedWitness !== "evidence_only"
+) {
+  throw new Error("language boundary manifest must preserve peer authorities and evidence-only generation");
+}
+if (!Array.isArray(manifest.targets) || manifest.targets.length !== 5) {
+  throw new Error("language boundary manifest must declare exactly the five supported runtime lanes");
+}
+if (manifest.minimumDistinctLanguages !== manifest.targets.length) {
+  throw new Error("minimumDistinctLanguages must require every supported language");
+}
+
+const sharedInterfacesPin = await loadJson(SHARED_INTERFACES_PATH);
+if (
+  sharedInterfacesPin?.schema !== SHARED_PIN_SCHEMA ||
+  sharedInterfacesPin.repository !== "ORESoftware/ores-interfaces" ||
+  sharedInterfacesPin.commit !== ORES_INTERFACES_COMMIT ||
+  sharedInterfacesPin.validator?.repository !== "ORESoftware/typespec-json-schema-validator" ||
+  sharedInterfacesPin.validator?.commit !== TJSV_COMMIT ||
+  sharedInterfacesPin.authorityModel !== "independent-typespec-and-json-schema-peers" ||
+  sharedInterfacesPin.authorityTransfer !== false
+) {
+  throw new Error("shared-interface policy must retain the reviewed immutable dependency and peer-authority model");
+}
+
+const seenTargets = new Set();
+const targets = Object.freeze(manifest.targets.map((target) => {
+  const key = `${target.language}/${target.runtime}`;
+  const metadata = targetMetadata[key];
+  if (!metadata) throw new Error(`unsupported or untracked runtime target: ${key}`);
+  if (seenTargets.has(key)) throw new Error(`duplicate runtime target: ${key}`);
+  seenTargets.add(key);
+  if (target.required !== true || target.ingress !== true || target.egress !== true) {
+    throw new Error(`${key}: runtime boundary must be required for ingress and egress`);
+  }
+  const expectedEvidence = `runtime-evidence/${target.language}-${target.runtime}.json`;
+  if (target.evidence !== expectedEvidence) {
+    throw new Error(`${key}: evidence path must be ${expectedEvidence}`);
+  }
+  return Object.freeze({ ...target, ...metadata });
+}));
+for (const key of Object.keys(targetMetadata)) {
+  if (!seenTargets.has(key)) throw new Error(`required runtime target missing: ${key}`);
+}
+for (const required of ["rust/native", "typescript/node", "go/native", "gleam/beam"]) {
+  if (!seenTargets.has(required)) throw new Error(`requested runtime support missing: ${required}`);
 }
 
 async function listFiles(root) {
@@ -125,12 +189,15 @@ async function sourceClosureDigest(sourceRoot, bundle) {
       hasher.update("\0");
     }
   }
+  for (const policyPath of [MANIFEST_PATH, SHARED_INTERFACES_PATH]) {
+    if (seen.has(policyPath)) continue;
+    const bytes = await readFile(policyPath);
+    hasher.update(policyPath);
+    hasher.update("\0");
+    hasher.update(bytes);
+    hasher.update("\0");
+  }
   return hasher.digest("hex");
-}
-
-async function loadJson(path) {
-  const bytes = await readFile(path);
-  return JSON.parse(bytes.toString("utf8"));
 }
 
 function assertParityInputs(bundle, report, contractIr) {
@@ -165,24 +232,6 @@ async function verifyBundle(bundle) {
   const output = `target/contract-runtime-boundary/language-boundary/${bundle}`;
   await mkdir(`${output}/runtime-evidence`, { recursive: true });
 
-  const manifest = {
-    schema: MANIFEST_SCHEMA,
-    minimumDistinctLanguages: targets.length,
-    authorities: {
-      typeSpec: "peer",
-      jsonSchema: "peer",
-      generatedWitness: "evidence_only",
-    },
-    targets: targets.map(({ language, runtime }) => ({
-      language,
-      runtime,
-      required: true,
-      ingress: true,
-      egress: true,
-      evidence: `runtime-evidence/${language}-${runtime}.json`,
-    })),
-  };
-
   const evidenceByPath = {};
   for (const target of targets) {
     const status = runtimeOutcomes[target.language] === "success" ? "passed" : "failed";
@@ -206,9 +255,8 @@ async function verifyBundle(bundle) {
         egress: status,
       },
     };
-    const evidencePath = `runtime-evidence/${target.language}-${target.runtime}.json`;
-    evidenceByPath[evidencePath] = evidence;
-    await writeFile(`${output}/${evidencePath}`, `${JSON.stringify(evidence, null, 2)}\n`);
+    evidenceByPath[target.evidence] = evidence;
+    await writeFile(`${output}/${target.evidence}`, `${JSON.stringify(evidence, null, 2)}\n`);
   }
 
   const verification = verifyLanguageBoundaries({
@@ -229,25 +277,76 @@ async function verifyBundle(bundle) {
     throw new Error(`${bundle}: official TJSV language/runtime admission did not pass`);
   }
 
-  const tampered = structuredClone(evidenceByPath);
+  const negativeCanaries = [];
+  const runNegative = (name, expectedRuleId, mutateEvidence, mutateManifest = undefined) => {
+    const candidateEvidence = structuredClone(evidenceByPath);
+    const candidateManifest = structuredClone(manifest);
+    mutateEvidence?.(candidateEvidence);
+    mutateManifest?.(candidateManifest);
+    const rejected = verifyLanguageBoundaries({
+      manifest: candidateManifest,
+      report,
+      contractIr,
+      evidenceByPath: candidateEvidence,
+    });
+    assertStoppedForRule(`${bundle}/${name}`, rejected, expectedRuleId);
+    negativeCanaries.push({
+      name,
+      expectedRuleId,
+      verificationId: rejected.verificationId,
+      findingCount: rejected.counts?.findings ?? null,
+    });
+    return rejected;
+  };
+
   const firstPath = manifest.targets[0].evidence;
-  tampered[firstPath].receiptRunId = "0".repeat(64);
-  const negative = verifyLanguageBoundaries({
-    manifest,
-    report,
-    contractIr,
-    evidenceByPath: tampered,
-  });
-  if (
-    negative.schema !== VERIFICATION_SCHEMA ||
-    negative.status !== "stopped_for_evaluation" ||
-    negative.zeroUnexplainedFindings !== false ||
-    !negative.findings?.some(
-      (finding) => finding.ruleId === "boundary-evidence-receipt-mismatch",
-    )
-  ) {
-    throw new Error(`${bundle}: stale-receipt negative canary was not rejected by TJSV`);
-  }
+  const secondPath = manifest.targets[1].evidence;
+  const staleReceipt = runNegative(
+    "stale-receipt",
+    "boundary-evidence-receipt-mismatch",
+    (candidate) => { candidate[firstPath].receiptRunId = "0".repeat(64); },
+  );
+  runNegative(
+    "contract-ir-drift",
+    "boundary-evidence-contract-ir-mismatch",
+    (candidate) => { candidate[firstPath].contractIrId = "0".repeat(64); },
+  );
+  runNegative(
+    "missing-required-evidence",
+    "boundary-required-evidence-missing",
+    (candidate) => { delete candidate[firstPath]; },
+  );
+  runNegative(
+    "failed-ingress",
+    "boundary-ingress-not-verified",
+    (candidate) => { candidate[firstPath].validation.ingress = "failed"; },
+  );
+  runNegative(
+    "failed-egress",
+    "boundary-egress-not-verified",
+    (candidate) => { candidate[firstPath].validation.egress = "failed"; },
+  );
+  runNegative(
+    "failed-runtime-status",
+    "boundary-evidence-not-passed",
+    (candidate) => { candidate[firstPath].status = "failed"; },
+  );
+  runNegative(
+    "split-source-revision",
+    "boundary-source-revision-mismatch",
+    (candidate) => { candidate[secondPath].sourceRevision = "1".repeat(40); },
+  );
+  runNegative(
+    "malformed-artifact-digest",
+    "boundary-artifact-digest-invalid",
+    (candidate) => { candidate[firstPath].artifactDigest = "sha256:not-a-digest"; },
+  );
+  runNegative(
+    "authority-downgrade",
+    "boundary-authority-model-invalid",
+    undefined,
+    (_candidate) => { _candidate.authorities.typeSpec = "primary"; },
+  );
 
   const summary = {
     schema: "ores.locks.language-runtime-boundary-summary/v1",
@@ -258,11 +357,19 @@ async function verifyBundle(bundle) {
       commit: TJSV_COMMIT,
       verifier: "verifyLanguageBoundaries",
     },
+    sharedInterfaces: {
+      repository: sharedInterfacesPin.repository,
+      commit: sharedInterfacesPin.commit,
+      validatorCommit: sharedInterfacesPin.validator.commit,
+    },
     parityReceiptRunId: report.runId,
     contractIrId: contractIr.irId,
+    manifestPath: MANIFEST_PATH,
     manifestSha256: sha256(Buffer.from(canonicalJson(manifest))),
+    sharedInterfacesPolicyPath: SHARED_INTERFACES_PATH,
     verificationId: verification.verificationId,
-    negativeVerificationId: negative.verificationId,
+    negativeVerificationId: staleReceipt.verificationId,
+    negativeCanaries,
     requiredLanguages: targets.map(({ language }) => language),
     status: "passed",
   };
@@ -270,11 +377,12 @@ async function verifyBundle(bundle) {
   await Promise.all([
     writeFile(`${output}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`),
     writeFile(`${output}/verification.json`, `${JSON.stringify(verification, null, 2)}\n`),
-    writeFile(`${output}/negative-verification.json`, `${JSON.stringify(negative, null, 2)}\n`),
+    writeFile(`${output}/negative-verification.json`, `${JSON.stringify(staleReceipt, null, 2)}\n`),
+    writeFile(`${output}/negative-canaries.json`, `${JSON.stringify(negativeCanaries, null, 2)}\n`),
     writeFile(`${output}/summary.json`, `${JSON.stringify(summary, null, 2)}\n`),
   ]);
   process.stdout.write(
-    `${bundle}: TJSV language/runtime admission ${verification.verificationId}; stale-receipt canary ${negative.verificationId}\n`,
+    `${bundle}: TJSV language/runtime admission ${verification.verificationId}; ${negativeCanaries.length} negative canaries rejected\n`,
   );
   return summary;
 }
@@ -288,6 +396,9 @@ await writeFile(
       schema: "ores.locks.language-runtime-boundary-index/v1",
       sourceRevision: expectedRevision,
       validatorCommit: TJSV_COMMIT,
+      sharedInterfacesCommit: sharedInterfacesPin.commit,
+      manifestPath: MANIFEST_PATH,
+      sharedInterfacesPolicyPath: SHARED_INTERFACES_PATH,
       summaries,
       status: "passed",
     },

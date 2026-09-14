@@ -7,7 +7,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-validator_commit=6bb5b7c1ee41c8b43741e50a264c33a1165549c4
+validator_commit=1614779275115258db73b92c938313e8ae437936
 validator_package="https://github.com/ORESoftware/typespec-json-schema-validator/archive/${validator_commit}.tar.gz"
 
 main_declarations='["Ores.LocksAndLeases.AcquireOptions","Ores.LocksAndLeases.AdvisoryKey","Ores.LocksAndLeases.FenceDecision","Ores.LocksAndLeases.FenceDecisionKind","Ores.LocksAndLeases.FencedWriteRequest","Ores.LocksAndLeases.FenceWatermark","Ores.LocksAndLeases.FencingToken","Ores.LocksAndLeases.FencingTokenText","Ores.LocksAndLeases.LeaseGrant","Ores.LocksAndLeases.LeaseMaintenanceOptions","Ores.LocksAndLeases.LockError","Ores.LocksAndLeases.LockErrorKind","Ores.LocksAndLeases.LockKey","Ores.LocksAndLeases.LockLayers","Ores.LocksAndLeases.LockPlan","Ores.LocksAndLeases.LockStep","Ores.LocksAndLeases.PgScope"]'

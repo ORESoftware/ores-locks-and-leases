@@ -50,7 +50,7 @@ jobs:
           node --check contracts/mapping-tests/check-stale-mapping-receipt.mjs
 
       - name: Compare independently authored TypeSpec and JSON Schema authorities
-        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
+        uses: ORESoftware/typespec-json-schema-validator@1614779275115258db73b92c938313e8ae437936
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json
@@ -65,7 +65,7 @@ jobs:
       - name: Prove a stale contract mapping stops evaluation
         id: stale_mapping
         continue-on-error: true
-        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
+        uses: ORESoftware/typespec-json-schema-validator@1614779275115258db73b92c938313e8ae437936
         with:
           typespec: contracts/typespec/main.tsp
           schema: contracts/json-schema/contract.schema.json

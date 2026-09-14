@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
-const TJSV_COMMIT = "6bb5b7c1ee41c8b43741e50a264c33a1165549c4";
+const TJSV_COMMIT = "1614779275115258db73b92c938313e8ae437936";
 
 function requireSha(name, value) {
   if (typeof value !== "string" || !SHA_PATTERN.test(value)) {
