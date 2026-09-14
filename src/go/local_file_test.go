@@ -99,3 +99,23 @@ func TestLocalFileLockChangedOwnerFailsClosed(t *testing.T) {
 		t.Fatalf("cleanup lock: %v", err)
 	}
 }
+
+func TestLocalFileLockUnexpectedEntryFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: acquired=%v err=%v", acquired, err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "unexpected"), []byte("do not delete"), 0o600); err != nil {
+		t.Fatalf("write unexpected entry: %v", err)
+	}
+
+	err = lock.Release()
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileCompromised {
+		t.Fatalf("expected compromised error for dirty directory, got %#v", err)
+	}
+	if _, err := os.Stat(filepath.Join(path, "unexpected")); err != nil {
+		t.Fatalf("unexpected entry must remain for explicit recovery: %v", err)
+	}
+}
