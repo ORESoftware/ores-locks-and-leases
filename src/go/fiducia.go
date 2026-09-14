@@ -281,6 +281,16 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 		attempted = true
 		out, err := f.post(ctx, "/v1/locks/acquire", body)
 		if err != nil {
+			// Cancellation can race the in-flight acquire after the server has
+			// admitted the request but before the response reaches this client.
+			// Reconcile the stable request identity before returning so a raced
+			// promoted grant cannot be abandoned silently.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+					return LeaseGrant{}, transportErr(key, cleanupErr)
+				}
+				return LeaseGrant{}, transportErr(key, ctxErr)
+			}
 			return LeaseGrant{}, transportErr(key, err)
 		}
 		if outBool(out, "acquired") {
