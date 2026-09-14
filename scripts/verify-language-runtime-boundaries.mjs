@@ -4,6 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const TJSV_COMMIT = "1614779275115258db73b92c938313e8ae437936";
+const ORES_INTERFACES_COMMIT = "82da36fde70ed09f478201979ee9009b92cb86de";
 const REVISION_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const EVIDENCE_SCHEMA =
@@ -12,6 +13,7 @@ const MANIFEST_SCHEMA =
   "ores.typespec-json-schema-validator.language-boundaries/v1";
 const VERIFICATION_SCHEMA =
   "ores.typespec-json-schema-validator.language-boundary-verification/v1";
+const SHARED_PIN_SCHEMA = "ores.locks.shared-interfaces-pin/v1";
 const MANIFEST_PATH = "contracts/language-boundaries.json";
 const SHARED_INTERFACES_PATH = "contracts/shared-interfaces.json";
 
@@ -80,6 +82,17 @@ async function loadJson(path) {
   return JSON.parse(bytes.toString("utf8"));
 }
 
+function assertStoppedForRule(label, verification, expectedRuleId) {
+  if (
+    verification.schema !== VERIFICATION_SCHEMA ||
+    verification.status !== "stopped_for_evaluation" ||
+    verification.zeroUnexplainedFindings !== false ||
+    !verification.findings?.some((finding) => finding.ruleId === expectedRuleId)
+  ) {
+    throw new Error(`${label}: negative canary was not rejected with ${expectedRuleId}`);
+  }
+}
+
 const manifest = await loadJson(MANIFEST_PATH);
 if (manifest?.schema !== MANIFEST_SCHEMA) {
   throw new Error(`language boundary manifest must use ${MANIFEST_SCHEMA}`);
@@ -96,6 +109,19 @@ if (!Array.isArray(manifest.targets) || manifest.targets.length !== 5) {
 }
 if (manifest.minimumDistinctLanguages !== manifest.targets.length) {
   throw new Error("minimumDistinctLanguages must require every supported language");
+}
+
+const sharedInterfacesPin = await loadJson(SHARED_INTERFACES_PATH);
+if (
+  sharedInterfacesPin?.schema !== SHARED_PIN_SCHEMA ||
+  sharedInterfacesPin.repository !== "ORESoftware/ores-interfaces" ||
+  sharedInterfacesPin.commit !== ORES_INTERFACES_COMMIT ||
+  sharedInterfacesPin.validator?.repository !== "ORESoftware/typespec-json-schema-validator" ||
+  sharedInterfacesPin.validator?.commit !== TJSV_COMMIT ||
+  sharedInterfacesPin.authorityModel !== "independent-typespec-and-json-schema-peers" ||
+  sharedInterfacesPin.authorityTransfer !== false
+) {
+  throw new Error("shared-interface policy must retain the reviewed immutable dependency and peer-authority model");
 }
 
 const seenTargets = new Set();
@@ -251,25 +277,76 @@ async function verifyBundle(bundle) {
     throw new Error(`${bundle}: official TJSV language/runtime admission did not pass`);
   }
 
-  const tampered = structuredClone(evidenceByPath);
+  const negativeCanaries = [];
+  const runNegative = (name, expectedRuleId, mutateEvidence, mutateManifest = undefined) => {
+    const candidateEvidence = structuredClone(evidenceByPath);
+    const candidateManifest = structuredClone(manifest);
+    mutateEvidence?.(candidateEvidence);
+    mutateManifest?.(candidateManifest);
+    const rejected = verifyLanguageBoundaries({
+      manifest: candidateManifest,
+      report,
+      contractIr,
+      evidenceByPath: candidateEvidence,
+    });
+    assertStoppedForRule(`${bundle}/${name}`, rejected, expectedRuleId);
+    negativeCanaries.push({
+      name,
+      expectedRuleId,
+      verificationId: rejected.verificationId,
+      findingCount: rejected.counts?.findings ?? null,
+    });
+    return rejected;
+  };
+
   const firstPath = manifest.targets[0].evidence;
-  tampered[firstPath].receiptRunId = "0".repeat(64);
-  const negative = verifyLanguageBoundaries({
-    manifest,
-    report,
-    contractIr,
-    evidenceByPath: tampered,
-  });
-  if (
-    negative.schema !== VERIFICATION_SCHEMA ||
-    negative.status !== "stopped_for_evaluation" ||
-    negative.zeroUnexplainedFindings !== false ||
-    !negative.findings?.some(
-      (finding) => finding.ruleId === "boundary-evidence-receipt-mismatch",
-    )
-  ) {
-    throw new Error(`${bundle}: stale-receipt negative canary was not rejected by TJSV`);
-  }
+  const secondPath = manifest.targets[1].evidence;
+  const staleReceipt = runNegative(
+    "stale-receipt",
+    "boundary-evidence-receipt-mismatch",
+    (candidate) => { candidate[firstPath].receiptRunId = "0".repeat(64); },
+  );
+  runNegative(
+    "contract-ir-drift",
+    "boundary-evidence-contract-ir-mismatch",
+    (candidate) => { candidate[firstPath].contractIrId = "0".repeat(64); },
+  );
+  runNegative(
+    "missing-required-evidence",
+    "boundary-required-evidence-missing",
+    (candidate) => { delete candidate[firstPath]; },
+  );
+  runNegative(
+    "failed-ingress",
+    "boundary-ingress-not-verified",
+    (candidate) => { candidate[firstPath].validation.ingress = "failed"; },
+  );
+  runNegative(
+    "failed-egress",
+    "boundary-egress-not-verified",
+    (candidate) => { candidate[firstPath].validation.egress = "failed"; },
+  );
+  runNegative(
+    "failed-runtime-status",
+    "boundary-evidence-not-passed",
+    (candidate) => { candidate[firstPath].status = "failed"; },
+  );
+  runNegative(
+    "split-source-revision",
+    "boundary-source-revision-mismatch",
+    (candidate) => { candidate[secondPath].sourceRevision = "1".repeat(40); },
+  );
+  runNegative(
+    "malformed-artifact-digest",
+    "boundary-artifact-digest-invalid",
+    (candidate) => { candidate[firstPath].artifactDigest = "sha256:not-a-digest"; },
+  );
+  runNegative(
+    "authority-downgrade",
+    "boundary-authority-model-invalid",
+    undefined,
+    (_candidate) => { _candidate.authorities.typeSpec = "primary"; },
+  );
 
   const summary = {
     schema: "ores.locks.language-runtime-boundary-summary/v1",
@@ -280,13 +357,19 @@ async function verifyBundle(bundle) {
       commit: TJSV_COMMIT,
       verifier: "verifyLanguageBoundaries",
     },
+    sharedInterfaces: {
+      repository: sharedInterfacesPin.repository,
+      commit: sharedInterfacesPin.commit,
+      validatorCommit: sharedInterfacesPin.validator.commit,
+    },
     parityReceiptRunId: report.runId,
     contractIrId: contractIr.irId,
     manifestPath: MANIFEST_PATH,
     manifestSha256: sha256(Buffer.from(canonicalJson(manifest))),
     sharedInterfacesPolicyPath: SHARED_INTERFACES_PATH,
     verificationId: verification.verificationId,
-    negativeVerificationId: negative.verificationId,
+    negativeVerificationId: staleReceipt.verificationId,
+    negativeCanaries,
     requiredLanguages: targets.map(({ language }) => language),
     status: "passed",
   };
@@ -294,11 +377,12 @@ async function verifyBundle(bundle) {
   await Promise.all([
     writeFile(`${output}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`),
     writeFile(`${output}/verification.json`, `${JSON.stringify(verification, null, 2)}\n`),
-    writeFile(`${output}/negative-verification.json`, `${JSON.stringify(negative, null, 2)}\n`),
+    writeFile(`${output}/negative-verification.json`, `${JSON.stringify(staleReceipt, null, 2)}\n`),
+    writeFile(`${output}/negative-canaries.json`, `${JSON.stringify(negativeCanaries, null, 2)}\n`),
     writeFile(`${output}/summary.json`, `${JSON.stringify(summary, null, 2)}\n`),
   ]);
   process.stdout.write(
-    `${bundle}: TJSV language/runtime admission ${verification.verificationId}; stale-receipt canary ${negative.verificationId}\n`,
+    `${bundle}: TJSV language/runtime admission ${verification.verificationId}; ${negativeCanaries.length} negative canaries rejected\n`,
   );
   return summary;
 }
@@ -312,6 +396,7 @@ await writeFile(
       schema: "ores.locks.language-runtime-boundary-index/v1",
       sourceRevision: expectedRevision,
       validatorCommit: TJSV_COMMIT,
+      sharedInterfacesCommit: sharedInterfacesPin.commit,
       manifestPath: MANIFEST_PATH,
       sharedInterfacesPolicyPath: SHARED_INTERFACES_PATH,
       summaries,
