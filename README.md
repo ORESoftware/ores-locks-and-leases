@@ -1,18 +1,21 @@
 # ores-locks-and-leases
 
-Composed distributed locking for the ORESoftware fleet: a **fiducia-cloud
-lease** around a **PostgreSQL advisory lock**, each layer individually
-switchable, plus **application-side fencing** that prevents an expired holder
-from overwriting work committed by a newer holder.
+Local and distributed coordination for the ORESoftware fleet: a **portable
+single-host filesystem lock** for no-network workstation/process coordination,
+plus a **fenced distributed lease** around an optional **PostgreSQL advisory
+lock** for mutable state shared by multiple hosts.
 
 ```text
-fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► fenced work ─► fiducia.renew ─► pg.commit ─► fiducia.release
+local:       mkdir(lock) ─► write owner ─► work ─► verify owner ─► rmdir(lock)
+distributed: fiducia.acquire ─► pg.begin ─► pg_advisory_xact_lock ─► fenced work ─► fiducia.renew ─► pg.commit ─► fiducia.release
 ```
 
 One zed package ships five runtime slices—Rust, Go, TypeScript, Dart/Flutter,
 and Gleam—plus peer TypeSpec and JSON Schema contracts, one cross-runtime
 conformance corpus, a PostgreSQL adapter for Supabase/Neon, and an atomic Redis
-script.
+script. The portable local-file backend is currently implemented in Rust, Go,
+TypeScript/Node.js, and Gleam; it is deliberately separate from the distributed
+lock-plan contract.
 
 | Path | Package / purpose | PostgreSQL via | Fiducia via |
 | --- | --- | --- | --- |
@@ -43,6 +46,34 @@ paths in its own PR. The generator neither deletes legacy work nor creates
 a second copy alongside it. `--commit --base-ref` checks the selected commit
 and leaves a parked checkout untouched. `--stdout` previews the canonical
 file list without changing the repository.
+
+## Local filesystem locks
+
+Use local filesystem locks when every process that can mutate the protected
+resource runs on one machine and coordinates through one local filesystem.
+There is no Redis, Fiducia, Cloudflare Durable Objects, PostgreSQL, or other
+network dependency in this path.
+
+The portable backend uses atomic directory creation as the admission primitive.
+A non-empty per-acquisition owner token is stored in `owner` for diagnostics and
+owner-safe release. Contenders either fail immediately or wait with a finite
+budget; the convenience defaults are 30 seconds total and 50 ms between
+attempts. Release verifies the owner token and removes only the `owner` file and
+an otherwise-empty lock directory. Unexpected files fail closed and are never
+recursively deleted.
+
+The portable backend intentionally does not infer stale ownership from PID,
+mtime, or age. A slow live holder must not be mistaken for a dead holder and
+allow a second writer. For Rust zed-pkg code, prefer zed-pkg's stronger native
+`zed-lock` descriptor/handle backend: Linux/macOS use native file locks and
+Windows uses `LockFileEx`, so process exit closes the descriptor/handle and
+releases ownership automatically.
+
+For zed-pkg, the current lock root is `$ZED_PKG_HOME/locks`; the default zed
+home remains `$HOME/.zed-pkg`. Distributed authorities are appropriate only
+when multiple hosts can mutate the same remote/shared state. See
+[`docs/local-filesystem-locks.md`](docs/local-filesystem-locks.md) for the
+portable protocol, crash semantics, and zed-pkg guidance.
 
 ## Lock routines
 
@@ -203,16 +234,24 @@ integer everywhere.
 
 ## Failure kinds
 
-Lock acquisition and cleanup use:
+Distributed lock acquisition and cleanup use:
 
 ```text
 contention, timeout, lost_lease, transport, database, work, invalid_plan
 ```
 
+The portable filesystem backend uses its narrower local vocabulary:
+
+```text
+contention, timeout, compromised, io, invalid_input
+```
+
 `transport` is never interpreted as “not held.” Cleanup failures take
 precedence over an earlier work failure: a failed lease release leaves
 ownership unknown, and a failed session unlock makes the physical connection
-unsafe to reuse.
+unsafe to reuse. For local filesystem locks, `compromised` means release could
+not prove the directory still contains only the expected ownership state and
+therefore refused destructive cleanup.
 
 Fencing decisions are separate from acquisition failures:
 `advanced`, `replay`, `stale`, and `token_reuse`.
@@ -226,14 +265,16 @@ Fencing decisions are separate from acquisition failures:
 Schema B, compare it with authored Schema A, and refuse final artifacts when
 the declarations disagree.
 
-The corpus includes:
+The distributed corpus includes:
 
 - `advisory-key.json`
 - `lock-plan.json`
 - `fence-decision.json`
 
-Changing a decision vector must update every runtime, SQL/Redis adapter test,
-and both contract authorities.
+Changing a distributed decision vector must update every runtime, SQL/Redis
+adapter test, and both contract authorities. The local filesystem backend is a
+separate single-host API currently covered by focused Rust, Go, TypeScript, and
+Gleam tests plus a Windows/macOS/Linux CI matrix.
 
 ## Testing
 
@@ -242,5 +283,7 @@ sh scripts/test-all.sh
 ```
 
 CI runs every runtime, the contract parity gate, live PostgreSQL fencing tests,
-Redis script tests, and a generated `*-lib-core` preflight. Local live
-PostgreSQL lock tests run when `ORES_LOCKS_TEST_DATABASE_URL` is set.
+Redis script tests, and a generated `*-lib-core` preflight. Local filesystem
+locks additionally run a dedicated Windows 2025 / macOS 15 / Ubuntu 24.04
+matrix for Rust, Go, TypeScript, and Gleam. Local live PostgreSQL lock tests run
+when `ORES_LOCKS_TEST_DATABASE_URL` is set.
