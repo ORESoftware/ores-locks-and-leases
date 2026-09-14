@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir, rmdir, unlink } from "node:fs/promises";
+import { lstat, open, readdir, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -7,6 +7,7 @@ import {
 } from "./local-file.js";
 
 const OWNER_FILE = "owner";
+export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES = 2048;
 
 export type LocalFileLockInspectionState = "absent" | "held" | "compromised";
 
@@ -40,8 +41,9 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   }
 
   const ownerPath = join(path, OWNER_FILE);
+  let ownerMetadata;
   try {
-    const ownerMetadata = await lstat(ownerPath);
+    ownerMetadata = await lstat(ownerPath);
     if (!ownerMetadata.isFile() || ownerMetadata.isSymbolicLink()) {
       return compromised("owner token is not an unaliased regular file");
     }
@@ -49,13 +51,11 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     if (error_code(error) === "ENOENT") return compromised("owner token is missing");
     throw io_error(path, "inspect local lock owner token", error);
   }
-
-  let owner: string;
-  try {
-    owner = await readFile(ownerPath, "utf8");
-  } catch (error) {
-    throw io_error(path, "read local lock owner token", error);
+  if (ownerMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
+    return compromised("owner token exceeds the portable 2048-byte UTF-8 storage bound");
   }
+
+  const owner = await read_bounded_utf8_owner(path, ownerPath);
   if (owner.length === 0) return compromised("owner token is empty");
   if (Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
     return compromised("owner token exceeds the portable 512-code-point contract bound");
@@ -130,6 +130,45 @@ export async function recover_local_file_lock(
     );
   }
   return true;
+}
+
+async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Promise<string> {
+  let handle;
+  try {
+    handle = await open(ownerPath, "r");
+    const buffer = Buffer.alloc(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
+    const { bytesRead } = await handle.read(
+      buffer,
+      0,
+      buffer.byteLength,
+      0,
+    );
+    if (bytesRead > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+      );
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead));
+    } catch (error) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token is not valid UTF-8",
+        error,
+      );
+    }
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    if (error_code(error) === "ENOENT") {
+      throw new LocalFileLockError("compromised", lockPath, "owner token is missing", error);
+    }
+    throw io_error(lockPath, "read local lock owner token", error);
+  } finally {
+    await handle?.close();
+  }
 }
 
 function compromised(message: string): LocalFileLockInspection {
