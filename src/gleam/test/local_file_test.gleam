@@ -75,3 +75,18 @@ pub fn local_file_lock_changed_owner_fails_closed_test() {
   error.kind |> should.equal(local_file.Compromised)
   clean(root)
 }
+
+pub fn local_file_lock_unexpected_entry_fails_closed_test() {
+  let root = "./.tmp-local-file-locks/dirty-directory"
+  clean(root)
+
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let path = local_file.local_file_lock_path(lock)
+  let assert Ok(Nil) =
+    simplifile.write(to: path <> "/unexpected", contents: "do not delete")
+  let assert Error(error) = local_file.release(lock)
+  error.kind |> should.equal(local_file.Compromised)
+  simplifile.exists(path <> "/unexpected", False) |> should.equal(Ok(True))
+  clean(root)
+}
