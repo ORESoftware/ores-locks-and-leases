@@ -9,6 +9,7 @@ use std::path::Path;
 use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
+const OWNER_MAX_CODEPOINTS: usize = 512;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -67,6 +68,11 @@ pub fn inspect_local_file_lock(
     if owner.is_empty() {
         return Ok(compromised("owner token is empty"));
     }
+    if owner.chars().count() > OWNER_MAX_CODEPOINTS {
+        return Ok(compromised(
+            "owner token exceeds the portable 512-code-point contract bound",
+        ));
+    }
 
     Ok(LocalFileLockInspection {
         state: LocalFileLockInspectionState::Held,
@@ -97,6 +103,13 @@ pub fn recover_local_file_lock(
             LocalFileLockErrorKind::InvalidInput,
             path,
             "expected owner must not be empty",
+        ));
+    }
+    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "expected owner must not exceed 512 Unicode code points",
         ));
     }
 
