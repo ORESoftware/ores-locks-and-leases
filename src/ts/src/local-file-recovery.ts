@@ -1,7 +1,10 @@
 import { lstat, readFile, readdir, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
-import { LocalFileLockError } from "./local-file.js";
+import {
+  LocalFileLockError,
+  MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
+} from "./local-file.js";
 
 const OWNER_FILE = "owner";
 
@@ -54,6 +57,9 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     throw io_error(path, "read local lock owner token", error);
   }
   if (owner.length === 0) return compromised("owner token is empty");
+  if (Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
+    return compromised("owner token exceeds the portable 512-code-point contract bound");
+  }
   return { state: "held", owner };
 }
 
@@ -76,6 +82,13 @@ export async function recover_local_file_lock(
   }
   if (expected_owner.length === 0) {
     throw new LocalFileLockError("invalid_input", path, "expected owner must not be empty");
+  }
+  if (Array.from(expected_owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      `expected owner must not exceed ${MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS} Unicode code points`,
+    );
   }
 
   const inspection = await inspect_local_file_lock(path);
