@@ -1,11 +1,9 @@
-name: DEN-2037 contract parity v2
+name: DEN-2037 contract parity v2 rerun
 
 on:
   push:
-    branches:
-      - den-2037-local-lock-contract-parity-v2
-    paths:
-      - '.github/workflows/den-2037-contract-parity-v2.yml'
+    branches: [den-2037-local-lock-contract-parity-v2]
+    paths: ['.github/workflows/den-2037-contract-parity-v2.yml']
 
 permissions:
   contents: write
@@ -15,27 +13,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - name: Check out exact branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: true
           fetch-depth: 0
-      - name: Install pinned Rust
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: '1.85.1'
           components: rustfmt
-      - name: Install pinned Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.22'
           cache: false
-      - name: Install Node 22
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
-      - name: Install pinned Gleam/OTP
-        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           otp-version: '27'
           gleam-version: '1.16.0'
@@ -74,7 +67,7 @@ jobs:
             `fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {\n    if owner.is_empty() {\n        return Err(LocalFileLockError::new(\n            LocalFileLockErrorKind::InvalidInput,\n            path,\n            "owner token must not be empty",\n        ));\n    }\n    if owner.chars().count() > OWNER_MAX_CODEPOINTS {\n        return Err(LocalFileLockError::new(\n            LocalFileLockErrorKind::InvalidInput,\n            path,\n            "owner token must not exceed 512 Unicode code points",\n        ));\n    }\n    Ok(())\n}`,
             'owner validator',
           );
-          const tests = `    #[test]\n    fn owner_at_max_codepoints_is_valid() {\n        let path = test_path("max-owner");\n        let owner = "😀".repeat(512);\n        let mut lock = LocalFileLock::try_acquire(&path, owner)\n            .expect("512-code-point owner must be valid")\n            .expect("holder");\n        lock.release().expect("release max owner lock");\n    }\n\n    #[test]\n    fn oversized_owner_is_invalid_input() {\n        let path = test_path("oversized-owner");\n        let error = LocalFileLock::try_acquire(&path, "😀".repeat(513))\n            .expect_err("513-code-point owner must be rejected");\n        assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);\n    }\n\n    #[cfg(unix)]\n    #[test]\n    fn owner_marker_is_private_on_posix() {\n        use std::os::unix::fs::PermissionsExt;\n\n        let path = test_path("private-owner");\n        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")\n            .expect("acquire")\n            .expect("holder");\n        let mode = fs::metadata(path.join(OWNER_FILE))\n            .expect("owner metadata")\n            .permissions()\n            .mode();\n        assert_eq!(\n            mode & 0o077,\n            0,\n            "owner marker must not expose group/other permission bits"\n        );\n        lock.release().expect("release private owner lock");\n    }\n\n`;
+          const tests = `    #[test]\n    fn owner_at_max_codepoints_is_valid() {\n        let path = test_path("max-owner");\n        let owner = "😀".repeat(512);\n        let mut lock = LocalFileLock::try_acquire(&path, owner)\n            .expect("512-code-point owner must be valid")\n            .expect("holder");\n        lock.release().expect("release max owner lock");\n    }\n\n    #[test]\n    fn oversized_owner_is_invalid_input() {\n        let path = test_path("oversized-owner");\n        let error = LocalFileLock::try_acquire(&path, "😀".repeat(513))\n            .expect_err("513-code-point owner must be rejected");\n        assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);\n    }\n\n    #[cfg(unix)]\n    #[test]\n    fn owner_marker_is_private_on_posix() {\n        use std::os::unix::fs::PermissionsExt;\n        let path = test_path("private-owner");\n        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")\n            .expect("acquire")\n            .expect("holder");\n        let mode = fs::metadata(path.join(OWNER_FILE))\n            .expect("owner metadata")\n            .permissions()\n            .mode();\n        assert_eq!(mode & 0o077, 0, "owner marker must be private");\n        lock.release().expect("release private owner lock");\n    }\n\n`;
           replaceOnce(
             '    #[test]\n    fn existing_regular_file_is_compromised_not_contention() {',
             tests + '    #[test]\n    fn existing_regular_file_is_compromised_not_contention() {',
@@ -82,7 +75,7 @@ jobs:
           );
           fs.writeFileSync(path, text);
           NODE
-      - name: Format modified runtime slices
+      - name: Format and validate
         shell: bash
         run: |
           set -euo pipefail
@@ -90,24 +83,23 @@ jobs:
           gofmt -w src/go/local_file.go src/go/local_file_test.go src/go/local_file_recovery.go src/go/local_file_recovery_test.go
           (cd src/gleam && gleam format src test)
           git diff --check
-      - name: Validate shared local lock corpus
-        run: node scripts/check-local-file-corpus.mjs
-      - name: Test Rust local locks
+          node scripts/check-local-file-corpus.mjs
+      - name: Test Rust
         working-directory: src/rust
         run: |
           cargo test --locked --no-default-features local_file
           cargo test --locked --no-default-features --test local_file_recovery
           cargo test --locked --no-default-features --test local_file_path_identity
-      - name: Test Go local locks
+      - name: Test Go
         working-directory: src/go
         run: go test ./... -run LocalFileLock -count=1
-      - name: Test TypeScript local locks
+      - name: Test TypeScript
         working-directory: src/ts
         run: |
           npm ci --no-audit --no-fund
           npm run build
           node --test test/local-file.test.mjs test/local-file-recovery.test.mjs test/local-file-scoped.test.mjs test/local-file-path-identity.test.mjs
-      - name: Test Gleam local locks
+      - name: Test Gleam
         working-directory: src/gleam
         run: gleam test
       - name: Commit validated changes and remove helper
