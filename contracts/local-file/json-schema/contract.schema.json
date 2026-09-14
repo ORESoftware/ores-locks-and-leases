@@ -24,6 +24,14 @@
         "invalid_input"
       ]
     },
+    "LocalFileLockInspectionState": {
+      "type": "string",
+      "enum": ["absent", "held", "compromised"]
+    },
+    "ScopedLocalFileLockOutcomeKind": {
+      "type": "string",
+      "enum": ["success", "lock_error", "work_error", "work_and_release_error"]
+    },
     "LocalFileLockOptions": {
       "type": "object",
       "unevaluatedProperties": false,
@@ -52,6 +60,42 @@
         "released": { "type": "boolean" }
       },
       "required": ["path", "owner", "released"]
+    },
+    "LocalFileLockInspection": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "state": { "$ref": "#/$defs/LocalFileLockInspectionState" },
+        "owner": { "$ref": "#/$defs/LocalFileLockOwner" },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "required": ["state"]
+    },
+    "LocalFileLockRecoveryRequest": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/LocalFileLockPath" },
+        "expectedOwner": { "$ref": "#/$defs/LocalFileLockOwner" },
+        "confirmedInactive": { "type": "boolean" }
+      },
+      "required": ["path", "expectedOwner", "confirmedInactive"]
+    },
+    "LocalFileLockRecoveryResult": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "recovered": { "type": "boolean" }
+      },
+      "required": ["recovered"]
+    },
+    "ScopedLocalFileLockOutcome": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/ScopedLocalFileLockOutcomeKind" }
+      },
+      "required": ["kind"]
     },
     "LocalFileLockFailure": {
       "type": "object",
