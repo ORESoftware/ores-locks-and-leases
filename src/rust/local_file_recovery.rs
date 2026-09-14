@@ -140,8 +140,14 @@ pub fn recover_local_file_lock(
         .map_err(|error| io_error(path, "remove recovered owner token", error))?;
     fs::remove_dir(path).map_err(|remove_error| {
         let kind = match fs::read_dir(path) {
-            Ok(mut entries) if entries.next().is_some() => LocalFileLockErrorKind::Compromised,
-            _ => LocalFileLockErrorKind::Io,
+            Ok(mut entries) => {
+                if entries.next().is_some() {
+                    LocalFileLockErrorKind::Compromised
+                } else {
+                    LocalFileLockErrorKind::Io
+                }
+            }
+            Err(_) => LocalFileLockErrorKind::Io,
         };
         error(
             kind,
