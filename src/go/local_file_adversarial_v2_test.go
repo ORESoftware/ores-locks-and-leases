@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +166,43 @@ func TestLocalFileLockErrorsDoNotRenderOwnerTokens(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secretOwner) {
 		t.Fatalf("owner token leaked in error: %v", err)
+	}
+}
+
+func TestLocalFileLockRejectsWritableExistingParentOnPOSIX(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL policy is separate from POSIX mode bits")
+	}
+	root := t.TempDir()
+	parent := filepath.Join(root, "shared")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := TryAcquireLocalFileLock(filepath.Join(parent, "install.lock"), "owner-a")
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileCompromised || !strings.Contains(localErr.Message, "permissions widened") {
+		t.Fatalf("expected writable-parent compromise, got %v", err)
+	}
+}
+
+func TestLocalFileLockDetectsLivePermissionWideningOnPOSIX(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL policy is separate from POSIX mode bits")
+	}
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(path, localFileOwnerName), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = lock.Release()
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileCompromised || !strings.Contains(localErr.Message, "permissions widened") {
+		t.Fatalf("expected widened-owner compromise, got %v", err)
 	}
 }
