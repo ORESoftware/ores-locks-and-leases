@@ -1,4 +1,4 @@
-import { lstat, opendir, rmdir, unlink } from "node:fs/promises";
+import { lstat, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -7,6 +7,7 @@ import {
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
   MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
   read_bounded_local_file_lock_owner,
+  read_local_file_lock_entry_names_bounded,
 } from "./local-file.js";
 
 export { MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES } from "./local-file.js";
@@ -32,7 +33,7 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     return compromised("lock path is not an unaliased directory");
   }
 
-  const entries = await read_at_most_two_entry_names(path);
+  const entries = await read_local_file_lock_entry_names_bounded(path);
   if (entries.length === 0) {
     return incomplete(
       "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
@@ -154,22 +155,6 @@ export async function recover_local_file_lock(
     );
   }
   return true;
-}
-
-async function read_at_most_two_entry_names(path: string): Promise<string[]> {
-  let directory;
-  try {
-    directory = await opendir(path);
-    const first = await directory.read();
-    if (first === null) return [];
-    const second = await directory.read();
-    if (second === null) return [first.name];
-    return [first.name, second.name];
-  } catch (error) {
-    throw io_error(path, "list local lock directory", error);
-  } finally {
-    await directory?.close();
-  }
 }
 
 function incomplete(message: string): LocalFileLockInspection {
