@@ -25,7 +25,6 @@ export {
   LocalFileLock,
   LocalFileLockError,
   DEFAULT_LOCAL_FILE_LOCK_OPTIONS,
-  MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
   acquire_local_file_lock,
   local_file_lock_exists,
   try_acquire_local_file_lock,
