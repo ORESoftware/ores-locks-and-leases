@@ -61,7 +61,23 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     );
   }
 
-  const entries = await read_local_file_lock_entry_names_bounded(path);
+  let entries: string[];
+  try {
+    entries = await read_local_file_lock_entry_names_bounded(path);
+  } catch (error) {
+    // A clean release can remove the rendezvous after the lstat above but
+    // before opendir. That observation has a valid linearization point after
+    // removal, so report `absent` instead of inventing an IO failure. This is
+    // diagnostic only and never grants ownership or performs stale recovery.
+    if (
+      error instanceof LocalFileLockError &&
+      error.kind === "io" &&
+      caused_by_error_code(error, "ENOENT")
+    ) {
+      return { state: "absent" };
+    }
+    throw error;
+  }
   if (entries.length === 0) {
     return incomplete(
       "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
@@ -205,6 +221,11 @@ function classify_bounded_owner_error(error: LocalFileLockError): LocalFileLockI
   }
   if (error.message.includes("regular file")) return "owner_not_regular_file";
   return "owner_contract_violation";
+}
+
+function caused_by_error_code(error: Error, code: string): boolean {
+  if (!("cause" in error)) return false;
+  return error_code((error as Error & { cause?: unknown }).cause) === code;
 }
 
 function error_code(error: unknown): string | undefined {
