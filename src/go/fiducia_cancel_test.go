@@ -1,5 +1,8 @@
 package oreslocks
 
+// These tests intentionally model one logical acquisition identity across
+// polling, cancellation, raced promotion, and exact fenced-grant cleanup.
+
 import (
 	"context"
 	"encoding/json"
