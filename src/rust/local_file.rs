@@ -214,8 +214,9 @@ impl LocalFileLock {
         }
 
         let owner_path = self.path.join(OWNER_FILE);
-        let observed = fs::read(&owner_path)
-            .map_err(|error| LocalFileLockError::io(&self.path, "read local lock owner token", error))?;
+        let observed = fs::read(&owner_path).map_err(|error| {
+            LocalFileLockError::io(&self.path, "read local lock owner token", error)
+        })?;
         if observed != self.owner.as_bytes() {
             return Err(LocalFileLockError::new(
                 LocalFileLockErrorKind::Compromised,
@@ -224,8 +225,9 @@ impl LocalFileLock {
             ));
         }
 
-        fs::remove_file(&owner_path)
-            .map_err(|error| LocalFileLockError::io(&self.path, "remove local lock owner token", error))?;
+        fs::remove_file(&owner_path).map_err(|error| {
+            LocalFileLockError::io(&self.path, "remove local lock owner token", error)
+        })?;
         fs::remove_dir(&self.path).map_err(|error| {
             let kind = if error.kind() == io::ErrorKind::DirectoryNotEmpty {
                 LocalFileLockErrorKind::Compromised
@@ -260,7 +262,11 @@ pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileL
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_dir()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(LocalFileLockError::io(path, "inspect local lock path", error)),
+        Err(error) => Err(LocalFileLockError::io(
+            path,
+            "inspect local lock path",
+            error,
+        )),
     }
 }
 
@@ -312,9 +318,11 @@ mod tests {
         let mut first = LocalFileLock::try_acquire(&path, "owner-a")
             .expect("first acquire")
             .expect("first holder");
-        assert!(LocalFileLock::try_acquire(&path, "owner-b")
-            .expect("contended attempt")
-            .is_none());
+        assert!(
+            LocalFileLock::try_acquire(&path, "owner-b")
+                .expect("contended attempt")
+                .is_none()
+        );
         first.release().expect("release first holder");
         let mut second = LocalFileLock::try_acquire(&path, "owner-b")
             .expect("second acquire")
