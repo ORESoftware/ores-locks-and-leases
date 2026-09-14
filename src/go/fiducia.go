@@ -17,15 +17,9 @@ import (
 )
 
 // FiduciaLease is a Lease over the fiducia-cloud node HTTP protocol, using
-// only net/http. It speaks the same three endpoints the official clients do
-// (/v1/locks/acquire, /v1/locks/renew, /v1/locks/release) with the same
-// headers, so a service that already holds a *fiducia.Client can keep it for
-// everything else and hand this adapter the same base URL and credentials.
-//
-// The node never holds a request open: acquire returns at once with
-// acquired=false when the key is held, so the client owns the wait. This
-// adapter polls at opts.RetryInterval until the grant arrives or
-// opts.WaitTimeout elapses.
+// only net/http. Blocking acquisition keeps one stable request_id across polls
+// and explicit cancellation so timeout/caller cancellation can reconcile a
+// raced grant before returning.
 type FiduciaLease struct {
 	base       string
 	http       *http.Client
@@ -34,6 +28,8 @@ type FiduciaLease struct {
 	bearer     string // Authorization: Bearer
 	allowClear bool
 }
+
+const fiduciaCancelCleanupTimeout = 5 * time.Second
 
 // NewFiduciaInternal is the trusted internal hop straight to a fiducia-node.
 func NewFiduciaInternal(baseURL, internalSecret, orgID string) *FiduciaLease {
@@ -173,15 +169,79 @@ func transportErr(key LockKey, err error) *Error {
 	return newError(KindTransport, key, "", err.Error(), err)
 }
 
+func generatedIdentity(prefix string) string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%s%d", prefix, time.Now().UnixNano())
+	}
+	return prefix + hex.EncodeToString(b[:])
+}
+
 // GeneratedHolder is an unguessable holder identity. Holder names
 // participate in queue identity and cancellation authority, so a pid/counter
 // is not enough.
 func GeneratedHolder() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("ores-locks-%d", time.Now().UnixNano())
+	return generatedIdentity("ores-locks-")
+}
+
+// GeneratedRequestID is the stable logical identity reused by all polls and
+// cancellation for one acquisition attempt.
+func GeneratedRequestID() string {
+	return generatedIdentity("ores-lock-request-")
+}
+
+func mapValue(value any) (map[string]any, bool) {
+	mapped, ok := value.(map[string]any)
+	return mapped, ok
+}
+
+// cancelQueuedAcquire establishes a safe terminal state for one logical
+// queued acquisition. If promotion won the cancellation race, release the
+// exact raced grant before reporting cancellation to the caller.
+func (f *FiduciaLease) cancelQueuedAcquire(key LockKey, holder, requestID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), fiduciaCancelCleanupTimeout)
+	defer cancel()
+
+	out, err := f.post(ctx, "/v1/locks/cancel", map[string]any{
+		"keys":       []string{string(key)},
+		"holder":     holder,
+		"request_id": requestID,
+	})
+	if err != nil {
+		return fmt.Errorf("fiducia: cancel transport/safety failure: %w", err)
 	}
-	return "ores-locks-" + hex.EncodeToString(b[:])
+	if outBool(out, "cancelled") && !outBool(out, "acquired") {
+		return nil
+	}
+	if !outBool(out, "acquired") {
+		return errors.New("fiducia: cancel did not establish a safe terminal acquisition state")
+	}
+
+	grant, ok := mapValue(out["grant"])
+	if !ok {
+		return errors.New("fiducia: cancel reported a raced grant without grant authority")
+	}
+	racedHolder, ok := grant["holder"].(string)
+	if !ok || racedHolder != holder {
+		return errors.New("fiducia: cancel returned mismatched raced-grant holder authority")
+	}
+	token, ok := outUint(grant, "fencing_token")
+	if !ok || token == 0 {
+		return errors.New("fiducia: cancel returned malformed raced-grant fencing authority")
+	}
+
+	released, err := f.post(ctx, "/v1/locks/release", map[string]any{
+		"key":           string(key),
+		"holder":        holder,
+		"fencing_token": token,
+	})
+	if err != nil {
+		return fmt.Errorf("fiducia: raced-grant release failed: %w", err)
+	}
+	if !outBool(released, "released") {
+		return errors.New("fiducia: raced grant release was a no-op; ownership safety is unknown")
+	}
+	return nil
 }
 
 // Acquire implements Lease.
@@ -190,17 +250,62 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 	if holder == "" {
 		holder = GeneratedHolder()
 	}
+	requestID := opts.RequestID
+	if requestID == "" {
+		requestID = GeneratedRequestID()
+	}
 	ttlMs := opts.TTL.Milliseconds()
 	started := time.Now()
+	attempted := false
+
 	for {
-		out, err := f.post(ctx, "/v1/locks/acquire", map[string]any{"key": string(key), "holder": holder, "ttl_ms": ttlMs})
-		if err != nil {
+		if err := ctx.Err(); err != nil {
+			if !attempted {
+				return LeaseGrant{}, transportErr(key, err)
+			}
+			if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+				return LeaseGrant{}, transportErr(key, cleanupErr)
+			}
 			return LeaseGrant{}, transportErr(key, err)
+		}
+
+		body := map[string]any{
+			"key":        string(key),
+			"holder":     holder,
+			"ttl_ms":     ttlMs,
+			"request_id": requestID,
+		}
+		if wait {
+			body["wait_timeout_ms"] = opts.WaitTimeout.Milliseconds()
+		}
+		attempted = true
+		out, err := f.post(ctx, "/v1/locks/acquire", body)
+		if err != nil {
+			// Cancellation can race the in-flight acquire after the server has
+			// admitted the request but before the response reaches this client.
+			// Reconcile the stable request identity before returning so a raced
+			// promoted grant cannot be abandoned silently.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+					return LeaseGrant{}, transportErr(key, cleanupErr)
+				}
+				return LeaseGrant{}, transportErr(key, ctxErr)
+			}
+			return LeaseGrant{}, transportErr(key, err)
+		}
+		// The caller may cancel after the authority has produced a response but
+		// before this client exposes it. Cancellation has precedence: reconcile
+		// through the stable request id so a grant won in that race is released.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+				return LeaseGrant{}, transportErr(key, cleanupErr)
+			}
+			return LeaseGrant{}, transportErr(key, ctxErr)
 		}
 		if outBool(out, "acquired") {
 			token, ok := outUint(out, "fencing_token")
-			if !ok {
-				return LeaseGrant{}, transportErr(key, errors.New("fiducia: acquired without a fencing token"))
+			if !ok || token == 0 {
+				return LeaseGrant{}, transportErr(key, errors.New("fiducia: acquired without a positive fencing token"))
 			}
 			grant := LeaseGrant{Key: key, Holder: holder, FencingToken: token, TTLMs: ttlMs}
 			if exp, ok := outUint(out, "lease_expires_ms"); ok {
@@ -213,10 +318,16 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 		}
 		waited := time.Since(started)
 		if waited+opts.RetryInterval > opts.WaitTimeout {
+			if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+				return LeaseGrant{}, transportErr(key, cleanupErr)
+			}
 			return LeaseGrant{}, timeout(key, StepFiduciaAcquire, waited.Milliseconds())
 		}
 		select {
 		case <-ctx.Done():
+			if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
+				return LeaseGrant{}, transportErr(key, cleanupErr)
+			}
 			return LeaseGrant{}, transportErr(key, ctx.Err())
 		case <-time.After(opts.RetryInterval):
 		}

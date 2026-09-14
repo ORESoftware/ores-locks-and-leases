@@ -63,6 +63,8 @@ export { LockError, type LockErrorKind } from "./errors.js";
 export {
   DEFAULT_ACQUIRE_OPTIONS,
   withLease,
+  type AcquireAbortListener,
+  type AcquireAbortSignal,
   type AcquireOptions,
   type FencingToken,
   type Guarded,
@@ -89,7 +91,14 @@ export {
   type LeaseMaintenanceOptions,
   type MaintainedXactGuarded,
 } from "./maintained.js";
-export { FiduciaLease, cleartextRefusal, generatedHolder, type FetchLike, type FiduciaLeaseOptions } from "./fiducia.js";
+export {
+  FiduciaLease,
+  cleartextRefusal,
+  generatedHolder,
+  generatedRequestId,
+  type FetchLike,
+  type FiduciaLeaseOptions,
+} from "./fiducia.js";
 export {
   CloudflareDurableObjectLease,
   type CloudflareDurableObjectLeaseOptions,
