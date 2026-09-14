@@ -41,6 +41,10 @@ fn run(
       case mode {
         "hold" -> process.sleep(hold_ms)
         "try" -> Nil
+        "crash" -> {
+          io.println("CRASHED")
+          halt(30)
+        }
         _ -> usage()
       }
       case local_file.release(lock) {
@@ -58,7 +62,7 @@ fn run(
 }
 
 fn usage() {
-  io.println("usage: local_file_probe <hold|try> <lock_root> <lock_name> <owner> [hold_ms]")
+  io.println("usage: local_file_probe <hold|try|crash> <lock_root> <lock_name> <owner> [hold_ms]")
   halt(2)
 }
 
