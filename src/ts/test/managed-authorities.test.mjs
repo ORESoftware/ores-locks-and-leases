@@ -55,6 +55,35 @@ test("Cloudflare Durable Object client preserves full-width fencing tokens", asy
   assert.match(calls[1].init.body, /18446744073709551615/);
 });
 
+test("Cloudflare Durable Object client rejects noncanonical authority fencing tokens", async () => {
+  const key = lockKey("zed-pkg/registry/publish");
+  const invalidTokens = [
+    "0",
+    "01",
+    "18446744073709551616",
+    "+1",
+    " 1",
+    1,
+  ];
+
+  for (const fencingToken of invalidTokens) {
+    const lease = new CloudflareDurableObjectLease({
+      baseUrl: "https://locks.example.test",
+      apiToken: "secret",
+      fetch: async () => response({ acquired: true, fencing_token: fencingToken }),
+    });
+
+    await assert.rejects(
+      () => lease.acquire(key, opts, false),
+      (error) =>
+        error instanceof LockError &&
+        error.kind === "transport" &&
+        /canonical positive u64 fencing token/.test(error.message),
+      String(fencingToken),
+    );
+  }
+});
+
 test("Redis REST client uses one cluster slot and decimal u64 tokens", async () => {
   const commands = [];
   const results = [
