@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// A caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, for
-/// example `zed-pkg/registry/publish:zed-lib-core`. At most 512 bytes.
+/// example `zed-pkg/registry/publish:zed-lib-core`. Between 1 and 512 bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LockKey(String);
 
@@ -11,9 +11,12 @@ pub struct LockKey(String);
 pub const MAX_LOCK_KEY_BYTES: usize = 512;
 
 impl LockKey {
-    /// Build a key, refusing one longer than [`MAX_LOCK_KEY_BYTES`].
+    /// Build a non-empty key, refusing one longer than [`MAX_LOCK_KEY_BYTES`].
     pub fn new(key: impl Into<String>) -> Result<Self, InvalidLockKey> {
         let key = key.into();
+        if key.is_empty() {
+            return Err(InvalidLockKey::Empty);
+        }
         if key.len() > MAX_LOCK_KEY_BYTES {
             return Err(InvalidLockKey::TooLong {
                 bytes: key.len(),
@@ -62,12 +65,14 @@ impl TryFrom<String> for LockKey {
 /// Why a string is not a [`LockKey`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidLockKey {
+    Empty,
     TooLong { bytes: usize, max: usize },
 }
 
 impl fmt::Display for InvalidLockKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Empty => f.write_str("lock key must not be empty"),
             Self::TooLong { bytes, max } => {
                 write!(
                     f,
@@ -127,7 +132,8 @@ mod tests {
     }
 
     #[test]
-    fn key_length_is_bounded() {
+    fn key_must_be_non_empty_and_bounded() {
+        assert!(matches!(LockKey::new(""), Err(InvalidLockKey::Empty)));
         assert!(LockKey::new("x".repeat(MAX_LOCK_KEY_BYTES)).is_ok());
         assert!(matches!(
             LockKey::new("x".repeat(MAX_LOCK_KEY_BYTES + 1)),
