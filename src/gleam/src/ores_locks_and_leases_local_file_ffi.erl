@@ -37,9 +37,10 @@ path_kind(Path) ->
         {error, _} -> 4
     end.
 
-%% 0 means exactly one entry named owner; 1 means dirty/unexpected shape; 2 IO.
+%% 0 exactly one owner; 1 dirty/unexpected; 2 IO; 3 empty/incomplete crash state.
 directory_shape(Path) ->
     case file:list_dir(Path) of
+        {ok, []} -> 3;
         {ok, [Only]} ->
             case unicode:characters_to_binary(Only) of
                 <<"owner">> -> 0;
