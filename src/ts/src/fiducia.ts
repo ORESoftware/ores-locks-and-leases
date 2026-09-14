@@ -7,7 +7,7 @@
 
 import { LockError } from "./errors.js";
 import type { LockKey } from "./key.js";
-import type { AcquireOptions, Lease, LeaseGrant } from "./lease.js";
+import type { AcquireAbortSignal, AcquireOptions, Lease, LeaseGrant } from "./lease.js";
 
 export type FetchLike = (input: string, init: { method: string; headers: Record<string, string>; body: string; redirect: "manual" }) => Promise<{
   status: number;
@@ -57,7 +57,7 @@ export function generatedRequestId(): string {
   return generatedIdentity("ores-lock-request-");
 }
 
-function sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promise<"elapsed" | "aborted"> {
+function sleepOrAbort(ms: number, signal: AcquireAbortSignal | undefined): Promise<"elapsed" | "aborted"> {
   if (signal?.aborted) return Promise.resolve("aborted");
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -74,9 +74,6 @@ function sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promise<"ela
 }
 
 function asUint(value: unknown): bigint | undefined {
-  // JSON.parse has already rounded an unsafe numeric literal. Refuse it
-  // rather than release or renew a different fencing token. Decimal strings
-  // remain accepted for a future lossless Fiducia wire revision.
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
   if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
   if (typeof value === "bigint" && value >= 0n) return value;
@@ -92,7 +89,7 @@ function encodeWireInteger(value: bigint): number {
   return Number(value);
 }
 
-function cancelledCause(signal: AbortSignal): unknown {
+function cancelledCause(signal: AcquireAbortSignal): unknown {
   return signal.reason ?? new Error("fiducia: acquisition cancelled by caller");
 }
 
@@ -118,7 +115,6 @@ export class FiduciaLease implements Lease {
     this.#generateRequestId = options.generateRequestId ?? generatedRequestId;
   }
 
-  /** POST `body`, return `result.output`. Non-2xx and transport failures throw plain Errors; callers map them. */
   async #post(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (this.#refusal) throw new Error(this.#refusal);
     const response = await this.#fetch(this.#base + path, {
@@ -135,11 +131,6 @@ export class FiduciaLease implements Lease {
     return output && typeof output === "object" ? (output as Record<string, unknown>) : {};
   }
 
-  /**
-   * Establish a safe terminal state for a queued acquisition. A cancellation
-   * response may report that promotion won the race; that grant must be
-   * released by its exact holder + fencing token before cancellation returns.
-   */
   async #cancelQueuedAcquire(key: LockKey, holder: string, requestId: string): Promise<void> {
     const out = await this.#post("/v1/locks/cancel", {
       keys: [key],
@@ -229,9 +220,6 @@ export class FiduciaLease implements Lease {
       }
       if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
 
-      // Cancellation that arrives while the acquire request is in flight wins
-      // over the local timeout budget. Reconcile the exact logical request
-      // before reporting the caller's cancellation.
       if (opts.signal?.aborted) {
         return this.#cancelBeforeTerminal(
           key,
@@ -270,8 +258,6 @@ export class FiduciaLease implements Lease {
     } catch (cause) {
       throw LockError.transport(grant.key, cause);
     }
-    // `renewed: false` is lost fenced authority: fiducia has already reaped the
-    // grant and may have promoted another holder.
     if (out["renewed"] !== true) throw new LockError("lost_lease", grant.key, "fiducia: lock renewal lost fenced authority");
     const expires = asUint(out["lease_expires_ms"]);
     return expires === undefined ? { ...grant, ttlMs } : { ...grant, ttlMs, leaseExpiresMs: Number(expires) };
