@@ -142,3 +142,6 @@ jobs:
 
       - name: Cross-runtime process interoperability and crash matrix
         run: node scripts/check-local-file-process-interop.mjs
+
+      - name: Sixth-order process and recovery matrix
+        run: node scripts/check-local-file-process-sixth-order.mjs
