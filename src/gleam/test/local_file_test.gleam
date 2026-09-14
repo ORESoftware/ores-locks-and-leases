@@ -62,6 +62,47 @@ pub fn local_file_lock_timeout_test() {
   clean(root)
 }
 
+pub fn local_file_lock_zero_timeout_test() {
+  let root = "./.tmp-local-file-locks/zero-timeout"
+  clean(root)
+
+  let assert Ok(Some(first)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let options =
+    local_file.LocalFileLockOptions(
+      wait: True,
+      wait_timeout_ms: 0,
+      retry_interval_ms: 50,
+    )
+  let assert Error(error) =
+    local_file.acquire(root, "install.lock", "owner-b", options)
+  error.kind |> should.equal(local_file.Timeout)
+  local_file.release(first) |> should.equal(Ok(Nil))
+  clean(root)
+}
+
+pub fn local_file_lock_empty_owner_is_invalid_test() {
+  let root = "./.tmp-local-file-locks/empty-owner"
+  clean(root)
+
+  let assert Error(error) = local_file.try_acquire(root, "install.lock", "")
+  error.kind |> should.equal(local_file.InvalidInput)
+  clean(root)
+}
+
+pub fn local_file_lock_existing_regular_file_is_compromised_test() {
+  let root = "./.tmp-local-file-locks/existing-file"
+  clean(root)
+  let assert Ok(Nil) = simplifile.create_directory_all(root)
+  let assert Ok(Nil) =
+    simplifile.write(to: root <> "/install.lock", contents: "not a directory")
+
+  let assert Error(error) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  error.kind |> should.equal(local_file.Compromised)
+  clean(root)
+}
+
 pub fn local_file_lock_changed_owner_fails_closed_test() {
   let root = "./.tmp-local-file-locks/compromised"
   clean(root)
@@ -71,6 +112,19 @@ pub fn local_file_lock_changed_owner_fails_closed_test() {
   let path = local_file.local_file_lock_path(lock)
   let assert Ok(Nil) =
     simplifile.write(to: path <> "/owner", contents: "owner-b")
+  let assert Error(error) = local_file.release(lock)
+  error.kind |> should.equal(local_file.Compromised)
+  clean(root)
+}
+
+pub fn local_file_lock_missing_owner_fails_closed_test() {
+  let root = "./.tmp-local-file-locks/missing-owner"
+  clean(root)
+
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let path = local_file.local_file_lock_path(lock)
+  let assert Ok(Nil) = simplifile.delete_file(at: path <> "/owner")
   let assert Error(error) = local_file.release(lock)
   error.kind |> should.equal(local_file.Compromised)
   clean(root)
@@ -89,4 +143,16 @@ pub fn local_file_lock_unexpected_entry_fails_closed_test() {
   error.kind |> should.equal(local_file.Compromised)
   simplifile.exists(path <> "/unexpected", False) |> should.equal(Ok(True))
   clean(root)
+}
+
+pub fn local_file_lock_nested_unicode_path_test() {
+  let root = "./.tmp-local-file-locks/unicode-锁/nested"
+  clean("./.tmp-local-file-locks/unicode-锁")
+
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "paquete-ñ.lock", "owner-λ")
+  local_file.local_file_lock_owner(lock) |> should.equal("owner-λ")
+  local_file.release(lock) |> should.equal(Ok(Nil))
+  local_file.exists(root, "paquete-ñ.lock") |> should.equal(Ok(False))
+  clean("./.tmp-local-file-locks/unicode-锁")
 }
