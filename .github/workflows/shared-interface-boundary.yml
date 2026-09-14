@@ -56,7 +56,7 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
-      - name: Resolve immutable ores-interfaces pin
+      - name: Resolve immutable ores-interfaces policy pin
         id: shared_pin
         shell: bash
         run: |
@@ -64,12 +64,13 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from 'node:fs';
           const pin = JSON.parse(readFileSync('contracts/shared-interfaces.json', 'utf8'));
-          if (pin.schema !== 'ores.locks.shared-interfaces-pin/v2') throw new Error('unsupported shared-interface pin schema');
-          if (!/^[0-9a-f]{40}$/.test(pin.commit ?? '')) throw new Error('shared-interface dependency must use an immutable SHA');
+          if (pin.schema !== 'ores.locks.shared-interface-policy-pin/v1') throw new Error('unsupported shared-interface policy pin schema');
+          if (pin.packageDependency !== false) throw new Error('ores-interfaces must remain policy-only until concrete composition exists');
+          if (!/^[0-9a-f]{40}$/.test(pin.commit ?? '')) throw new Error('shared-interface policy must use an immutable SHA');
           appendFileSync(process.env.GITHUB_OUTPUT, `commit=${pin.commit}\n`);
           NODE
 
-      - name: Check out exact ores-interfaces dependency
+      - name: Check out exact ores-interfaces policy source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ORESoftware/ores-interfaces
