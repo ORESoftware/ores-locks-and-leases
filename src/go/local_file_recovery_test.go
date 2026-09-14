@@ -28,7 +28,49 @@ func TestLocalFileLockInspectionAbsentAndHeld(t *testing.T) {
 	}
 }
 
-func TestLocalFileLockInspectionMissingOwnerAndDirtyAreCompromised(t *testing.T) {
+func TestLocalFileLockInspectionIncompleteCrashWindows(t *testing.T) {
+	t.Run("mkdir-before-owner", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "install.lock")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("seed incomplete directory: %v", err)
+		}
+		inspection, err := InspectLocalFileLock(path)
+		if err != nil || inspection.State != LocalFileLockIncomplete {
+			t.Fatalf("inspect incomplete: %#v err=%v", inspection, err)
+		}
+		_, err = RecoverLocalFileLock(path, "owner-a", true)
+		var lockErr *LocalFileLockError
+		if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileCompromised {
+			t.Fatalf("incomplete recovery must fail closed: %#v", err)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("incomplete directory was removed: %v", statErr)
+		}
+	})
+
+	t.Run("owner-removed-before-rmdir", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "install.lock")
+		lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+		if err != nil || !acquired {
+			t.Fatalf("acquire: acquired=%v err=%v", acquired, err)
+		}
+		lock.released = true
+		if err := os.Remove(filepath.Join(path, localFileOwnerName)); err != nil {
+			t.Fatalf("simulate release crash: %v", err)
+		}
+		inspection, err := InspectLocalFileLock(path)
+		if err != nil || inspection.State != LocalFileLockIncomplete {
+			t.Fatalf("inspect release crash: %#v err=%v", inspection, err)
+		}
+		_, err = RecoverLocalFileLock(path, "owner-a", true)
+		var lockErr *LocalFileLockError
+		if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileCompromised {
+			t.Fatalf("release-crash recovery must fail closed: %#v", err)
+		}
+	})
+}
+
+func TestLocalFileLockInspectionDirtyIsCompromised(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
 	if err != nil || !acquired {
@@ -38,14 +80,10 @@ func TestLocalFileLockInspectionMissingOwnerAndDirtyAreCompromised(t *testing.T)
 	if err := os.Remove(filepath.Join(path, localFileOwnerName)); err != nil {
 		t.Fatalf("remove owner: %v", err)
 	}
-	inspection, err := InspectLocalFileLock(path)
-	if err != nil || inspection.State != LocalFileLockCompromised {
-		t.Fatalf("missing owner inspection: %#v err=%v", inspection, err)
-	}
 	if err := os.WriteFile(filepath.Join(path, "unexpected"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed unexpected: %v", err)
 	}
-	inspection, err = InspectLocalFileLock(path)
+	inspection, err := InspectLocalFileLock(path)
 	if err != nil || inspection.State != LocalFileLockCompromised {
 		t.Fatalf("dirty inspection: %#v err=%v", inspection, err)
 	}
