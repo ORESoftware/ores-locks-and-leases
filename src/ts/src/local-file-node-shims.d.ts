@@ -1,3 +1,7 @@
+declare const process: {
+  readonly platform: string;
+};
+
 declare module "node:crypto" {
   export function randomUUID(): string;
 }
@@ -7,6 +11,7 @@ declare module "node:fs/promises" {
     readonly size: number;
     readonly dev: number;
     readonly ino: number;
+    readonly mode: number;
     isDirectory(): boolean;
     isFile(): boolean;
     isSymbolicLink(): boolean;
