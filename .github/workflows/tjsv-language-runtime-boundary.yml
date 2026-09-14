@@ -9,6 +9,7 @@ on:
       - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
+      - 'scripts/verify-language-runtime-hardening.mjs'
       - 'scripts/verify-shared-interfaces-pin.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   push:
@@ -20,6 +21,7 @@ on:
       - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
+      - 'scripts/verify-language-runtime-hardening.mjs'
       - 'scripts/verify-shared-interfaces-pin.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   workflow_dispatch:
@@ -193,6 +195,12 @@ jobs:
           GLEAM_OUTCOME: ${{ steps.gleam.outcome }}
         run: node scripts/verify-language-runtime-boundaries.mjs
 
+      - name: Reject forged parity, Contract IR, and evidence envelopes
+        id: hardening
+        if: always()
+        continue-on-error: true
+        run: node scripts/verify-language-runtime-hardening.mjs
+
       - name: Retain positive and negative TJSV evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -218,8 +226,9 @@ jobs:
           GLEAM_OUTCOME: ${{ steps.gleam.outcome }}
           VALIDATOR_OUTCOME: ${{ steps.validator.outcome }}
           BOUNDARY_OUTCOME: ${{ steps.boundary.outcome }}
+          HARDENING_OUTCOME: ${{ steps.hardening.outcome }}
         run: |
-          for name in SHARED_PIN SHARED_CHECKOUT SHARED_INTERFACES CONTRACTS RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY; do
+          for name in SHARED_PIN SHARED_CHECKOUT SHARED_INTERFACES CONTRACTS RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY HARDENING; do
             eval "value=\${${name}_OUTCOME}"
             printf '%s=%s\n' "$name" "$value"
             test "$value" = success
