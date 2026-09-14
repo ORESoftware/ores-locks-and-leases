@@ -1,0 +1,23 @@
+{
+  "schema": "ores.locks.local-file.v1",
+  "defaults": {
+    "wait": true,
+    "wait_timeout_ms": 30000,
+    "retry_interval_ms": 50
+  },
+  "owner_file": "owner",
+  "error_kinds": [
+    "contention",
+    "timeout",
+    "compromised",
+    "io",
+    "invalid_input"
+  ],
+  "invariants": {
+    "admission": "atomic_mkdir",
+    "release_requires_matching_owner": true,
+    "release_requires_empty_lock_directory_after_owner_removal": true,
+    "automatic_pid_or_mtime_stale_breaking": false,
+    "recursive_delete_on_release": false
+  }
+}
