@@ -1,4 +1,5 @@
 {
   "state": "incomplete",
+  "reason": "owner_marker_missing",
   "message": "lock directory has no owner marker"
 }
