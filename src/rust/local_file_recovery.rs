@@ -18,6 +18,12 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 pub enum LocalFileLockInspectionState {
     Absent,
     Held,
+    /// The rendezvous directory exists but contains no owner marker.
+    ///
+    /// This is the observable crash window either after atomic `mkdir` and
+    /// before owner publication, or after owner removal and before `rmdir`.
+    /// It is never treated as stale authority and is never auto-recovered.
+    Incomplete,
     Compromised,
 }
 
@@ -52,6 +58,11 @@ pub fn inspect_local_file_lock(
         .map_err(|error| io_error(path, "list local lock directory", error))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| io_error(path, "read local lock directory entry", error))?;
+    if entries.is_empty() {
+        return Ok(incomplete(
+            "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+        ));
+    }
     if entries.len() != 1 || entries[0].file_name() != OWNER_FILE {
         return Ok(compromised(
             "lock directory must contain exactly one owner marker",
@@ -106,7 +117,9 @@ pub fn inspect_local_file_lock(
 /// Explicitly recover one clean portable lock after an operator independently
 /// confirms that its previous owner is inactive and protected state is quiescent.
 ///
-/// Returns `Ok(false)` when the lock is already absent.
+/// Returns `Ok(false)` when the lock is already absent. Incomplete crash-window
+/// state is intentionally not removed because no owner identity remains to
+/// authenticate; callers must resolve it out of band rather than stale-steal.
 pub fn recover_local_file_lock(
     path: impl AsRef<Path>,
     expected_owner: &str,
@@ -138,6 +151,13 @@ pub fn recover_local_file_lock(
     let inspection = inspect_local_file_lock(path)?;
     match inspection.state {
         LocalFileLockInspectionState::Absent => return Ok(false),
+        LocalFileLockInspectionState::Incomplete => {
+            return Err(error(
+                LocalFileLockErrorKind::Compromised,
+                path,
+                "incomplete lock state has no owner identity; refusing automatic recovery",
+            ));
+        }
         LocalFileLockInspectionState::Compromised => {
             return Err(error(
                 LocalFileLockErrorKind::Compromised,
@@ -191,6 +211,14 @@ pub fn recover_local_file_lock(
         )
     })?;
     Ok(true)
+}
+
+fn incomplete(message: &str) -> LocalFileLockInspection {
+    LocalFileLockInspection {
+        state: LocalFileLockInspectionState::Incomplete,
+        owner: None,
+        message: Some(message.to_owned()),
+    }
 }
 
 fn compromised(message: &str) -> LocalFileLockInspection {
