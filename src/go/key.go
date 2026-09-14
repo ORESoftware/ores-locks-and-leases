@@ -19,8 +19,11 @@ const MaxLockKeyBytes = 512
 // LockKey is a caller-chosen lock identity. Convention: <org>/<domain>/<name>.
 type LockKey string
 
-// NewLockKey validates the contract's length bound.
+// NewLockKey validates the contract's non-empty 1..512-byte bound.
 func NewLockKey(key string) (LockKey, error) {
+	if len(key) == 0 {
+		return "", fmt.Errorf("lock key must not be empty")
+	}
 	if len(key) > MaxLockKeyBytes {
 		return "", fmt.Errorf("lock key is %d bytes; the contract allows at most %d", len(key), MaxLockKeyBytes)
 	}
