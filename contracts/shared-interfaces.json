@@ -1,7 +1,9 @@
 {
-  "schema": "ores.locks.shared-interfaces-pin/v2",
+  "schema": "ores.locks.shared-interface-policy-pin/v1",
   "repository": "ORESoftware/ores-interfaces",
   "commit": "ec51630b2139a58831280bc7facbeaf21834c1ea",
+  "packageDependency": false,
+  "packageDependencyReason": "No current lock-lib runtime type directly composes a fleet-generic ores-interfaces primitive; add the package edge only with concrete composition.",
   "source": {
     "repository": "ores-otel/ores-interfaces",
     "commit": "3d26d3c0f79277b040e4b0665e6d6e6808f695de"
