@@ -19,7 +19,7 @@ fn main() {
         .next()
         .map(|value| value.parse::<u64>().unwrap_or_else(|_| usage()))
         .unwrap_or(0);
-    if args.next().is_some() {
+    if args.next().is_some() || !matches!(mode.as_str(), "hold" | "try" | "crash") {
         usage();
     }
 
@@ -45,7 +45,7 @@ fn main() {
             io::stdout().flush().expect("flush stdout");
             process::exit(30);
         }
-        _ => usage(),
+        _ => unreachable!("validated mode"),
     }
 
     if let Err(error) = lock.release() {
