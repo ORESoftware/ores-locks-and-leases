@@ -136,7 +136,7 @@ async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Pro
   let handle;
   try {
     handle = await open(ownerPath, "r");
-    const buffer = Buffer.alloc(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
+    const buffer = new Uint8Array(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
     const { bytesRead } = await handle.read(
       buffer,
       0,
