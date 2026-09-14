@@ -1,6 +1,6 @@
 -module(ores_locks_and_leases_local_file_ffi).
 -include_lib("kernel/include/file.hrl").
--export([delete_empty_directory/1, is_directory/1, path_kind/1, write_new_file_status/2]).
+-export([delete_empty_directory/1, is_directory/1, path_kind/1, directory_shape/1, write_new_file_status/2]).
 
 %% file:del_dir/1 returns the atom `ok` on success, while Gleam's Result
 %% representation expects {ok, Value}. Normalize the return shape without
@@ -26,6 +26,18 @@ path_kind(Path) ->
         {ok, #file_info{type = regular}} -> 2;
         {ok, _} -> 3;
         {error, _} -> 4
+    end.
+
+%% 0 means exactly one entry named owner; 1 means dirty/unexpected shape; 2 IO.
+directory_shape(Path) ->
+    case file:list_dir(Path) of
+        {ok, [Only]} ->
+            case unicode:characters_to_binary(Only) of
+                <<"owner">> -> 0;
+                _ -> 1
+            end;
+        {ok, _} -> 1;
+        {error, _} -> 2
     end.
 
 %% Create the owner marker without overwriting an attacker- or race-created
