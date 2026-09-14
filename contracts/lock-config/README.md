@@ -27,7 +27,9 @@ npx --yes \
   ores-contracts check --config contracts/lock-config/contracts.config.json
 ```
 
-Repository audits should additionally run `oresc audit repo` after the sibling `ores-cli` support lands. The fast audit enforces cross-field semantics that are awkward to express portably in both schema authorities, including provider/table agreement, secret environment references, default-profile existence, wait/retry coherence, and renewal cadence.
+Repository audits should additionally run `oresc audit repo` after the sibling `ores-cli` support lands. The fast audit enforces cross-field semantics that are awkward to express portably in both schema authorities, including provider/table agreement, environment-reference kind/secrecy, default-profile existence, wait/retry coherence, and renewal cadence.
+
+`runtime-cases.json` is the portable runtime-admission corpus. It contains complete TOML documents with expected admission/error classes so the Rust loader, repository auditor, and future language runtimes can converge on the same fail-closed boundary without turning either schema authority into generated evidence.
 
 ## Profiles
 
@@ -37,3 +39,10 @@ The checked-in root manifest intentionally provides two reference profiles:
 - `service-composed`: Fiducia + PostgreSQL advisory locking for multi-process/service workloads with fencing and maintained lease renewal.
 
 Consumers may add profiles, but should prefer a small named set selected at process startup. Dynamic per-request mutation of locking policy is intentionally out of scope.
+
+For copyable single-profile starting points, use:
+
+- `examples/local-install.ores-lock.toml`
+- `examples/service-composed.ores-lock.toml`
+
+Both examples store environment-variable names and metadata only; credentials and connection strings remain in the process environment or secret store.
