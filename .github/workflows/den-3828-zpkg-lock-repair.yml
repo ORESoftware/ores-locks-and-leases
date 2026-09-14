@@ -1,4 +1,4 @@
-name: DEN-3828 canonical zpkg lock repair
+name: DEN-3828 canonical zpkg lock repair v2
 
 on:
   push:
