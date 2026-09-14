@@ -2,7 +2,7 @@ import process from "node:process";
 import { try_acquire_local_file_lock } from "../dist/index.js";
 
 function usage() {
-  console.error("usage: local-file-process-probe <hold|try> <path> <owner> [hold_ms]");
+  console.error("usage: local-file-process-probe <hold|try|crash> <path> <owner> [hold_ms]");
   process.exit(2);
 }
 
@@ -21,6 +21,9 @@ try {
   console.log("ACQUIRED");
   if (mode === "hold") {
     await new Promise((resolve) => setTimeout(resolve, holdMs));
+  } else if (mode === "crash") {
+    console.log("CRASHED");
+    process.exit(30);
   } else if (mode !== "try") {
     usage();
   }
