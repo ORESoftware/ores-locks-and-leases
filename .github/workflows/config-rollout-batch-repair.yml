@@ -102,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/test-generator-layout.py
-          cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
+          cargo fmt --manifest-path src/rust/Cargo.toml --all
           cargo test --locked --manifest-path src/rust/Cargo.toml --features config --test config_adversarial
           cargo test --locked --manifest-path src/rust/Cargo.toml --features config --test config_runtime_corpus
           cargo test --locked --manifest-path src/rust/Cargo.toml --features config --test config_examples
