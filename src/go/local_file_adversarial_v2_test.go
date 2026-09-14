@@ -101,6 +101,27 @@ func TestLocalFileLockInspectionRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestLocalFileLockRejectsInvalidUTF8OwnerAtAdmission(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	invalidOwner := string([]byte{0xff})
+	lock, acquired, err := TryAcquireLocalFileLock(path, invalidOwner)
+	if lock != nil || acquired {
+		t.Fatalf("invalid UTF-8 owner unexpectedly acquired: lock=%#v acquired=%v", lock, acquired)
+	}
+	var localErr *LocalFileLockError
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected invalid_input for invalid UTF-8 owner, got %v", err)
+	}
+	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid owner must not create lock state; stat err=%v", statErr)
+	}
+
+	_, err = RecoverLocalFileLock(path, invalidOwner, true)
+	if !errors.As(err, &localErr) || localErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("expected recovery owner to share invalid UTF-8 admission, got %v", err)
+	}
+}
+
 func TestLocalFileLockExistsFailsClosedForIncompleteState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	if err := os.Mkdir(path, 0o700); err != nil {
