@@ -1,0 +1,93 @@
+name: local-file-locks-cross-platform
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/rust/local_file.rs"
+      - "src/rust/lib.rs"
+      - "src/go/local_file.go"
+      - "src/go/local_file_test.go"
+      - "src/ts/src/local-file.ts"
+      - "src/ts/src/index.ts"
+      - "src/ts/test/local-file.test.mjs"
+      - "src/gleam/src/ores_locks_and_leases/local_file.gleam"
+      - "src/gleam/test/local_file_test.gleam"
+      - "src/gleam/gleam.toml"
+      - "src/gleam/manifest.toml"
+      - ".github/workflows/local-file-locks-cross-platform.yml"
+  pull_request:
+    paths:
+      - "src/rust/local_file.rs"
+      - "src/rust/lib.rs"
+      - "src/go/local_file.go"
+      - "src/go/local_file_test.go"
+      - "src/ts/src/local-file.ts"
+      - "src/ts/src/index.ts"
+      - "src/ts/test/local-file.test.mjs"
+      - "src/gleam/src/ores_locks_and_leases/local_file.gleam"
+      - "src/gleam/test/local_file_test.gleam"
+      - "src/gleam/gleam.toml"
+      - "src/gleam/manifest.toml"
+      - ".github/workflows/local-file-locks-cross-platform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-file-locks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-local-locks:
+    name: ${{ matrix.os }} / Rust + Go + TypeScript + Gleam
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.85.1"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "27"
+          gleam-version: "1.16.0"
+          rebar3-version: "3"
+
+      - name: Rust portable local lock tests
+        working-directory: src/rust
+        run: cargo test --locked --no-default-features local_file::tests
+
+      - name: Go portable local lock tests
+        working-directory: src/go
+        run: go test ./... -run LocalFileLock -count=1
+
+      - name: TypeScript portable local lock tests
+        working-directory: src/ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          node --test test/local-file.test.mjs
+
+      - name: Gleam portable local lock tests
+        working-directory: src/gleam
+        run: gleam test
