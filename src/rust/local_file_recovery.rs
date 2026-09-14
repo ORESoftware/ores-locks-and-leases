@@ -1,8 +1,8 @@
 //! Explicit inspection and operator-driven recovery for portable local locks.
 
 use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::Path;
 
 #[cfg(windows)]
@@ -10,6 +10,7 @@ use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
 const OWNER_MAX_CODEPOINTS: usize = 512;
+const OWNER_MAX_UTF8_BYTES: usize = 2048;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -63,8 +64,29 @@ pub fn inspect_local_file_lock(
     if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
         return Ok(compromised("owner token is not an unaliased regular file"));
     }
-    let owner = fs::read_to_string(&owner_path)
+    if owner_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
+        return Ok(compromised(
+            "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+        ));
+    }
+
+    let mut owner_file = File::open(&owner_path)
+        .map_err(|error| io_error(path, "open local lock owner token", error))?;
+    let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
+    owner_file
+        .by_ref()
+        .take((OWNER_MAX_UTF8_BYTES + 1) as u64)
+        .read_to_end(&mut owner_bytes)
         .map_err(|error| io_error(path, "read local lock owner token", error))?;
+    if owner_bytes.len() > OWNER_MAX_UTF8_BYTES {
+        return Ok(compromised(
+            "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+        ));
+    }
+    let owner = match String::from_utf8(owner_bytes) {
+        Ok(owner) => owner,
+        Err(_) => return Ok(compromised("owner token is not valid UTF-8")),
+    };
     if owner.is_empty() {
         return Ok(compromised("owner token is empty"));
     }
