@@ -30,18 +30,19 @@ pub opaque type LockKey {
   LockKey(String)
 }
 
-/// Validate the contract's length bound.
+/// Validate the contract's non-empty 1..512 UTF-8 byte bound.
 pub fn lock_key(key: String) -> Result(LockKey, String) {
   let bytes = bit_array.byte_size(bit_array.from_string(key))
-  case bytes > max_lock_key_bytes {
-    True ->
+  case bytes == 0, bytes > max_lock_key_bytes {
+    True, _ -> Error("lock key must not be empty")
+    _, True ->
       Error(
         "lock key is "
         <> int.to_string(bytes)
         <> " bytes; the contract allows at most "
         <> int.to_string(max_lock_key_bytes),
       )
-    False -> Ok(LockKey(key))
+    False, False -> Ok(LockKey(key))
   }
 }
 
