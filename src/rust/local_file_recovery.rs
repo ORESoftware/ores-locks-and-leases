@@ -1,0 +1,191 @@
+//! Explicit inspection and operator-driven recovery for portable local locks.
+
+use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
+const OWNER_FILE: &str = "owner";
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalFileLockInspectionState {
+    Absent,
+    Held,
+    Compromised,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalFileLockInspection {
+    pub state: LocalFileLockInspectionState,
+    pub owner: Option<String>,
+    pub message: Option<String>,
+}
+
+/// Inspect portable lock state without claiming ownership or mutating it.
+pub fn inspect_local_file_lock(
+    path: impl AsRef<Path>,
+) -> Result<LocalFileLockInspection, LocalFileLockError> {
+    let path = path.as_ref();
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LocalFileLockInspection {
+                state: LocalFileLockInspectionState::Absent,
+                owner: None,
+                message: None,
+            });
+        }
+        Err(error) => return Err(io_error(path, "inspect local lock path", error)),
+    };
+    if !metadata.is_dir() || metadata_is_alias(&metadata) {
+        return Ok(compromised("lock path is not an unaliased directory"));
+    }
+
+    let entries = fs::read_dir(path)
+        .map_err(|error| io_error(path, "list local lock directory", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| io_error(path, "read local lock directory entry", error))?;
+    if entries.len() != 1 || entries[0].file_name() != OWNER_FILE {
+        return Ok(compromised(
+            "lock directory must contain exactly one owner marker",
+        ));
+    }
+
+    let owner_path = path.join(OWNER_FILE);
+    let owner_metadata = fs::symlink_metadata(&owner_path)
+        .map_err(|error| io_error(path, "inspect local lock owner token", error))?;
+    if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
+        return Ok(compromised("owner token is not an unaliased regular file"));
+    }
+    let owner = fs::read_to_string(&owner_path)
+        .map_err(|error| io_error(path, "read local lock owner token", error))?;
+    if owner.is_empty() {
+        return Ok(compromised("owner token is empty"));
+    }
+
+    Ok(LocalFileLockInspection {
+        state: LocalFileLockInspectionState::Held,
+        owner: Some(owner),
+        message: None,
+    })
+}
+
+/// Explicitly recover one clean portable lock after an operator independently
+/// confirms that its previous owner is inactive and protected state is quiescent.
+///
+/// Returns `Ok(false)` when the lock is already absent.
+pub fn recover_local_file_lock(
+    path: impl AsRef<Path>,
+    expected_owner: &str,
+    confirmed_inactive: bool,
+) -> Result<bool, LocalFileLockError> {
+    let path = path.as_ref();
+    if !confirmed_inactive {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "explicit confirmed_inactive=true is required for recovery",
+        ));
+    }
+    if expected_owner.is_empty() {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "expected owner must not be empty",
+        ));
+    }
+
+    let inspection = inspect_local_file_lock(path)?;
+    match inspection.state {
+        LocalFileLockInspectionState::Absent => return Ok(false),
+        LocalFileLockInspectionState::Compromised => {
+            return Err(error(
+                LocalFileLockErrorKind::Compromised,
+                path,
+                inspection
+                    .message
+                    .unwrap_or_else(|| "local lock state is compromised".to_owned()),
+            ));
+        }
+        LocalFileLockInspectionState::Held => {}
+    }
+    if inspection.owner.as_deref() != Some(expected_owner) {
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "owner token does not match expected recovery owner",
+        ));
+    }
+
+    // Re-inspect immediately before destructive action so recovery never relies
+    // on an earlier snapshot after the operator confirmation step.
+    let final_inspection = inspect_local_file_lock(path)?;
+    if final_inspection.state != LocalFileLockInspectionState::Held
+        || final_inspection.owner.as_deref() != Some(expected_owner)
+    {
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "local lock changed during recovery; refusing deletion",
+        ));
+    }
+
+    let owner_path = path.join(OWNER_FILE);
+    fs::remove_file(&owner_path)
+        .map_err(|error| io_error(path, "remove recovered owner token", error))?;
+    fs::remove_dir(path).map_err(|remove_error| {
+        let kind = match fs::read_dir(path) {
+            Ok(mut entries) if entries.next().is_some() => LocalFileLockErrorKind::Compromised,
+            _ => LocalFileLockErrorKind::Io,
+        };
+        error(
+            kind,
+            path,
+            format!("remove recovered lock directory failed: {remove_error}"),
+        )
+    })?;
+    Ok(true)
+}
+
+fn compromised(message: &str) -> LocalFileLockInspection {
+    LocalFileLockInspection {
+        state: LocalFileLockInspectionState::Compromised,
+        owner: None,
+        message: Some(message.to_owned()),
+    }
+}
+
+fn error(kind: LocalFileLockErrorKind, path: &Path, message: impl Into<String>) -> LocalFileLockError {
+    LocalFileLockError {
+        kind,
+        path: path.to_path_buf(),
+        message: message.into(),
+    }
+}
+
+fn io_error(path: &Path, operation: &str, source: io::Error) -> LocalFileLockError {
+    error(
+        LocalFileLockErrorKind::Io,
+        path,
+        format!("{operation} failed: {source}"),
+    )
+}
+
+fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
