@@ -37,6 +37,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	if !info.IsDir() || localFileInfoIsAlias(info) {
 		return compromisedInspection("lock path is not an unaliased directory"), nil
 	}
+	if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
+		return compromisedInspection(err.Error()), nil
+	}
 
 	// Two names are enough to distinguish empty, exactly-owner, and dirty.
 	// Never enumerate an arbitrarily large attacker-expanded directory.
@@ -66,6 +69,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		if errors.As(err, &localErr) && localErr.Kind == LocalFileCompromised && errors.Is(localErr.Cause, os.ErrNotExist) {
 			return incompleteInspection("owner token disappeared during inspection"), nil
 		}
+		if errors.As(err, &localErr) && localErr.Kind == LocalFileCompromised {
+			return compromisedInspection(localErr.Message), nil
+		}
 		return LocalFileLockInspection{}, err
 	}
 	if len(owner) == 0 {
@@ -94,6 +100,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 	if !pathInfo.Mode().IsRegular() || localFileInfoIsAlias(pathInfo) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token is not an unaliased regular file", nil)
 	}
+	if err := validateLocalPOSIXPrivateMode(lockPath, pathInfo, "owner token", 0o077); err != nil {
+		return nil, err
+	}
 	if pathInfo.Size() > int64(localFileOwnerMaxUTF8Bytes) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token exceeds the portable 2048-byte UTF-8 storage bound", nil)
 	}
@@ -112,6 +121,9 @@ func readBoundedLocalFileLockOwner(lockPath, ownerPath string) ([]byte, error) {
 	}
 	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token identity changed while opening; refusing raced path-to-handle state", nil)
+	}
+	if err := validateLocalPOSIXPrivateMode(lockPath, openedInfo, "opened owner token", 0o077); err != nil {
+		return nil, err
 	}
 	if openedInfo.Size() > int64(localFileOwnerMaxUTF8Bytes) {
 		return nil, localFileError(LocalFileCompromised, lockPath, "owner token exceeds the portable 2048-byte UTF-8 storage bound", nil)
