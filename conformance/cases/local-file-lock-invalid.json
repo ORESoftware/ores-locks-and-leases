@@ -1,0 +1,26 @@
+{
+  "schema": "ores.locks.local-file.invalid.v1",
+  "cases": [
+    {
+      "name": "empty-owner",
+      "owner": "",
+      "expect_error": "invalid_input"
+    },
+    {
+      "name": "zero-timeout-under-contention",
+      "owner": "owner-b",
+      "wait": true,
+      "wait_timeout_ms": 0,
+      "retry_interval_ms": 50,
+      "expect_error": "timeout"
+    },
+    {
+      "name": "no-wait-under-contention",
+      "owner": "owner-b",
+      "wait": false,
+      "wait_timeout_ms": 30000,
+      "retry_interval_ms": 50,
+      "expect_error": "contention"
+    }
+  ]
+}
