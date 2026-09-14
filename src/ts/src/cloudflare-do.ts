@@ -14,14 +14,16 @@ export interface CloudflareDurableObjectLeaseOptions {
   readonly generateHolder?: () => string;
 }
 
+const MAX_U64 = (1n << 64n) - 1n;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function asBigInt(value: unknown): bigint | undefined {
-  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
-  return undefined;
+function asFencingToken(value: unknown): bigint | undefined {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,19}$/.test(value)) return undefined;
+  const parsed = BigInt(value);
+  return parsed <= MAX_U64 ? parsed : undefined;
 }
 
 function asSafeMs(value: unknown): number | undefined {
@@ -91,9 +93,12 @@ export class CloudflareDurableObjectLease implements Lease {
     for (;;) {
       const out = await this.#post("/v1/leases/acquire", key, { key, holder, ttl_ms: opts.ttlMs });
       if (out["acquired"] === true) {
-        const fencingToken = asBigInt(out["fencing_token"]);
+        const fencingToken = asFencingToken(out["fencing_token"]);
         if (fencingToken === undefined) {
-          throw LockError.transport(key, new Error("cloudflare-do: acquired without a valid fencing token"));
+          throw LockError.transport(
+            key,
+            new Error("cloudflare-do: acquired without a canonical positive u64 fencing token"),
+          );
         }
         const leaseExpiresMs = asSafeMs(out["lease_expires_ms"]);
         return leaseExpiresMs === undefined
