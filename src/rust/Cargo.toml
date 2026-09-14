@@ -8,6 +8,11 @@ description = "Composed distributed locking for the ORESoftware fleet: a fenced 
 repository = "https://github.com/ORESoftware/ores-locks-and-leases"
 keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing"]
 categories = ["concurrency", "database"]
+# The Fiducia adapter intentionally consumes a Git-only client today. Cargo
+# rewrites Git dependencies to registry dependencies when publishing, so this
+# crate is distributed through Git/zed-pkg until that upstream release chain is
+# deliberately promoted to crates.io.
+publish = false
 
 # The Rust slice of a polyglot zed-package. Go, TypeScript and Gleam slices
 # sit beside it under `src/`, held to the same `conformance/cases/*.json`.
@@ -32,10 +37,11 @@ sea-orm = { version = "1", default-features = false, features = [
   "sqlx-postgres",
   "runtime-tokio-rustls",
 ], optional = true }
-# Keep the immutable Git revision for source authority, but also declare the
-# package version Cargo requires when producing a distributable .crate. The
-# corresponding fiducia-client manifest at this revision is version 0.1.0.
-fiducia-client = { version = "0.1.0", git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
+# Git revision is the source authority. Do not add a crates.io version until
+# fiducia-client and its generated fiducia-interfaces dependency are actually
+# published; a fake registry fallback makes `cargo package` look viable while
+# producing a package consumers cannot resolve.
+fiducia-client = { git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
 tokio = { version = "1", features = ["macros", "time"], optional = true }
 
 [dev-dependencies]
