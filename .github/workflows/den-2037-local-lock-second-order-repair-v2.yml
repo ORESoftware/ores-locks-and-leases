@@ -1,0 +1,110 @@
+name: DEN-2037 local-lock second-order repair v2
+
+on:
+  push:
+    branches: [den-2037-local-lock-second-order-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-2037-local-lock-second-order-repair-v2
+  cancel-in-progress: true
+
+jobs:
+  repair-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: den-2037-local-lock-second-order-v1
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '22' }
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with: { toolchain: '1.85.1', components: 'rustfmt,clippy' }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.22', cache: false }
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
+
+      - name: Apply deterministic hardening patch
+        run: |
+          node scripts/den-2037-second-order-repair.mjs
+          node scripts/den-2037-second-order-hotfix.mjs
+
+      - name: Format changed native slices
+        run: |
+          rustfmt --edition 2021 src/rust/local_file.rs src/rust/local_file_recovery.rs
+          gofmt -w src/go/local_file.go src/go/local_file_recovery.go src/go/local_file_second_order_test.go
+          (cd src/gleam && gleam format src/ores_locks_and_leases/local_file.gleam)
+
+      - name: Validate conformance corpus
+        run: node scripts/check-local-file-corpus.mjs
+
+      - name: Test Rust local-lock hardening
+        run: |
+          cargo test --locked --manifest-path src/rust/Cargo.toml --lib local_file::tests
+          cargo test --locked --manifest-path src/rust/Cargo.toml --test local_file_adversarial_v2
+          cargo test --locked --manifest-path src/rust/Cargo.toml --test local_file_recovery
+
+      - name: Test Go local-lock hardening
+        working-directory: src/go
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Test TypeScript local-lock hardening
+        working-directory: src/ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Test Gleam local-lock hardening
+        working-directory: src/gleam
+        run: gleam test
+
+      - name: Remove one-shot repair machinery
+        run: |
+          rm scripts/den-2037-second-order-repair.mjs
+          rm scripts/den-2037-second-order-hotfix.mjs
+          rm .github/workflows/den-2037-local-lock-second-order-repair.yml
+          rm .github/workflows/den-2037-local-lock-second-order-repair-v2.yml
+
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          git status --short
+
+      - name: Commit and push verified repair
+        env:
+          BRANCH: den-2037-local-lock-second-order-v1
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            conformance/cases/local-file-lock.json \
+            scripts/check-local-file-corpus.mjs \
+            src/rust/local_file.rs \
+            src/rust/local_file_recovery.rs \
+            src/go/local_file.go \
+            src/go/local_file_recovery.go \
+            src/go/local_file_second_order_test.go \
+            src/ts/src/local-file.ts \
+            src/ts/src/local-file-recovery.ts \
+            src/ts/src/local-file-node-shims.d.ts \
+            src/ts/test/local-file-adversarial-v2.test.mjs \
+            src/gleam/src/ores_locks_and_leases/local_file.gleam \
+            src/gleam/src/ores_locks_and_leases_local_file_ffi.erl \
+            scripts/den-2037-second-order-repair.mjs \
+            scripts/den-2037-second-order-hotfix.mjs \
+            .github/workflows/den-2037-local-lock-second-order-repair.yml \
+            .github/workflows/den-2037-local-lock-second-order-repair-v2.yml
+          git diff --cached --check
+          git commit -m 'fix(DEN-2037): harden bounded local lock state reads'
+          git push origin "HEAD:${BRANCH}"
