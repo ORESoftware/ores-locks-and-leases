@@ -27,6 +27,18 @@ enum LocalFileLockInspectionState {
   compromised: "compromised",
 }
 
+enum LocalFileLockInspectionReason {
+  ownerMarkerMissing: "owner_marker_missing",
+  pathNotDirectory: "path_not_directory",
+  dirtyDirectory: "dirty_directory",
+  ownerNotRegularFile: "owner_not_regular_file",
+  ownerTooLarge: "owner_too_large",
+  ownerInvalidUtf8: "owner_invalid_utf8",
+  ownerIdentityChanged: "owner_identity_changed",
+  permissionsWidened: "permissions_widened",
+  ownerContractViolation: "owner_contract_violation",
+}
+
 enum ScopedLocalFileLockOutcomeKind {
   success: "success",
   lockError: "lock_error",
@@ -65,12 +77,14 @@ union LocalFileLockInspection {
   },
   incomplete: {
     state: "incomplete";
+    reason: "owner_marker_missing";
 
     @minLength(1)
     message: string;
   },
   compromised: {
     state: "compromised";
+    reason: LocalFileLockInspectionReason;
 
     @minLength(1)
     message: string;
