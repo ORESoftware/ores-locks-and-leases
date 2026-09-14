@@ -100,6 +100,7 @@ jobs:
           cargo test --locked --no-default-features local_file
           cargo test --locked --no-default-features --test local_file_fail_closed
           cargo test --locked --no-default-features --test local_file_scoped
+          cargo test --locked --no-default-features --test local_file_recovery
 
       - name: Go portable local lock tests
         working-directory: src/go
@@ -110,7 +111,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs
+          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs test/local-file-recovery.test.mjs
 
       - name: Gleam portable local lock tests
         working-directory: src/gleam
