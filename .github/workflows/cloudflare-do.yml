@@ -15,14 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           show-progress: false
+      - name: Assert raw PR head checkout
+        if: github.event_name == 'pull_request'
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
       - name: Validate Durable Object deployment contract
         run: |
           node --check managed/cloudflare-do/src/index.js
+          node --check managed/cloudflare-do/src/http-boundary.js
           grep -F 'class_name = "LockLeaseObject"' managed/cloudflare-do/wrangler.toml
           grep -F 'new_sqlite_classes = ["LockLeaseObject"]' managed/cloudflare-do/wrangler.toml
       - name: Verify Wrangler-generated Durable Object RPC binding types
@@ -32,5 +37,5 @@ jobs:
           grep -F 'LOCKS: DurableObjectNamespace<' worker-configuration.generated.d.ts
           grep -F 'LockLeaseObject' worker-configuration.generated.d.ts
           rm worker-configuration.generated.d.ts
-      - name: Exercise Durable Object fencing state machine
+      - name: Exercise Durable Object fencing state machine and HTTP boundary
         run: node --test managed/cloudflare-do/test.mjs
