@@ -1,24 +1,36 @@
 /**
- * @oresoftware/locks-and-leases — composed distributed locking for the
- * ORESoftware fleet: a fenced lease authority around a Postgres advisory
- * lock, each layer individually switchable, with fencing tokens threaded
- * through to the guarded work.
+ * @oresoftware/locks-and-leases — local and distributed locking for the
+ * ORESoftware fleet.
  *
- * Fiducia, Cloudflare Durable Objects, and managed Redis all implement the
- * same `Lease` interface. The v1 conformance corpus retains historical
- * `fiducia.*` step names for the outer lease layer.
+ * Local single-host filesystem locks are deliberately separate from the
+ * distributed fenced-lease + Postgres plan. Fiducia, Cloudflare Durable
+ * Objects, and managed Redis all implement the distributed `Lease` interface.
+ * The v1 conformance corpus retains historical `fiducia.*` step names for the
+ * outer distributed lease layer.
  *
  * ```text
- * lease.acquire ─► pg.begin ─► pg.advisory_xact_lock ─► work/renew* ─► lease.renew ─► pg.commit ─► lease.release
+ * local-only: mkdir(lock) -> write owner -> work -> verify owner -> rmdir(lock)
+ * distributed: lease.acquire -> pg.begin -> pg.advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
  * ```
  *
- * The TypeScript slice of ORESoftware/ores-locks-and-leases; held to the same
- * `conformance/cases/*.json` as the Rust, Go, Dart and Gleam slices.
+ * The TypeScript slice of ORESoftware/ores-locks-and-leases; distributed
+ * contracts are held to the same `conformance/cases/*.json` as the Rust, Go,
+ * Dart and Gleam slices.
  */
 
 export { MAX_LOCK_KEY_BYTES, advisoryKey, fnv1a64, lockKey, type LockKey } from "./key.js";
 export * from "./fence.js";
 export * from "./renewal.js";
+export {
+  LocalFileLock,
+  LocalFileLockError,
+  DEFAULT_LOCAL_FILE_LOCK_OPTIONS,
+  acquire_local_file_lock,
+  local_file_lock_exists,
+  try_acquire_local_file_lock,
+  type LocalFileLockErrorKind,
+  type LocalFileLockOptions,
+} from "./local-file.js";
 export {
   ALL_STEPS,
   LAYERS_BOTH,
