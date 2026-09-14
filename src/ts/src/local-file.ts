@@ -342,6 +342,13 @@ export async function read_bounded_local_file_lock_owner(
         "owner token is not an unaliased regular file",
       );
     }
+    if (pathMetadata.nlink !== 1) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token has multiple filesystem links; refusing aliased ownership state",
+      );
+    }
     validate_posix_private_mode(lockPath, pathMetadata.mode, "owner token");
     if (pathMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
@@ -356,13 +363,14 @@ export async function read_bounded_local_file_lock_owner(
     if (
       !openedMetadata.isFile() ||
       openedMetadata.isSymbolicLink() ||
+      openedMetadata.nlink !== 1 ||
       openedMetadata.dev !== pathMetadata.dev ||
       openedMetadata.ino !== pathMetadata.ino
     ) {
       throw new LocalFileLockError(
         "compromised",
         lockPath,
-        "owner token identity changed while opening; refusing raced path-to-handle state",
+        "owner token identity changed or became multiply linked while opening; refusing raced path-to-handle state",
       );
     }
     validate_posix_private_mode(lockPath, openedMetadata.mode, "opened owner token");
@@ -547,14 +555,17 @@ function validate_posix_private_mode(lockPath: string, mode: number, label: stri
 async function validate_regular_file(lock_path: string, path: string, label: string): Promise<void> {
   try {
     const metadata = await lstat(path);
-    if (metadata.isFile() && !metadata.isSymbolicLink()) {
+    if (metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1) {
       validate_posix_private_mode(lock_path, metadata.mode, label);
       return;
     }
+    const detail = metadata.isFile() && metadata.nlink !== 1
+      ? `${label} has multiple filesystem links`
+      : `${label} is not an unaliased regular file`;
     throw new LocalFileLockError(
       "compromised",
       lock_path,
-      `${label} is not an unaliased regular file`,
+      detail,
     );
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
