@@ -14,6 +14,14 @@ directory from aliases that can redirect ownership checks.
 - release/recovery never recursively deletes a directory to paper over
   ambiguous identity.
 
+Acquisition classifies an existing lock root before attempting recursive
+directory creation. That ordering is part of the contract: a pre-existing
+symlink, junction, or other alias must be reported as `compromised`, not passed
+to a convenience `mkdir -p` equivalent where a runtime could follow the alias
+or downgrade the result to a generic I/O error. A root that is genuinely absent
+may be created, but its identity is checked again before the lock rendezvous is
+created beneath it.
+
 The immediate-parent rule is intentionally narrow. It protects the lock root
 that the caller selected without trying to impose a universal canonicalization
 policy on every ancestor of an absolute path (for example, operating systems
