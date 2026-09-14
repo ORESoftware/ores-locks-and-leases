@@ -26,6 +26,10 @@ export interface AcquireOptions {
   readonly retryIntervalMs: number;
   /** Caller identity for the fiducia layer; also the release key. Absent: a generated id. */
   readonly holder?: string;
+  /** Stable logical acquisition identity. Fiducia reuses it across polls and cancellation. */
+  readonly requestId?: string;
+  /** Optional caller cancellation. Fiducia performs safe queued-request cleanup before returning. */
+  readonly signal?: AbortSignal;
 }
 
 /** Mirrors the official fiducia clients: 60s lease, 30s wait budget, 250ms poll. */
