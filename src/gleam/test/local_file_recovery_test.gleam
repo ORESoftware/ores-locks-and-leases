@@ -1,4 +1,5 @@
 import gleam/option.{None, Some}
+import gleam/string
 import gleeunit/should
 import ores_locks_and_leases/local_file
 import ores_locks_and_leases/local_file_recovery
@@ -52,6 +53,25 @@ pub fn inspect_missing_owner_and_dirty_directory_are_compromised_test() {
   clean(root)
 }
 
+pub fn inspect_oversized_persisted_owner_is_compromised_test() {
+  let root = "./.tmp-local-file-recovery/oversized-persisted-owner"
+  clean(root)
+  let assert Ok(Some(lock)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let path = local_file.local_file_lock_path(lock)
+  let assert Ok(Nil) =
+    simplifile.write(
+      to: path <> "/owner",
+      contents: string.repeat("😀", 513),
+    )
+  let assert Ok(local_file_recovery.LocalFileLockInspection(
+    local_file_recovery.Compromised,
+    _,
+    _,
+  )) = local_file_recovery.inspect(root, "install.lock")
+  clean(root)
+}
+
 pub fn recovery_requires_confirmation_and_exact_owner_test() {
   let root = "./.tmp-local-file-recovery/gates"
   clean(root)
@@ -76,6 +96,20 @@ pub fn recovery_requires_confirmation_and_exact_owner_test() {
       None,
     )),
   )
+  clean(root)
+}
+
+pub fn recovery_rejects_oversized_expected_owner_test() {
+  let root = "./.tmp-local-file-recovery/oversized-expected-owner"
+  clean(root)
+  let assert Error(error) =
+    local_file_recovery.recover(
+      root,
+      "absent.lock",
+      string.repeat("😀", 513),
+      True,
+    )
+  error.kind |> should.equal(local_file.InvalidInput)
   clean(root)
 }
 
