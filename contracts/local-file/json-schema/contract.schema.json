@@ -62,14 +62,43 @@
       "required": ["path", "owner", "released"]
     },
     "LocalFileLockInspection": {
-      "type": "object",
-      "unevaluatedProperties": false,
-      "properties": {
-        "state": { "$ref": "#/$defs/LocalFileLockInspectionState" },
-        "owner": { "$ref": "#/$defs/LocalFileLockOwner" },
-        "message": { "type": "string", "minLength": 1 }
-      },
-      "required": ["state"]
+      "oneOf": [
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "absent" }
+          },
+          "required": ["state"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "held" },
+            "owner": { "$ref": "#/$defs/LocalFileLockOwner" }
+          },
+          "required": ["state", "owner"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "incomplete" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "required": ["state", "message"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "compromised" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "required": ["state", "message"]
+        }
+      ]
     },
     "LocalFileLockRecoveryRequest": {
       "type": "object",
