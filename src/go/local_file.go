@@ -1,6 +1,8 @@
 package oreslocks
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 
 const localFileOwnerName = "owner"
 const localFileOwnerMaxCodepoints = 512
+const localFileOwnerMaxUTF8Bytes = localFileOwnerMaxCodepoints * 4
 
 // LocalFileLockErrorKind classifies failures from the portable single-host
 // filesystem backend.
@@ -53,6 +56,17 @@ func DefaultLocalFileLockOptions() LocalFileLockOptions {
 		WaitTimeout:   30 * time.Second,
 		RetryInterval: 50 * time.Millisecond,
 	}
+}
+
+// GeneratedLocalFileLockOwner returns a fresh OS-CSPRNG-backed owner identity.
+// It deliberately has no PID/time fallback because a weak fallback would turn
+// an entropy failure into an ownership-identity failure.
+func GeneratedLocalFileLockOwner() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate local lock owner identity: %w", err)
+	}
+	return "ores-locks-" + hex.EncodeToString(raw[:]), nil
 }
 
 // LocalFileLock is a held portable filesystem lock. Atomic directory creation
@@ -179,15 +193,9 @@ func (l *LocalFileLock) Release() error {
 	}
 
 	ownerPath := filepath.Join(l.path, localFileOwnerName)
-	if err := validateLocalRegularFile(l.path, ownerPath, "owner token"); err != nil {
-		return err
-	}
-	observed, err := os.ReadFile(ownerPath)
+	observed, err := readBoundedLocalFileLockOwner(l.path, ownerPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return localFileError(LocalFileCompromised, l.path, "owner token is missing; refusing to treat externally altered lock state as a successful release", err)
-		}
-		return localFileError(LocalFileIO, l.path, "read local lock owner token failed", err)
+		return err
 	}
 	if string(observed) != l.owner {
 		return localFileError(
@@ -203,11 +211,14 @@ func (l *LocalFileLock) Release() error {
 	}
 	if err := os.Remove(l.path); err != nil {
 		kind := LocalFileIO
-		// Do not depend on platform-specific errno values here. If the directory
-		// is still readable and contains an unexpected entry, ownership has been
-		// compromised and recursive cleanup would be unsafe.
-		if entries, readErr := os.ReadDir(l.path); readErr == nil && len(entries) > 0 {
-			kind = LocalFileCompromised
+		// Read at most one entry: a single unexpected child is sufficient to
+		// classify the state as compromised without enumerating a hostile tree.
+		if dir, openErr := os.Open(l.path); openErr == nil {
+			names, readErr := dir.Readdirnames(1)
+			_ = dir.Close()
+			if readErr == nil && len(names) > 0 {
+				kind = LocalFileCompromised
+			}
 		}
 		return localFileError(kind, l.path, "remove local lock directory failed", err)
 	}
@@ -215,25 +226,32 @@ func (l *LocalFileLock) Release() error {
 	return nil
 }
 
-// LocalFileLockExists is diagnostics only; callers must still acquire before
-// treating themselves as owner.
+// LocalFileLockExists is a compatibility diagnostic. It returns true only for
+// a structurally healthy held lock, false only when absent, and fails closed on
+// incomplete or compromised state. Prefer InspectLocalFileLock for new code.
 func LocalFileLockExists(path string) (bool, error) {
-	info, err := os.Lstat(path)
-	if err == nil {
-		if info.IsDir() && !localFileInfoIsAlias(info) {
-			return true, nil
-		}
-		return false, localFileError(LocalFileCompromised, path, "lock path exists but is not an unaliased directory", nil)
+	inspection, err := InspectLocalFileLock(path)
+	if err != nil {
+		return false, err
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	switch inspection.State {
+	case LocalFileLockAbsent:
 		return false, nil
+	case LocalFileLockHeld:
+		return true, nil
+	case LocalFileLockIncomplete:
+		return false, localFileError(LocalFileCompromised, path, "local lock is incomplete; boolean existence cannot certify ownership", nil)
+	default:
+		return false, localFileError(LocalFileCompromised, path, inspection.Message, nil)
 	}
-	return false, localFileError(LocalFileIO, path, "inspect local lock path failed", err)
 }
 
 func validateLocalOwner(path, owner string) error {
 	if owner == "" {
 		return localFileError(LocalFileInvalidInput, path, "owner token must not be empty", nil)
+	}
+	if !utf8.ValidString(owner) {
+		return localFileError(LocalFileInvalidInput, path, "owner token must be valid UTF-8 Unicode scalar data", nil)
 	}
 	if utf8.RuneCountInString(owner) > localFileOwnerMaxCodepoints {
 		return localFileError(LocalFileInvalidInput, path, "owner token must not exceed 512 Unicode code points", nil)
