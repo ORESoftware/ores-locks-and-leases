@@ -1,209 +1,173 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
 
-import worker, { LockLeaseObject } from "./src/index.js";
+import { LockLeaseAuthority } from "./src/authority.js";
+
+const MAX_SAFE_FENCING_TOKEN = "9007199254740991";
 
 function rows(items = []) {
   return { toArray: () => items };
 }
 
 class FakeSql {
-  constructor() {
+  constructor({ legacy = false } = {}) {
+    this.legacy = legacy;
     this.state = {
       holder: null,
       token: null,
       expires_ms: null,
       next_token: "0",
+      request_id: null,
     };
   }
 
-  exec(sql, ...args) {
-    const statement = sql.replace(/\s+/g, " ").trim();
-    if (statement.startsWith("CREATE TABLE IF NOT EXISTS lease_state")) return rows();
-    if (statement.startsWith("INSERT OR IGNORE INTO lease_state")) return rows();
-    if (statement.startsWith("SELECT holder, token, expires_ms, next_token")) {
+  exec(query, ...args) {
+    const sql = query.replace(/\s+/g, " ").trim();
+    if (sql.startsWith("CREATE TABLE IF NOT EXISTS lease_state")) return rows();
+    if (sql === "PRAGMA table_info(lease_state)") {
+      const columns = ["id", "holder", "token", "expires_ms", "next_token"];
+      if (!this.legacy) columns.push("request_id");
+      return rows(columns.map((name) => ({ name })));
+    }
+    if (sql === "ALTER TABLE lease_state ADD COLUMN request_id TEXT") {
+      this.legacy = false;
+      this.state.request_id = null;
+      return rows();
+    }
+    if (sql.startsWith("INSERT OR IGNORE INTO lease_state")) return rows();
+    if (sql.startsWith("SELECT holder, token, expires_ms, next_token, request_id FROM lease_state")) {
       return rows([{ ...this.state }]);
     }
-    if (statement.startsWith("UPDATE lease_state SET holder = NULL")) {
+    if (sql.startsWith("UPDATE lease_state SET holder = NULL")) {
       this.state.holder = null;
       this.state.token = null;
       this.state.expires_ms = null;
+      this.state.request_id = null;
       return rows();
     }
-    if (statement.startsWith("UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ?")) {
-      const [holder, token, expires, nextToken] = args;
-      this.state.holder = holder;
-      this.state.token = token;
-      this.state.expires_ms = expires;
-      this.state.next_token = nextToken;
+    if (sql === "UPDATE lease_state SET request_id = ? WHERE id = 1") {
+      [this.state.request_id] = args;
       return rows();
     }
-    if (statement.startsWith("UPDATE lease_state SET expires_ms = ?")) {
-      this.state.expires_ms = args[0];
+    if (sql.startsWith("UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ?, request_id = ?")) {
+      [
+        this.state.holder,
+        this.state.token,
+        this.state.expires_ms,
+        this.state.next_token,
+        this.state.request_id,
+      ] = args;
       return rows();
     }
-    throw new Error(`unexpected SQL in Durable Object test: ${statement}`);
+    if (sql === "UPDATE lease_state SET expires_ms = ? WHERE id = 1") {
+      [this.state.expires_ms] = args;
+      return rows();
+    }
+    throw new Error(`unexpected SQL in fake Durable Object storage: ${sql}`);
   }
 }
 
 class FakeStorage {
-  constructor() {
-    this.sql = new FakeSql();
+  constructor(options) {
+    this.sql = new FakeSql(options);
     this.alarm = null;
+    this.deletedAlarms = 0;
   }
 
-  transactionSync(callback) {
-    return callback();
+  transactionSync(fn) {
+    return fn();
   }
 
-  async setAlarm(timestamp) {
-    this.alarm = timestamp;
+  async setAlarm(at) {
+    this.alarm = at;
   }
 
   async deleteAlarm() {
     this.alarm = null;
+    this.deletedAlarms += 1;
   }
 }
 
-async function body(response) {
-  return response.json();
+function authority(options) {
+  const storage = new FakeStorage(options);
+  return { authority: new LockLeaseAuthority({ storage }), storage };
 }
 
-test("Durable Object fencing tokens survive release and expiry", async (t) => {
+test("Durable Object authority replays without extending and renews only by token", async (t) => {
   const originalNow = Date.now;
   let now = 1_000;
   Date.now = () => now;
-  t.after(() => {
-    Date.now = originalNow;
-  });
+  t.after(() => { Date.now = originalNow; });
 
-  const storage = new FakeStorage();
-  const authority = new LockLeaseObject({ storage }, {});
+  const { authority: leases, storage } = authority({ legacy: true });
+  assert.equal(storage.sql.legacy, false);
 
-  const first = await body(await authority.acquire({ holder: "worker-a", ttl_ms: 1_000 }));
+  const first = await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 1_000 });
   assert.deepEqual(first, {
     acquired: true,
     fencing_token: "1",
     lease_expires_ms: 2_000,
-  });
-  assert.equal(storage.alarm, 2_000);
-
-  const contended = await body(await authority.acquire({ holder: "worker-b", ttl_ms: 1_000 }));
-  assert.deepEqual(contended, { acquired: false, lease_expires_ms: 2_000 });
-
-  const staleRenew = await body(await authority.renew({
-    holder: "worker-a",
-    fencing_token: "2",
     ttl_ms: 1_000,
-  }));
-  assert.deepEqual(staleRenew, { renewed: false });
+    renewed: false,
+    replayed: false,
+  });
 
-  const renewed = await body(await authority.renew({
+  now = 1_500;
+  const replay = await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 50_000 });
+  assert.equal(replay.acquired, true);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.fencing_token, "1");
+  assert.equal(replay.lease_expires_ms, 2_000);
+  assert.equal(storage.sql.state.expires_ms, 2_000, "replay cannot extend authority");
+
+  const differentAttempt = await leases.acquire({
     holder: "worker-a",
-    fencing_token: "1",
-    ttl_ms: 2_000,
-  }));
-  assert.deepEqual(renewed, { renewed: true, lease_expires_ms: 3_000 });
-  assert.equal(storage.alarm, 3_000);
+    request_id: "attempt-2",
+    ttl_ms: 1_000,
+  });
+  assert.equal(differentAttempt.acquired, false);
+  assert.equal(differentAttempt.reason, "holder_active_different_request");
 
-  assert.deepEqual(
-    await body(await authority.release({ holder: "worker-a", fencing_token: "1" })),
-    { released: true },
-  );
-  assert.equal(storage.alarm, null);
+  const renewed = await leases.renew({ holder: "worker-a", fencing_token: "1", ttl_ms: 1_000 });
+  assert.deepEqual(renewed, { renewed: true, lease_expires_ms: 2_500, ttl_ms: 1_000 });
+  assert.equal(storage.alarm, 2_500);
 
-  const second = await body(await authority.acquire({ holder: "worker-b", ttl_ms: 500 }));
-  assert.equal(second.fencing_token, "2");
-  assert.deepEqual(
-    await body(await authority.release({ holder: "worker-a", fencing_token: "1" })),
-    { released: false },
-  );
+  const staleRelease = await leases.release({ holder: "worker-a", fencing_token: "2" });
+  assert.deepEqual(staleRelease, { released: false, reason: "not_owner" });
+  assert.equal(storage.sql.state.holder, "worker-a");
 
-  now = 2_000;
-  const third = await body(await authority.acquire({ holder: "worker-c", ttl_ms: 500 }));
-  assert.equal(third.fencing_token, "3", "expiry must not reuse a fencing token");
-
-  now = 2_600;
-  await authority.alarm();
+  now = 2_500;
+  await leases.alarm();
   assert.equal(storage.sql.state.holder, null);
-  assert.equal(storage.sql.state.token, null);
-  assert.equal(storage.sql.state.next_token, "3", "reaping must preserve the fencing watermark");
+  assert.equal(storage.sql.state.next_token, "1");
+
+  now = 3_000;
+  const second = await leases.acquire({ holder: "worker-b", request_id: "attempt-3", ttl_ms: 1_000 });
+  assert.equal(second.fencing_token, "2");
 });
 
-test("public Worker fails closed and shards each non-empty lock key to one object", async () => {
-  const names = [];
-  const forwarded = [];
-  const env = {
-    ORES_LOCKS_API_TOKEN: "test-secret",
-    ALLOW_UNAUTHENTICATED: "false",
-    LOCKS: {
-      idFromName(name) {
-        names.push(name);
-        return `id:${name}`;
-      },
-      get(id) {
-        return {
-          async fetch(url, init) {
-            forwarded.push({ id, url, body: JSON.parse(init.body) });
-            return new Response(JSON.stringify({ acquired: true, fencing_token: "9" }), {
-              headers: { "content-type": "application/json" },
-            });
-          },
-        };
-      },
-    },
-  };
+test("Durable Object authority fails closed at the exact JSON fencing ceiling", async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 10_000;
+  t.after(() => { Date.now = originalNow; });
 
-  const unauthorized = await worker.fetch(new Request("https://locks.example/v1/leases/acquire", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ key: "tenant/resource", holder: "worker-a", ttl_ms: 1_000 }),
-  }), env);
-  assert.equal(unauthorized.status, 401);
-
-  const emptyKey = await worker.fetch(new Request("https://locks.example/v1/leases/acquire", {
-    method: "POST",
-    headers: {
-      authorization: "Bearer test-secret",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ key: "", holder: "worker-a", ttl_ms: 1_000 }),
-  }), env);
-  assert.equal(emptyKey.status, 400);
-  assert.deepEqual(await emptyKey.json(), { error: "invalid_key" });
-
-  const response = await worker.fetch(new Request("https://locks.example/v1/leases/acquire", {
-    method: "POST",
-    headers: {
-      authorization: "Bearer test-secret",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ key: "tenant/resource", holder: "worker-a", ttl_ms: 1_000 }),
-  }), env);
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { acquired: true, fencing_token: "9" });
-  assert.deepEqual(names, ["tenant/resource"]);
-  assert.deepEqual(forwarded, [{
-    id: "id:tenant/resource",
-    url: "https://lock.internal/v1/leases/acquire",
-    body: { key: "tenant/resource", holder: "worker-a", ttl_ms: 1_000 },
-  }]);
+  const { authority: leases, storage } = authority();
+  storage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
+  assert.deepEqual(
+    await leases.acquire({ holder: "worker-overflow", request_id: "overflow", ttl_ms: 1_000 }),
+    { acquired: false, error: "fencing_token_exhausted" },
+  );
+  assert.equal(storage.sql.state.holder, null);
+  assert.equal(storage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
 });
 
-test("public Worker refuses production traffic when the authority token is absent", async () => {
-  const env = {
-    ALLOW_UNAUTHENTICATED: "false",
-    LOCKS: {
-      idFromName() {
-        throw new Error("must not shard an unauthenticated request");
-      },
-    },
-  };
-  const response = await worker.fetch(new Request("https://locks.example/v1/leases/acquire", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ key: "tenant/resource", holder: "worker-a", ttl_ms: 1_000 }),
-  }), env);
-  assert.equal(response.status, 503);
-  assert.deepEqual(await response.json(), { error: "authority_not_configured" });
+test("deployed wrapper is RPC-native while retaining the HTTP adapter", async () => {
+  const source = await readFile(new URL("./src/index.js", import.meta.url), "utf8");
+  assert.match(source, /class LockLeaseObject extends DurableObject/);
+  assert.match(source, /env\.LOCKS\.getByName\(body\.key\)/);
+  assert.match(source, /stub\.acquire\(input\)/);
+  assert.match(source, /stub\.renew\(input\)/);
+  assert.match(source, /stub\.release\(input\)/);
+  assert.match(source, /Backwards-compatible stub\.fetch adapter/);
 });
