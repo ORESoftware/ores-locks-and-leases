@@ -1,0 +1,106 @@
+{
+  "$comment": "Cancellation is part of the acquisition safety boundary. Every cancel request keeps the exact key set, holder, and logical request_id used by acquire; a raced grant is released by holder plus fencing token before the caller receives a terminal outcome.",
+  "schema": "ores.locks.cancellation-race-corpus/v1",
+  "operation": {
+    "keys": ["tenant/acme/jobs/rebuild"],
+    "holder": "worker-a",
+    "request_id": "attempt-42"
+  },
+  "scenarios": [
+    {
+      "name": "wait timeout cancels an ungranted request",
+      "trigger": "wait_timeout",
+      "cancel_request": {
+        "keys": ["tenant/acme/jobs/rebuild"],
+        "holder": "worker-a",
+        "request_id": "attempt-42"
+      },
+      "cancel_response": {
+        "cancelled": true,
+        "acquired": false
+      },
+      "release_request": null,
+      "release_response": null,
+      "expected": {
+        "work": "not_started",
+        "outcome": "cancelled",
+        "retryable": true
+      }
+    },
+    {
+      "name": "caller cancellation releases a grant won by the race",
+      "trigger": "caller_cancel",
+      "cancel_request": {
+        "keys": ["tenant/acme/jobs/rebuild"],
+        "holder": "worker-a",
+        "request_id": "attempt-42"
+      },
+      "cancel_response": {
+        "cancelled": false,
+        "acquired": true,
+        "grant": {
+          "holder": "worker-a",
+          "fencing_token": "41"
+        }
+      },
+      "release_request": {
+        "holder": "worker-a",
+        "fencing_token": "41"
+      },
+      "release_response": {
+        "released": true
+      },
+      "expected": {
+        "work": "not_started",
+        "outcome": "raced_grant_released",
+        "retryable": false
+      }
+    },
+    {
+      "name": "a raced grant whose release is a no-op is unsafe",
+      "trigger": "caller_cancel",
+      "cancel_request": {
+        "keys": ["tenant/acme/jobs/rebuild"],
+        "holder": "worker-a",
+        "request_id": "attempt-42"
+      },
+      "cancel_response": {
+        "cancelled": false,
+        "acquired": true,
+        "grant": {
+          "holder": "worker-a",
+          "fencing_token": "41"
+        }
+      },
+      "release_request": {
+        "holder": "worker-a",
+        "fencing_token": "41"
+      },
+      "release_response": {
+        "released": false
+      },
+      "expected": {
+        "work": "not_started",
+        "outcome": "safety_failure",
+        "retryable": false
+      }
+    },
+    {
+      "name": "cancel transport failure never becomes contention",
+      "trigger": "caller_cancel",
+      "cancel_request": {
+        "keys": ["tenant/acme/jobs/rebuild"],
+        "holder": "worker-a",
+        "request_id": "attempt-42"
+      },
+      "cancel_response": null,
+      "release_request": null,
+      "release_response": null,
+      "expected": {
+        "work": "not_started",
+        "outcome": "transport_safety_failure",
+        "retryable": false
+      }
+    }
+  ]
+}

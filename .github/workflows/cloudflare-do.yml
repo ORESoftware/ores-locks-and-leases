@@ -1,0 +1,29 @@
+name: cloudflare-do
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Validate Durable Object deployment contract
+        run: |
+          node --check managed/cloudflare-do/src/index.js
+          grep -F 'class_name = "LockLeaseObject"' managed/cloudflare-do/wrangler.toml
+          grep -F 'new_sqlite_classes = ["LockLeaseObject"]' managed/cloudflare-do/wrangler.toml
+      - name: Exercise Durable Object fencing state machine
+        run: node --test managed/cloudflare-do/test.mjs
