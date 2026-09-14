@@ -13,6 +13,7 @@ import gleam/string
 import simplifile
 
 const owner_file = "owner"
+
 const owner_max_codepoints = 512
 
 /// Why a portable local filesystem lock operation failed.

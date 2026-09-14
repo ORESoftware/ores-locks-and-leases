@@ -60,10 +60,7 @@ pub fn inspect_oversized_persisted_owner_is_compromised_test() {
     local_file.try_acquire(root, "install.lock", "owner-a")
   let path = local_file.local_file_lock_path(lock)
   let assert Ok(Nil) =
-    simplifile.write(
-      to: path <> "/owner",
-      contents: string.repeat("😀", 513),
-    )
+    simplifile.write(to: path <> "/owner", contents: string.repeat("😀", 513))
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Compromised,
     _,

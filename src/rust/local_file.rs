@@ -14,10 +14,13 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
+const OWNER_MAX_CODEPOINTS: usize = 512;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -132,10 +135,11 @@ impl LocalFileLock {
         match fs::create_dir(path) {
             Ok(()) => {
                 let owner_path = path.join(OWNER_FILE);
-                let owner_file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&owner_path);
+                let mut owner_options = OpenOptions::new();
+                owner_options.write(true).create_new(true);
+                #[cfg(unix)]
+                owner_options.mode(0o600);
+                let owner_file = owner_options.open(&owner_path);
                 let mut owner_file = match owner_file {
                     Ok(file) => file,
                     Err(error) => {
@@ -341,6 +345,13 @@ fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {
             "owner token must not be empty",
         ));
     }
+    if owner.chars().count() > OWNER_MAX_CODEPOINTS {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "owner token must not exceed 512 Unicode code points",
+        ));
+    }
     Ok(())
 }
 
@@ -520,6 +531,40 @@ mod tests {
         let error =
             LocalFileLock::try_acquire(&path, "").expect_err("empty owner must be rejected");
         assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn owner_at_max_codepoints_is_valid() {
+        let path = test_path("max-owner");
+        let owner = "😀".repeat(512);
+        let mut lock = LocalFileLock::try_acquire(&path, owner)
+            .expect("512-code-point owner must be valid")
+            .expect("holder");
+        lock.release().expect("release max owner lock");
+    }
+
+    #[test]
+    fn oversized_owner_is_invalid_input() {
+        let path = test_path("oversized-owner");
+        let error = LocalFileLock::try_acquire(&path, "😀".repeat(513))
+            .expect_err("513-code-point owner must be rejected");
+        assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_marker_is_private_on_posix() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = test_path("private-owner");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        let mode = fs::metadata(path.join(OWNER_FILE))
+            .expect("owner metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "owner marker must be private");
+        lock.release().expect("release private owner lock");
     }
 
     #[test]

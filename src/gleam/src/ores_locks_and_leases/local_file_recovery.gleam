@@ -7,6 +7,7 @@ import ores_locks_and_leases/local_file
 import simplifile
 
 const owner_file = "owner"
+
 const owner_max_codepoints = 512
 
 pub type LocalFileLockInspectionState {
@@ -77,10 +78,18 @@ fn inspect_owner(
   }
 }
 
-fn inspect_owner_value(owner: String) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
-  case string.is_empty(owner), unicode_codepoint_count(owner) > owner_max_codepoints {
+fn inspect_owner_value(
+  owner: String,
+) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
+  case
+    string.is_empty(owner),
+    unicode_codepoint_count(owner) > owner_max_codepoints
+  {
     True, _ -> Ok(compromised("owner token is empty"))
-    _, True -> Ok(compromised("owner token exceeds the portable 512-code-point contract bound"))
+    _, True ->
+      Ok(compromised(
+        "owner token exceeds the portable 512-code-point contract bound",
+      ))
     False, False -> Ok(LocalFileLockInspection(Held, Some(owner), None))
   }
 }

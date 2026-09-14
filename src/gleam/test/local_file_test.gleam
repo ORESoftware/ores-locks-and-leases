@@ -105,8 +105,7 @@ pub fn local_file_lock_oversized_owner_is_invalid_test() {
   let root = "./.tmp-local-file-locks/oversized-owner"
   clean(root)
   let owner = string.repeat("😀", 513)
-  let assert Error(error) =
-    local_file.try_acquire(root, "install.lock", owner)
+  let assert Error(error) = local_file.try_acquire(root, "install.lock", owner)
   error.kind |> should.equal(local_file.InvalidInput)
   clean(root)
 }
