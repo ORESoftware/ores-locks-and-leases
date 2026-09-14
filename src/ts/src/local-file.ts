@@ -175,13 +175,9 @@ export async function try_acquire_local_file_lock(
   const owner_path = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   try {
     await writeFile(owner_path, owner, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    await validate_regular_file(path, owner_path, "owner token");
   } catch (error) {
     let rollbackError: unknown;
     try {
-      await unlink(owner_path).catch((cleanupError: unknown) => {
-        if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
-      });
       await rmdir(path);
     } catch (cleanupError) {
       rollbackError = cleanupError;
@@ -190,11 +186,10 @@ export async function try_acquire_local_file_lock(
       throw new LocalFileLockError(
         "compromised",
         path,
-        `owner-token publication failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
+        `owner-token write failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
         rollbackError,
       );
     }
-    if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "EEXIST") {
       throw new LocalFileLockError(
         "compromised",
@@ -204,6 +199,27 @@ export async function try_acquire_local_file_lock(
       );
     }
     throw io_error(path, "write local lock owner token", error);
+  }
+
+  try {
+    await validate_regular_file(path, owner_path, "owner token");
+  } catch (error) {
+    let rollbackError: unknown;
+    try {
+      await unlink(owner_path);
+      await rmdir(path);
+    } catch (cleanupError) {
+      rollbackError = cleanupError;
+    }
+    if (rollbackError !== undefined) {
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        `owner token was published but validation failed and rollback also failed: ${describe_error(rollbackError)}`,
+        rollbackError,
+      );
+    }
+    throw error;
   }
 
   return new LocalFileLock(path, owner);
