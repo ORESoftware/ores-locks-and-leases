@@ -8,8 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-const localFileOwnerMaxUTF8Bytes = 2048
-
 // LocalFileLockInspectionState describes read-only portable-lock state.
 type LocalFileLockInspectionState string
 
@@ -39,11 +37,19 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		return compromisedInspection("lock path is not an unaliased directory"), nil
 	}
 
-	entries, err := os.ReadDir(path)
+	directory, err := os.Open(path)
 	if err != nil {
-		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "list local lock directory failed", err)
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "open local lock directory failed", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != localFileOwnerName {
+	names, readErr := directory.Readdirnames(2)
+	directoryCloseErr := directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "read local lock directory entry failed", readErr)
+	}
+	if directoryCloseErr != nil {
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "close local lock directory failed", directoryCloseErr)
+	}
+	if len(names) != 1 || names[0] != localFileOwnerName {
 		return compromisedInspection("lock directory must contain exactly one owner marker"), nil
 	}
 
@@ -68,6 +74,15 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 			return compromisedInspection("owner token is missing"), nil
 		}
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "open local lock owner token failed", err)
+	}
+	openedInfo, statErr := ownerFile.Stat()
+	if statErr != nil {
+		_ = ownerFile.Close()
+		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "inspect opened local lock owner token failed", statErr)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		_ = ownerFile.Close()
+		return compromisedInspection("opened owner token is not a regular file"), nil
 	}
 	owner, readErr := io.ReadAll(io.LimitReader(ownerFile, localFileOwnerMaxUTF8Bytes+1))
 	closeErr := ownerFile.Close()

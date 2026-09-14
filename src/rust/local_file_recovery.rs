@@ -48,11 +48,22 @@ pub fn inspect_local_file_lock(
         return Ok(compromised("lock path is not an unaliased directory"));
     }
 
-    let entries = fs::read_dir(path)
-        .map_err(|error| io_error(path, "list local lock directory", error))?
-        .collect::<Result<Vec<_>, _>>()
+    let mut entries =
+        fs::read_dir(path).map_err(|error| io_error(path, "list local lock directory", error))?;
+    let first = entries
+        .next()
+        .transpose()
         .map_err(|error| io_error(path, "read local lock directory entry", error))?;
-    if entries.len() != 1 || entries[0].file_name() != OWNER_FILE {
+    let second = entries
+        .next()
+        .transpose()
+        .map_err(|error| io_error(path, "read second local lock directory entry", error))?;
+    let only_owner = first
+        .as_ref()
+        .map(|entry| entry.file_name().to_string_lossy() == OWNER_FILE)
+        .unwrap_or(false)
+        && second.is_none();
+    if !only_owner {
         return Ok(compromised(
             "lock directory must contain exactly one owner marker",
         ));
@@ -72,6 +83,14 @@ pub fn inspect_local_file_lock(
 
     let mut owner_file = File::open(&owner_path)
         .map_err(|error| io_error(path, "open local lock owner token", error))?;
+    let opened_metadata = owner_file
+        .metadata()
+        .map_err(|error| io_error(path, "inspect opened local lock owner token", error))?;
+    if !opened_metadata.is_file() || metadata_is_alias(&opened_metadata) {
+        return Ok(compromised(
+            "opened owner token is not an unaliased regular file",
+        ));
+    }
     let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
     owner_file
         .by_ref()

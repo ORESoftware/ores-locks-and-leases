@@ -8,8 +8,8 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,6 +21,7 @@ use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
 const OWNER_MAX_CODEPOINTS: usize = 512;
+const OWNER_MAX_UTF8_BYTES: usize = 2048;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -262,23 +263,7 @@ impl LocalFileLock {
         validate_real_directory(&self.path, &self.path, "lock directory")?;
         let owner_path = self.path.join(OWNER_FILE);
         validate_regular_file(&self.path, &owner_path, "owner token")?;
-        let observed = match fs::read(&owner_path) {
-            Ok(observed) => observed,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(LocalFileLockError::new(
-                    LocalFileLockErrorKind::Compromised,
-                    &self.path,
-                    "owner token is missing; refusing to treat externally altered lock state as a successful release",
-                ));
-            }
-            Err(error) => {
-                return Err(LocalFileLockError::io(
-                    &self.path,
-                    "read local lock owner token",
-                    error,
-                ));
-            }
-        };
+        let observed = read_bounded_owner(&self.path, &owner_path)?;
         if observed != self.owner.as_bytes() {
             return Err(LocalFileLockError::new(
                 LocalFileLockErrorKind::Compromised,
@@ -335,6 +320,63 @@ pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileL
             error,
         )),
     }
+}
+
+fn read_bounded_owner(lock_path: &Path, owner_path: &Path) -> Result<Vec<u8>, LocalFileLockError> {
+    let mut owner_file = match File::open(owner_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(LocalFileLockError::new(
+                LocalFileLockErrorKind::Compromised,
+                lock_path,
+                "owner token is missing; refusing to treat externally altered lock state as a successful release",
+            ));
+        }
+        Err(error) => {
+            return Err(LocalFileLockError::io(
+                lock_path,
+                "open local lock owner token",
+                error,
+            ));
+        }
+    };
+    let opened_metadata = owner_file
+        .metadata()
+        .map_err(|error| LocalFileLockError::io(lock_path, "inspect opened owner token", error))?;
+    if !opened_metadata.is_file() || metadata_is_alias(&opened_metadata) {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "opened owner token is not an unaliased regular file",
+        ));
+    }
+    if opened_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+        ));
+    }
+    let mut observed = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
+    std::io::Read::by_ref(&mut owner_file)
+        .take((OWNER_MAX_UTF8_BYTES + 1) as u64)
+        .read_to_end(&mut observed)
+        .map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;
+    if observed.len() > OWNER_MAX_UTF8_BYTES {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+        ));
+    }
+    if std::str::from_utf8(&observed).is_err() {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token is not valid UTF-8",
+        ));
+    }
+    Ok(observed)
 }
 
 fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {
@@ -456,11 +498,9 @@ mod tests {
         let mut first = LocalFileLock::try_acquire(&path, "owner-a")
             .expect("first acquire")
             .expect("first holder");
-        assert!(
-            LocalFileLock::try_acquire(&path, "owner-b")
-                .expect("contended attempt")
-                .is_none()
-        );
+        assert!(LocalFileLock::try_acquire(&path, "owner-b")
+            .expect("contended attempt")
+            .is_none());
         first.release().expect("release first holder");
         let mut second = LocalFileLock::try_acquire(&path, "owner-b")
             .expect("second acquire")
@@ -601,6 +641,39 @@ mod tests {
         let error = lock.release().expect_err("missing owner must fail closed");
         assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
         fs::remove_dir(&path).expect("cleanup lock directory");
+        lock.released = true;
+    }
+
+    #[test]
+    fn release_bounds_persisted_owner_reads() {
+        let path = test_path("release-owner-bound");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        fs::write(path.join(OWNER_FILE), vec![b'a'; OWNER_MAX_UTF8_BYTES + 1])
+            .expect("write oversized owner");
+        let error = lock
+            .release()
+            .expect_err("oversized owner must fail closed");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
+        fs::remove_dir(&path).expect("cleanup lock");
+        lock.released = true;
+    }
+
+    #[test]
+    fn release_rejects_invalid_persisted_utf8() {
+        let path = test_path("release-owner-utf8");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        fs::write(path.join(OWNER_FILE), [0xff]).expect("write invalid UTF-8 owner");
+        let error = lock
+            .release()
+            .expect_err("invalid UTF-8 owner must fail closed");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
+        fs::remove_dir(&path).expect("cleanup lock");
         lock.released = true;
     }
 

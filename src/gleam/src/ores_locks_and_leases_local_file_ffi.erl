@@ -8,7 +8,8 @@
     write_new_file_status/2,
     make_symlink_status/2,
     unicode_codepoint_count/1,
-    owner_private_mode_status/1
+    owner_private_mode_status/1,
+    read_owner_for_release_status/3
 ]).
 
 %% file:del_dir/1 returns the atom `ok` on success, while Gleam's Result
@@ -113,4 +114,39 @@ make_symlink_status(Target, Link) ->
         ok -> 0;
         {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup -> 1;
         {error, _} -> 2
+    end.
+
+
+%% Bounded release read. Status: 0 match, 1 mismatch, 2 oversized,
+%% 3 invalid UTF-8, 4 missing, 5 other IO/close failure.
+read_owner_for_release_status(Path, ExpectedOwner, MaxBytes) ->
+    case file:open(Path, [read, binary]) of
+        {error, enoent} -> 4;
+        {error, _} -> 5;
+        {ok, IoDevice} ->
+            Result = read_owner_bounded(IoDevice, MaxBytes + 1, <<>>),
+            CloseResult = file:close(IoDevice),
+            case {Result, CloseResult} of
+                {{ok, Bytes}, ok} when byte_size(Bytes) > MaxBytes -> 2;
+                {{ok, Bytes}, ok} ->
+                    case unicode:characters_to_list(Bytes, utf8) of
+                        {error, _, _} -> 3;
+                        {incomplete, _, _} -> 3;
+                        _ ->
+                            case Bytes =:= unicode:characters_to_binary(ExpectedOwner) of
+                                true -> 0;
+                                false -> 1
+                            end
+                    end;
+                {{error, enoent}, _} -> 4;
+                _ -> 5
+            end
+    end.
+
+read_owner_bounded(_IoDevice, Remaining, Acc) when Remaining =< 0 -> {ok, Acc};
+read_owner_bounded(IoDevice, Remaining, Acc) ->
+    case file:read(IoDevice, Remaining) of
+        eof -> {ok, Acc};
+        {ok, Bytes} -> read_owner_bounded(IoDevice, Remaining - byte_size(Bytes), <<Acc/binary, Bytes/binary>>);
+        {error, Reason} -> {error, Reason}
     end.

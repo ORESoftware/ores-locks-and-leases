@@ -13,6 +13,16 @@ declare module "node:fs/promises" {
       length: number,
       position: number,
     ): Promise<{ bytesRead: number; buffer: Uint8Array }>;
+    stat(): Promise<LocalFileStats>;
+    close(): Promise<void>;
+  }
+
+  interface LocalDirent {
+    readonly name: string;
+  }
+
+  interface LocalDir {
+    read(): Promise<LocalDirent | null>;
     close(): Promise<void>;
   }
 
@@ -22,6 +32,8 @@ declare module "node:fs/promises" {
   ): Promise<string | undefined>;
 
   export function open(path: string, flags: string): Promise<LocalFileHandle>;
+
+  export function opendir(path: string): Promise<LocalDir>;
 
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
 

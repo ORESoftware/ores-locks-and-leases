@@ -3,6 +3,7 @@ package oreslocks
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 const localFileOwnerName = "owner"
 const localFileOwnerMaxCodepoints = 512
+const localFileOwnerMaxUTF8Bytes = 2048
 
 // LocalFileLockErrorKind classifies failures from the portable single-host
 // filesystem backend.
@@ -182,12 +184,9 @@ func (l *LocalFileLock) Release() error {
 	if err := validateLocalRegularFile(l.path, ownerPath, "owner token"); err != nil {
 		return err
 	}
-	observed, err := os.ReadFile(ownerPath)
+	observed, err := readLocalFileOwnerBounded(l.path, ownerPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return localFileError(LocalFileCompromised, l.path, "owner token is missing; refusing to treat externally altered lock state as a successful release", err)
-		}
-		return localFileError(LocalFileIO, l.path, "read local lock owner token failed", err)
+		return err
 	}
 	if string(observed) != l.owner {
 		return localFileError(
@@ -229,6 +228,44 @@ func LocalFileLockExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, localFileError(LocalFileIO, path, "inspect local lock path failed", err)
+}
+
+func readLocalFileOwnerBounded(lockPath, ownerPath string) ([]byte, error) {
+	ownerFile, err := os.Open(ownerPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, localFileError(LocalFileCompromised, lockPath, "owner token is missing; refusing to treat externally altered lock state as a successful release", err)
+		}
+		return nil, localFileError(LocalFileIO, lockPath, "open local lock owner token failed", err)
+	}
+	info, err := ownerFile.Stat()
+	if err != nil {
+		_ = ownerFile.Close()
+		return nil, localFileError(LocalFileIO, lockPath, "inspect opened local lock owner token failed", err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = ownerFile.Close()
+		return nil, localFileError(LocalFileCompromised, lockPath, "opened owner token is not a regular file", nil)
+	}
+	if info.Size() > localFileOwnerMaxUTF8Bytes {
+		_ = ownerFile.Close()
+		return nil, localFileError(LocalFileCompromised, lockPath, "owner token exceeds the portable 2048-byte UTF-8 storage bound", nil)
+	}
+	observed, err := io.ReadAll(io.LimitReader(ownerFile, localFileOwnerMaxUTF8Bytes+1))
+	if err != nil {
+		_ = ownerFile.Close()
+		return nil, localFileError(LocalFileIO, lockPath, "read local lock owner token failed", err)
+	}
+	if err := ownerFile.Close(); err != nil {
+		return nil, localFileError(LocalFileIO, lockPath, "close local lock owner token failed", err)
+	}
+	if len(observed) > localFileOwnerMaxUTF8Bytes {
+		return nil, localFileError(LocalFileCompromised, lockPath, "owner token exceeds the portable 2048-byte UTF-8 storage bound", nil)
+	}
+	if !utf8.Valid(observed) {
+		return nil, localFileError(LocalFileCompromised, lockPath, "owner token is not valid UTF-8", nil)
+	}
+	return observed, nil
 }
 
 func validateLocalOwner(path, owner string) error {

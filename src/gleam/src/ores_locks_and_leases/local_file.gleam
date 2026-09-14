@@ -16,6 +16,8 @@ const owner_file = "owner"
 
 const owner_max_codepoints = 512
 
+const owner_max_utf8_bytes = 2048
+
 /// Why a portable local filesystem lock operation failed.
 pub type LocalFileLockErrorKind {
   Contention
@@ -210,27 +212,35 @@ fn release_verified_shape(
   path: String,
   owner_path: String,
 ) -> Result(Nil, LocalFileLockError) {
-  case simplifile.read(owner_path) {
-    Ok(observed) if observed == lock.owner ->
-      remove_owned_lock(path, owner_path)
-    Ok(_) ->
+  case
+    read_owner_for_release_status(owner_path, lock.owner, owner_max_utf8_bytes)
+  {
+    0 -> remove_owned_lock(path, owner_path)
+    1 ->
       Error(LocalFileLockError(
         Compromised,
         path,
         "owner token changed; refusing to remove a lock that may belong to another acquisition",
       ))
-    Error(simplifile.Enoent) ->
+    2 ->
+      Error(LocalFileLockError(
+        Compromised,
+        path,
+        "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+      ))
+    3 ->
+      Error(LocalFileLockError(
+        Compromised,
+        path,
+        "owner token is not valid UTF-8",
+      ))
+    4 ->
       Error(LocalFileLockError(
         Compromised,
         path,
         "owner token is missing; refusing to treat externally altered lock state as a successful release",
       ))
-    Error(error) ->
-      Error(io_error(
-        path,
-        "read local lock owner token failed: "
-          <> simplifile.describe_error(error),
-      ))
+    _ -> Error(io_error(path, "read local lock owner token failed"))
   }
 }
 
@@ -407,3 +417,10 @@ fn write_new_file_status(path: String, contents: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "unicode_codepoint_count")
 fn unicode_codepoint_count(value: String) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "read_owner_for_release_status")
+fn read_owner_for_release_status(
+  path: String,
+  expected_owner: String,
+  max_bytes: Int,
+) -> Int

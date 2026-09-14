@@ -19,6 +19,9 @@ assert.deepEqual(contract.defaults, {
 });
 assert.deepEqual(contract.bounds, {
   owner_max_codepoints: 512,
+  owner_max_utf8_bytes: 2048,
+  persisted_owner_requires_valid_utf8: true,
+  inspection_entry_probe_limit: 2,
   retry_interval_ms_min: 0,
   zero_retry_interval_allowed_when_wait_false: true,
   owner_file_private_on_posix: true,

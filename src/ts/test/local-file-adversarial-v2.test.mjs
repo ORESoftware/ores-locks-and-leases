@@ -79,3 +79,31 @@ test("inspection bounds owner-marker reads before decoding", async () => {
     assert.match(inspection.message ?? "", /2048-byte/);
   });
 });
+
+
+test("release bounds persisted owner-marker reads", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    await writeFile(join(path, "owner"), "a".repeat(2049), { mode: 0o600 });
+    await assert.rejects(
+      lock.release(),
+      (error) => error instanceof LocalFileLockError
+        && error.kind === "compromised"
+        && /2048-byte/.test(error.message),
+    );
+  });
+});
+
+test("owner input rejects lone UTF-16 surrogates", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    for (const owner of ["\ud800", "\udfff", "a\ud800b"]) {
+      await assert.rejects(
+        try_acquire_local_file_lock(path, owner),
+        (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+      );
+    }
+  });
+});

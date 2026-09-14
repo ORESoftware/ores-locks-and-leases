@@ -1,13 +1,13 @@
-import { lstat, open, readdir, rmdir, unlink } from "node:fs/promises";
+import { lstat, open, opendir, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   LocalFileLockError,
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
+  MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
 } from "./local-file.js";
 
 const OWNER_FILE = "owner";
-export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES = 2048;
 
 export type LocalFileLockInspectionState = "absent" | "held" | "compromised";
 
@@ -30,14 +30,18 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     return compromised("lock path is not an unaliased directory");
   }
 
-  let entries: string[];
+  let directory;
   try {
-    entries = await readdir(path);
+    directory = await opendir(path);
+    const first = await directory.read();
+    const second = await directory.read();
+    if (first?.name !== OWNER_FILE || second !== null) {
+      return compromised("lock directory must contain exactly one owner marker");
+    }
   } catch (error) {
     throw io_error(path, "list local lock directory", error);
-  }
-  if (entries.length !== 1 || entries[0] !== OWNER_FILE) {
-    return compromised("lock directory must contain exactly one owner marker");
+  } finally {
+    await directory?.close();
   }
 
   const ownerPath = join(path, OWNER_FILE);
@@ -144,6 +148,14 @@ async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Pro
   let handle;
   try {
     handle = await open(ownerPath, "r");
+    const openedMetadata = await handle.stat();
+    if (!openedMetadata.isFile() || openedMetadata.isSymbolicLink()) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "opened owner token is not an unaliased regular file",
+      );
+    }
     const buffer = new Uint8Array(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
     const { bytesRead } = await handle.read(
       buffer,

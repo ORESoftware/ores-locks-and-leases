@@ -1,8 +1,9 @@
-import { lstat, mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const OWNER_FILE = "owner";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
+export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES = 2048;
 
 export type LocalFileLockErrorKind =
   | "contention"
@@ -65,20 +66,7 @@ export class LocalFileLock {
     const owner_path = join(this.path, OWNER_FILE);
     await validate_regular_file(this.path, owner_path, "owner token");
 
-    let observed: string;
-    try {
-      observed = await readFile(owner_path, "utf8");
-    } catch (error) {
-      if (error_code(error) === "ENOENT") {
-        throw new LocalFileLockError(
-          "compromised",
-          this.path,
-          "owner token is missing; refusing to treat externally altered lock state as a successful release",
-          error,
-        );
-      }
-      throw io_error(this.path, "read local lock owner token", error);
-    }
+    const observed = await read_bounded_utf8_owner(this.path, owner_path);
     if (observed !== this.owner) {
       throw new LocalFileLockError(
         "compromised",
@@ -212,6 +200,13 @@ function validate_owner(path: string, owner: string): void {
   if (owner.length === 0) {
     throw new LocalFileLockError("invalid_input", path, "owner token must not be empty");
   }
+  if (!is_unicode_scalar_sequence(owner)) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      "owner token must be a valid Unicode scalar-value sequence",
+    );
+  }
   if (Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
     throw new LocalFileLockError(
       "invalid_input",
@@ -278,6 +273,79 @@ async function validate_regular_file(lock_path: string, path: string, label: str
       throw new LocalFileLockError("compromised", lock_path, `${label} is missing`, error);
     }
     throw io_error(lock_path, `inspect ${label}`, error);
+  }
+}
+
+function is_unicode_scalar_sequence(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Promise<string> {
+  let handle;
+  try {
+    handle = await open(ownerPath, "r");
+    const openedMetadata = await handle.stat();
+    if (!openedMetadata.isFile() || openedMetadata.isSymbolicLink()) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "opened owner token is not an unaliased regular file",
+      );
+    }
+    if (openedMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+      );
+    }
+    const buffer = new Uint8Array(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
+    let total = 0;
+    while (total < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.byteLength - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token exceeds the portable 2048-byte UTF-8 storage bound",
+      );
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, total));
+    } catch (error) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token is not valid UTF-8",
+        error,
+      );
+    }
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    if (error_code(error) === "ENOENT") {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token is missing; refusing to treat externally altered lock state as a successful release",
+        error,
+      );
+    }
+    throw io_error(lockPath, "read local lock owner token", error);
+  } finally {
+    await handle?.close();
   }
 }
 
