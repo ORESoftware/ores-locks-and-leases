@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,22 @@ func TestLocalFileLockInspectionMissingOwnerAndDirtyAreCompromised(t *testing.T)
 	}
 }
 
+func TestLocalFileLockInspectionOversizedPersistedOwnerIsCompromised(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire: acquired=%v err=%v", acquired, err)
+	}
+	lock.released = true
+	if err := os.WriteFile(filepath.Join(path, localFileOwnerName), []byte(strings.Repeat("😀", 513)), 0o600); err != nil {
+		t.Fatalf("replace owner: %v", err)
+	}
+	inspection, err := InspectLocalFileLock(path)
+	if err != nil || inspection.State != LocalFileLockCompromised {
+		t.Fatalf("oversized owner inspection: %#v err=%v", inspection, err)
+	}
+}
+
 func TestLocalFileLockRecoveryRequiresConfirmationAndOwner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
@@ -70,6 +87,15 @@ func TestLocalFileLockRecoveryRequiresConfirmationAndOwner(t *testing.T) {
 	recovered, err := RecoverLocalFileLock(path, "owner-a", true)
 	if err != nil || !recovered {
 		t.Fatalf("clean recovery: recovered=%v err=%v", recovered, err)
+	}
+}
+
+func TestLocalFileLockRecoveryRejectsOversizedExpectedOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.lock")
+	_, err := RecoverLocalFileLock(path, strings.Repeat("😀", 513), true)
+	var lockErr *LocalFileLockError
+	if !errors.As(err, &lockErr) || lockErr.Kind != LocalFileInvalidInput {
+		t.Fatalf("oversized expected owner: %#v", err)
 	}
 }
 
