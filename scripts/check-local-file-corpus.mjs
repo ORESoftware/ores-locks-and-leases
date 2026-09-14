@@ -122,7 +122,7 @@ assert.equal(hardeningV2.policies.durability.durable_mode, "not_exposed");
 assert.equal(hardeningV2.policies.contention_pressure.fixed_retry_is_fair, false);
 assert.equal(hardeningV2.policies.contention_pressure.starvation_freedom_claimed, false);
 assert.equal(hardeningV2.policies.contention_pressure.cancellation_required_for_new_blocking_api, true);
-assert.equal(hardeningV2.executable_requirements.length, 15);
-assert.equal(new Set(hardeningV2.executable_requirements).size, 15);
+assert.equal(hardeningV2.executable_requirements.length, 17);
+assert.equal(new Set(hardeningV2.executable_requirements).size, 17);
 
 console.log("local filesystem lock conformance corpus is structurally valid");
