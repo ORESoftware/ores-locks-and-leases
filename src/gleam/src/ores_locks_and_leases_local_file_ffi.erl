@@ -1,6 +1,6 @@
 -module(ores_locks_and_leases_local_file_ffi).
 -include_lib("kernel/include/file.hrl").
--export([delete_empty_directory/1, is_directory/1, path_kind/1, directory_shape/1, write_new_file_status/2]).
+-export([delete_empty_directory/1, is_directory/1, path_kind/1, directory_shape/1, write_new_file_status/2, make_symlink_status/2]).
 
 %% file:del_dir/1 returns the atom `ok` on success, while Gleam's Result
 %% representation expects {ok, Value}. Normalize the return shape without
@@ -57,4 +57,13 @@ write_new_file_status(Path, Contents) ->
                     _ = file:close(IoDevice),
                     2
             end
+    end.
+
+%% Test-support primitive used by cross-platform adversarial identity tests.
+%% 0 success; 1 platform/permission does not permit symlink creation; 2 other.
+make_symlink_status(Target, Link) ->
+    case file:make_symlink(Target, Link) of
+        ok -> 0;
+        {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup -> 1;
+        {error, _} -> 2
     end.
