@@ -1,15 +1,8 @@
 /**
  * `Lease` over the fiducia-cloud node HTTP protocol, using only `fetch`. It
- * speaks the same three endpoints the official clients do
- * (`/v1/locks/acquire`, `/v1/locks/renew`, `/v1/locks/release`) with the
- * same headers, so a service that already holds a `@fiducia/client` keeps it
- * for everything else and hands this adapter the same base URL and
- * credentials.
- *
- * The node never holds a request open: `acquire` returns at once with
- * `acquired: false` when the key is held, so the client owns the wait. This
- * adapter polls at `retryIntervalMs` until the grant arrives or
- * `waitTimeoutMs` elapses.
+ * speaks the same lock endpoints the official clients do. Blocking acquisition
+ * keeps one stable request_id across polls and explicit cancellation so timeout
+ * or caller cancellation can safely reconcile a raced grant before returning.
  */
 
 import { LockError } from "./errors.js";
@@ -34,6 +27,8 @@ export interface FiduciaLeaseOptions {
   readonly fetch?: FetchLike;
   /** Source of holder ids when `AcquireOptions.holder` is absent. */
   readonly generateHolder?: () => string;
+  /** Source of stable logical acquisition ids when `AcquireOptions.requestId` is absent. */
+  readonly generateRequestId?: () => string;
 }
 
 const LOCAL_SUFFIXES = [".svc", ".cluster.local", ".internal", ".local"];
@@ -46,15 +41,36 @@ export function cleartextRefusal(baseUrl: string, hasCredential: boolean, allow:
   return `fiducia: refusing to send a credential over cleartext http to "${host}"; use https or allowCleartextInternal`;
 }
 
-/** An unguessable holder identity; holder names carry queue identity and cancellation authority. */
-export function generatedHolder(): string {
+function generatedIdentity(prefix: string): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  return "ores-locks-" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return prefix + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** An unguessable holder identity; holder names carry queue identity and cancellation authority. */
+export function generatedHolder(): string {
+  return generatedIdentity("ores-locks-");
+}
+
+/** Stable per-acquisition identity used by acquire polling and `/v1/locks/cancel`. */
+export function generatedRequestId(): string {
+  return generatedIdentity("ores-lock-request-");
+}
+
+function sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promise<"elapsed" | "aborted"> {
+  if (signal?.aborted) return Promise.resolve("aborted");
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve("elapsed");
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve("aborted");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function asUint(value: unknown): bigint | undefined {
@@ -76,12 +92,17 @@ function encodeWireInteger(value: bigint): number {
   return Number(value);
 }
 
+function cancelledCause(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("fiducia: acquisition cancelled by caller");
+}
+
 export class FiduciaLease implements Lease {
   readonly #base: string;
   readonly #headers: Record<string, string>;
   readonly #fetch: FetchLike;
   readonly #refusal: string | undefined;
   readonly #generateHolder: () => string;
+  readonly #generateRequestId: () => string;
 
   constructor(options: FiduciaLeaseOptions) {
     this.#base = options.baseUrl.replace(/\/+$/, "");
@@ -94,6 +115,7 @@ export class FiduciaLease implements Lease {
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#refusal = cleartextRefusal(this.#base, Boolean(options.internal || options.apiKey), options.allowCleartextInternal ?? false);
     this.#generateHolder = options.generateHolder ?? generatedHolder;
+    this.#generateRequestId = options.generateRequestId ?? generatedRequestId;
   }
 
   /** POST `body`, return `result.output`. Non-2xx and transport failures throw plain Errors; callers map them. */
@@ -113,28 +135,119 @@ export class FiduciaLease implements Lease {
     return output && typeof output === "object" ? (output as Record<string, unknown>) : {};
   }
 
+  /**
+   * Establish a safe terminal state for a queued acquisition. A cancellation
+   * response may report that promotion won the race; that grant must be
+   * released by its exact holder + fencing token before cancellation returns.
+   */
+  async #cancelQueuedAcquire(key: LockKey, holder: string, requestId: string): Promise<void> {
+    const out = await this.#post("/v1/locks/cancel", {
+      keys: [key],
+      holder,
+      request_id: requestId,
+    });
+
+    if (out["cancelled"] === true && out["acquired"] !== true) return;
+    if (out["acquired"] !== true) {
+      throw new Error("fiducia: cancel did not establish a safe terminal acquisition state");
+    }
+
+    const grant = out["grant"];
+    if (!grant || typeof grant !== "object") {
+      throw new Error("fiducia: cancel reported a raced grant without grant authority");
+    }
+    const raced = grant as Record<string, unknown>;
+    const racedHolder = raced["holder"];
+    const fencingToken = asUint(raced["fencing_token"]);
+    if (racedHolder !== holder || fencingToken === undefined || fencingToken === 0n) {
+      throw new Error("fiducia: cancel returned mismatched or malformed raced-grant authority");
+    }
+
+    const released = await this.#post("/v1/locks/release", {
+      key,
+      holder,
+      fencing_token: fencingToken,
+    });
+    if (released["released"] !== true) {
+      throw new Error("fiducia: raced grant release was a no-op; ownership safety is unknown");
+    }
+  }
+
+  async #cancelBeforeTerminal(
+    key: LockKey,
+    holder: string,
+    requestId: string,
+    terminal: LockError,
+  ): Promise<never> {
+    try {
+      await this.#cancelQueuedAcquire(key, holder, requestId);
+    } catch (cause) {
+      throw LockError.transport(key, cause, "fiducia.acquire");
+    }
+    throw terminal;
+  }
+
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
+    const requestId = opts.requestId ?? this.#generateRequestId();
     const started = Date.now();
+    let attempted = false;
+
     for (;;) {
+      if (opts.signal?.aborted) {
+        if (!attempted) throw LockError.transport(key, cancelledCause(opts.signal), "fiducia.acquire");
+        return this.#cancelBeforeTerminal(
+          key,
+          holder,
+          requestId,
+          LockError.transport(key, cancelledCause(opts.signal), "fiducia.acquire"),
+        );
+      }
+
       let out: Record<string, unknown>;
       try {
-        out = await this.#post("/v1/locks/acquire", { key, holder, ttl_ms: opts.ttlMs });
+        attempted = true;
+        out = await this.#post("/v1/locks/acquire", {
+          key,
+          holder,
+          ttl_ms: opts.ttlMs,
+          request_id: requestId,
+          ...(wait ? { wait_timeout_ms: opts.waitTimeoutMs } : {}),
+        });
       } catch (cause) {
         throw LockError.transport(key, cause);
       }
       if (out["acquired"] === true) {
         const fencingToken = asUint(out["fencing_token"]);
-        if (fencingToken === undefined) throw LockError.transport(key, new Error("fiducia: acquired without a fencing token"));
+        if (fencingToken === undefined || fencingToken === 0n) {
+          throw LockError.transport(key, new Error("fiducia: acquired without a positive fencing token"));
+        }
         const expires = asUint(out["lease_expires_ms"]);
         return expires === undefined
           ? { key, holder, fencingToken, ttlMs: opts.ttlMs }
           : { key, holder, fencingToken, ttlMs: opts.ttlMs, leaseExpiresMs: Number(expires) };
       }
       if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
+
       const waited = Date.now() - started;
-      if (waited + opts.retryIntervalMs > opts.waitTimeoutMs) throw LockError.timeout(key, "fiducia.acquire", waited);
-      await sleep(opts.retryIntervalMs);
+      if (waited + opts.retryIntervalMs > opts.waitTimeoutMs) {
+        return this.#cancelBeforeTerminal(
+          key,
+          holder,
+          requestId,
+          LockError.timeout(key, "fiducia.acquire", waited),
+        );
+      }
+
+      const sleep = await sleepOrAbort(opts.retryIntervalMs, opts.signal);
+      if (sleep === "aborted" && opts.signal) {
+        return this.#cancelBeforeTerminal(
+          key,
+          holder,
+          requestId,
+          LockError.transport(key, cancelledCause(opts.signal), "fiducia.acquire"),
+        );
+      }
     }
   }
 
