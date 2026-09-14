@@ -9,7 +9,7 @@ or allowed to replace the other.
 
 `ORESoftware/typespec-json-schema-validator` (TJSV) is the fail-closed
 peer-authority validator for this repository. The admitted revision is pinned to
-commit `6bb5b7c1ee41c8b43741e50a264c33a1165549c4`; floating branches and tags are
+commit `b2c4810400625829114a56087ad33937caac735a`; floating branches and tags are
 not accepted as merge evidence.
 
 For each contract bundle, TJSV must:
@@ -21,17 +21,24 @@ For each contract bundle, TJSV must:
    graphs;
 4. normalize and recursively compare declaration shapes and constraints;
 5. differentially execute both authorities over a non-empty deterministic probe
-   corpus;
+   corpus, plus recorded instances where a bundle supplies them;
 6. stop evaluation on missing declarations, unsupported semantics, generator
    failure, stale or contradictory mappings, divergence, refusal, or an
    indeterminate result; and
-7. retain JSON, SARIF, Contract IR, and generated-schema evidence under
-   `target/` without modifying either authored authority.
+7. retain JSON, SARIF, Contract IR, generated-schema, and consumer-verification
+   evidence under `target/` without modifying either authored authority.
 
 Generated Schema B is comparison evidence only. It must never overwrite or
 become the source for the authored JSON Schema.
 
-Run both maintained bundles locally with:
+The maintained bundles are:
+
+- `main`: distributed lease, fencing, and Postgres advisory-lock contracts;
+- `renewal`: supervised lease-renewal contracts; and
+- `local`: portable single-host filesystem-lock contracts used by the Rust,
+  TypeScript/Node.js, Go, and Gleam implementations.
+
+Run all maintained bundles locally with:
 
 ```sh
 sh scripts/check-tjsv-contracts.sh all
@@ -40,19 +47,49 @@ sh scripts/check-tjsv-contracts.sh all
 `sh scripts/test-all.sh` includes that command whenever Node.js and npm are
 available.
 
+## Optional Protobuf, WIT, and Dafny projections
+
+Protobuf, WIT, and Dafny are additive projections, not peer authorities. They
+remain optional until a lane is introduced under:
+
+```text
+contracts/projections/<bundle>/<lane>/
+```
+
+where `<bundle>` is `main`, `renewal`, or `local`, and `<lane>` is `protobuf`,
+`wit`, or `dafny`. Once such a lane exists it must contain the appropriate
+`.proto`, `.wit`, or `.dfy` artifact plus `projection-manifest.json` and
+`projection-policy.json`. The manifest must pass TJSV `verify-projection`
+against the exact current parity receipt, Contract IR, TypeSpec source,
+authored JSON Schema, and TypeSpec-generated JSON Schema witness.
+
+Run the additive-lane gate with:
+
+```sh
+sh scripts/check-tjsv-optional-projections.sh
+```
+
+Absent lanes explicitly skip. A present lane without TJSV projection evidence
+fails closed. Contract `.proto`, `.wit`, and `.dfy` files outside the projection
+tree also fail so additive artifacts cannot bypass admission.
+
 ## Exact-head cross-runtime enforcement
 
-`.github/workflows/contract-runtime-boundary.yml` binds the two TJSV receipts to
+`.github/workflows/contract-runtime-boundary.yml` binds the TJSV receipts to
 one exact pull-request head and to successful Rust, Go, TypeScript/Node.js,
 Dart/Flutter-facing, and Gleam test lanes, RustSec, and a freshly generated
 zed-pkg `*-lib-core` consumer. Its final receipt fails unless:
 
 - the checked-out revision equals the pull-request head;
-- both TJSV runs report zero unexplained findings;
+- all TJSV bundle runs report zero unexplained findings;
 - differential execution is enabled and evaluates at least one probe;
 - divergences and refusals are both zero;
 - every language/runtime lane succeeds; and
 - the generated consumer compiles and passes its own TJSV contract admission.
+
+`.github/workflows/tjsv-language-runtime-boundary.yml` additionally runs the
+optional Protobuf/WIT/Dafny projection-admission hook after all mandatory
+TypeSpec/JSON Schema bundles have produced current evidence.
 
 `.github/workflows/renewal-supervisor.yml` applies the same TJSV and exact-head
 requirements specifically to the independent renewal contract and its shared
@@ -60,11 +97,10 @@ polyglot conformance corpus.
 
 ## Mapping-integrity canary
 
-`.github/workflows/peer-authority-validator.yml` executes the same immutable
-TJSV revision and retains a deliberate negative test.
-`mapping-tests/stale.mapping.json` names absent TypeSpec declaration
-`Ores.LocksAndLeases.MissingLeaseGrant` while targeting real JSON Schema
-resources. The workflow must:
+`.github/workflows/peer-authority-validator.yml` executes immutable TJSV and
+retains a deliberate negative test. `mapping-tests/stale.mapping.json` names
+absent TypeSpec declaration `Ores.LocksAndLeases.MissingLeaseGrant` while
+targeting real JSON Schema resources. The workflow must:
 
 - return the expected stopped-for-evaluation result;
 - emit the attributable missing-declaration finding with a stable fingerprint;
