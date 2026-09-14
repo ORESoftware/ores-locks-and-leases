@@ -8,13 +8,18 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 const OWNER_FILE: &str = "owner";
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
 /// Why the portable local filesystem lock operation failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,13 +125,36 @@ impl LocalFileLock {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)
                     .map_err(|error| LocalFileLockError::io(path, "create lock parent", error))?;
+                validate_real_directory(path, parent, "lock parent")?;
             }
         }
 
         match fs::create_dir(path) {
             Ok(()) => {
                 let owner_path = path.join(OWNER_FILE);
-                if let Err(error) = fs::write(&owner_path, owner.as_bytes()) {
+                let owner_file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&owner_path);
+                let mut owner_file = match owner_file {
+                    Ok(file) => file,
+                    Err(error) => {
+                        let _ = fs::remove_dir(path);
+                        let kind = if error.kind() == io::ErrorKind::AlreadyExists {
+                            LocalFileLockErrorKind::Compromised
+                        } else {
+                            LocalFileLockErrorKind::Io
+                        };
+                        return Err(LocalFileLockError::new(
+                            kind,
+                            path,
+                            format!("create local lock owner token failed: {error}"),
+                        ));
+                    }
+                };
+                if let Err(error) = owner_file.write_all(owner.as_bytes()) {
+                    drop(owner_file);
+                    let _ = fs::remove_file(&owner_path);
                     let _ = fs::remove_dir(path);
                     return Err(LocalFileLockError::io(
                         path,
@@ -142,11 +170,11 @@ impl LocalFileLock {
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 match fs::symlink_metadata(path) {
-                    Ok(metadata) if metadata.is_dir() => Ok(None),
+                    Ok(metadata) if metadata.is_dir() && !metadata_is_alias(&metadata) => Ok(None),
                     Ok(_) => Err(LocalFileLockError::new(
                         LocalFileLockErrorKind::Compromised,
                         path,
-                        "lock path already exists but is not a directory",
+                        "lock path already exists but is not an unaliased directory",
                     )),
                     Err(inspect_error) => Err(LocalFileLockError::io(
                         path,
@@ -227,7 +255,9 @@ impl LocalFileLock {
             return Ok(());
         }
 
+        validate_real_directory(&self.path, &self.path, "lock directory")?;
         let owner_path = self.path.join(OWNER_FILE);
+        validate_regular_file(&self.path, &owner_path, "owner token")?;
         let observed = match fs::read(&owner_path) {
             Ok(observed) => observed,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -287,8 +317,13 @@ impl Drop for LocalFileLock {
 /// to obtain ownership.
 pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
-    match fs::metadata(path) {
-        Ok(metadata) => Ok(metadata.is_dir()),
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata_is_alias(&metadata) => Ok(true),
+        Ok(_) => Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "lock path exists but is not an unaliased directory",
+        )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(LocalFileLockError::io(
             path,
@@ -318,6 +353,70 @@ fn validate_options(path: &Path, options: &LocalFileLockOptions) -> Result<(), L
         ));
     }
     Ok(())
+}
+
+fn validate_real_directory(
+    lock_path: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<(), LocalFileLockError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata_is_alias(&metadata) => Ok(()),
+        Ok(_) => Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!("{label} is not an unaliased directory"),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!("{label} is missing"),
+        )),
+        Err(error) => Err(LocalFileLockError::io(
+            lock_path,
+            &format!("inspect {label}"),
+            error,
+        )),
+    }
+}
+
+fn validate_regular_file(
+    lock_path: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<(), LocalFileLockError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata_is_alias(&metadata) => Ok(()),
+        Ok(_) => Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!("{label} is not an unaliased regular file"),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!("{label} is missing"),
+        )),
+        Err(error) => Err(LocalFileLockError::io(
+            lock_path,
+            &format!("inspect {label}"),
+            error,
+        )),
+    }
+}
+
+fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 #[cfg(test)]
