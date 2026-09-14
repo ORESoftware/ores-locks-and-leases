@@ -229,6 +229,18 @@ export class FiduciaLease implements Lease {
       }
       if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
 
+      // Cancellation that arrives while the acquire request is in flight wins
+      // over the local timeout budget. Reconcile the exact logical request
+      // before reporting the caller's cancellation.
+      if (opts.signal?.aborted) {
+        return this.#cancelBeforeTerminal(
+          key,
+          holder,
+          requestId,
+          LockError.transport(key, cancelledCause(opts.signal), "fiducia.acquire"),
+        );
+      }
+
       const waited = Date.now() - started;
       if (waited + opts.retryIntervalMs > opts.waitTimeoutMs) {
         return this.#cancelBeforeTerminal(
