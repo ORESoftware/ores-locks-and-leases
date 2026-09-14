@@ -22,6 +22,12 @@ fn run(
   owner: String,
   hold_text: String,
 ) {
+  case mode {
+    "hold" -> Nil
+    "try" -> Nil
+    "crash" -> Nil
+    _ -> usage()
+  }
   let hold_ms = case int.parse(hold_text) {
     Ok(value) if value >= 0 -> value
     _ -> usage()
@@ -45,7 +51,7 @@ fn run(
           io.println("CRASHED")
           halt(30)
         }
-        _ -> usage()
+        _ -> panic as "validated probe mode became unreachable"
       }
       case local_file.release(lock) {
         Ok(Nil) -> {
