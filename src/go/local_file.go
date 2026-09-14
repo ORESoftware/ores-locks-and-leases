@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -86,6 +87,9 @@ func (l *LocalFileLock) Owner() string { return l.owner }
 // TryAcquireLocalFileLock makes one immediate atomic attempt. acquired=false
 // with a nil error means ordinary contention.
 func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired bool, err error) {
+	if err := validateLocalPath(path); err != nil {
+		return nil, false, err
+	}
 	if err := validateLocalOwner(path, owner); err != nil {
 		return nil, false, err
 	}
@@ -145,6 +149,9 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 // backend retries mkdir; zed-pkg's native Rust lock should keep one
 // kernel-backed blocking request instead.
 func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*LocalFileLock, error) {
+	if err := validateLocalPath(path); err != nil {
+		return nil, err
+	}
 	if err := validateLocalOwner(path, owner); err != nil {
 		return nil, err
 	}
@@ -232,6 +239,9 @@ func (l *LocalFileLock) Release() error {
 // a structurally healthy held lock, false only when absent, and fails closed on
 // incomplete or compromised state. Prefer InspectLocalFileLock for new code.
 func LocalFileLockExists(path string) (bool, error) {
+	if err := validateLocalPath(path); err != nil {
+		return false, err
+	}
 	inspection, err := InspectLocalFileLock(path)
 	if err != nil {
 		return false, err
@@ -246,6 +256,19 @@ func LocalFileLockExists(path string) (bool, error) {
 	default:
 		return false, localFileError(LocalFileCompromised, path, inspection.Message, nil)
 	}
+}
+
+func validateLocalPath(path string) error {
+	if path == "" {
+		return localFileError(LocalFileInvalidInput, path, "local lock path must not be empty", nil)
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return localFileError(LocalFileInvalidInput, path, "local lock path must not contain NUL bytes", nil)
+	}
+	if !utf8.ValidString(path) {
+		return localFileError(LocalFileInvalidInput, path, "local lock path must be valid UTF-8 Unicode scalar data", nil)
+	}
+	return nil
 }
 
 func validateLocalOwner(path, owner string) error {
