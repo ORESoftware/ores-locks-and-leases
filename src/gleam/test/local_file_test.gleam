@@ -30,11 +30,12 @@ pub fn local_file_lock_no_wait_reports_contention_test() {
 
   let assert Ok(Some(first)) =
     local_file.try_acquire(root, "install.lock", "owner-a")
-  let options = local_file.LocalFileLockOptions(
-    wait: False,
-    wait_timeout_ms: 30_000,
-    retry_interval_ms: 50,
-  )
+  let options =
+    local_file.LocalFileLockOptions(
+      wait: False,
+      wait_timeout_ms: 30_000,
+      retry_interval_ms: 50,
+    )
   let assert Error(error) =
     local_file.acquire(root, "install.lock", "owner-b", options)
   error.kind |> should.equal(local_file.Contention)
@@ -48,11 +49,12 @@ pub fn local_file_lock_timeout_test() {
 
   let assert Ok(Some(first)) =
     local_file.try_acquire(root, "install.lock", "owner-a")
-  let options = local_file.LocalFileLockOptions(
-    wait: True,
-    wait_timeout_ms: 20,
-    retry_interval_ms: 5,
-  )
+  let options =
+    local_file.LocalFileLockOptions(
+      wait: True,
+      wait_timeout_ms: 20,
+      retry_interval_ms: 5,
+    )
   let assert Error(error) =
     local_file.acquire(root, "install.lock", "owner-b", options)
   error.kind |> should.equal(local_file.Timeout)
@@ -67,7 +69,8 @@ pub fn local_file_lock_changed_owner_fails_closed_test() {
   let assert Ok(Some(lock)) =
     local_file.try_acquire(root, "install.lock", "owner-a")
   let path = local_file.local_file_lock_path(lock)
-  let assert Ok(Nil) = simplifile.write(to: path <> "/owner", contents: "owner-b")
+  let assert Ok(Nil) =
+    simplifile.write(to: path <> "/owner", contents: "owner-b")
   let assert Error(error) = local_file.release(lock)
   error.kind |> should.equal(local_file.Compromised)
   clean(root)
