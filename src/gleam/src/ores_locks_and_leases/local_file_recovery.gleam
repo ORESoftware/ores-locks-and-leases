@@ -7,6 +7,7 @@ import ores_locks_and_leases/local_file
 import simplifile
 
 const owner_file = "owner"
+const owner_max_codepoints = 512
 
 pub type LocalFileLockInspectionState {
   Absent
@@ -63,11 +64,7 @@ fn inspect_owner(
     4 -> Error(io_error(path, "inspect local lock owner token failed"))
     2 ->
       case simplifile.read(owner_path) {
-        Ok(owner) ->
-          case string.is_empty(owner) {
-            True -> Ok(compromised("owner token is empty"))
-            False -> Ok(LocalFileLockInspection(Held, Some(owner), None))
-          }
+        Ok(owner) -> inspect_owner_value(owner)
         Error(error) ->
           Error(io_error(
             path,
@@ -77,6 +74,14 @@ fn inspect_owner(
       }
     0 -> Ok(compromised("owner token is missing"))
     _ -> Ok(compromised("owner token is not an unaliased regular file"))
+  }
+}
+
+fn inspect_owner_value(owner: String) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
+  case string.is_empty(owner), unicode_codepoint_count(owner) > owner_max_codepoints {
+    True, _ -> Ok(compromised("owner token is empty"))
+    _, True -> Ok(compromised("owner token exceeds the portable 512-code-point contract bound"))
+    False, False -> Ok(LocalFileLockInspection(Held, Some(owner), None))
   }
 }
 
@@ -91,22 +96,39 @@ pub fn recover(
   let path = lock_path(lock_root, lock_name)
   case validate_inputs(lock_root, lock_name, path) {
     Error(error) -> Error(error)
-    Ok(Nil) ->
-      case confirmed_inactive, string.is_empty(expected_owner) {
-        False, _ ->
-          Error(local_file.LocalFileLockError(
-            local_file.InvalidInput,
-            path,
-            "explicit confirmed_inactive=true is required for recovery",
-          ))
-        True, True ->
-          Error(local_file.LocalFileLockError(
-            local_file.InvalidInput,
-            path,
-            "expected owner must not be empty",
-          ))
-        True, False -> recover_inspected(path, expected_owner)
-      }
+    Ok(Nil) -> validate_recovery_owner(path, expected_owner, confirmed_inactive)
+  }
+}
+
+fn validate_recovery_owner(
+  path: String,
+  expected_owner: String,
+  confirmed_inactive: Bool,
+) -> Result(Bool, local_file.LocalFileLockError) {
+  case
+    confirmed_inactive,
+    string.is_empty(expected_owner),
+    unicode_codepoint_count(expected_owner) > owner_max_codepoints
+  {
+    False, _, _ ->
+      Error(local_file.LocalFileLockError(
+        local_file.InvalidInput,
+        path,
+        "explicit confirmed_inactive=true is required for recovery",
+      ))
+    True, True, _ ->
+      Error(local_file.LocalFileLockError(
+        local_file.InvalidInput,
+        path,
+        "expected owner must not be empty",
+      ))
+    True, _, True ->
+      Error(local_file.LocalFileLockError(
+        local_file.InvalidInput,
+        path,
+        "expected owner must not exceed 512 Unicode code points",
+      ))
+    True, False, False -> recover_inspected(path, expected_owner)
   }
 }
 
@@ -243,3 +265,6 @@ fn directory_shape(path: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "delete_empty_directory")
 fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "unicode_codepoint_count")
+fn unicode_codepoint_count(value: String) -> Int
