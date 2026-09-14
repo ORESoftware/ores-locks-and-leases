@@ -10,6 +10,8 @@ declare module "node:fs/promises" {
 
   export function stat(path: string): Promise<{ isDirectory(): boolean }>;
 
+  export function lstat(path: string): Promise<{ isDirectory(): boolean }>;
+
   export function unlink(path: string): Promise<void>;
 
   export function writeFile(

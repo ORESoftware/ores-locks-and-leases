@@ -26,12 +26,11 @@ A caller may create lock identities such as `install.lock`, `refs.lock`, or
 
 ## Two local implementations
 
-For Rust zed-pkg code, the preferred implementation remains `zed-lock` (now the
-`src/rust-lock` slice of `zed-pkg/zed-lib-core`). It uses descriptor/handle
-backed operating-system locks: the kernel releases ownership when the process
-exits, Linux/macOS block in a native file-lock request, and Windows uses
-`LockFileEx` semantics. That is stronger than a portable lockfile protocol and
-must not be replaced merely for API uniformity.
+For Rust zed-pkg code, the preferred implementation remains `zed-lock`. It uses
+descriptor/handle-backed operating-system locks: the kernel releases ownership
+when the process exits, Linux/macOS block in a native file-lock request, and
+Windows uses `LockFileEx` semantics. That is stronger than a portable lockfile
+protocol and must not be replaced merely for API uniformity.
 
 This repository also exposes a **portable directory lock** in Rust,
 TypeScript/Node.js, Go, and Gleam. It is intended for polyglot tools that need a
@@ -55,6 +54,19 @@ The design is in the same family as Node lockfile libraries, and uses atomic
 `mkdir` rather than `open(O_EXCL)` because directory creation has useful
 cross-platform semantics on Windows, Linux, and macOS.
 
+## Structural corruption is not contention
+
+Ordinary contention means the rendezvous path already exists **as a directory**.
+A regular file or symlink at the lock path is not another valid holder and is
+reported as `compromised`. Likewise, once a holder exists, a changed or missing
+`owner` marker is `compromised`; release does not silently accept externally
+altered state.
+
+Release only removes the exact owner marker followed by the now-empty lock
+directory. If any unexpected entry remains, release reports `compromised` and
+refuses recursive deletion. This invariant is tested on Windows, macOS, and
+Linux, including nested Unicode paths.
+
 ## Fail-closed crash semantics
 
 The portable backend intentionally does **not** automatically break a lock just
@@ -68,6 +80,11 @@ This is why zed-pkg's Rust hot path should keep using the stronger native
 the process exits. If a future portable stale/heartbeat mode is added, it must
 be an explicit lease-like mode with owner-token verification and must not be
 confused with a fencing token.
+
+Explicit recovery tooling should inspect and report the lock directory rather
+than deleting it implicitly during acquisition. Recovery should require an
+operator or higher-level policy decision, then remove only the known lock
+structure after confirming no valid local holder can still be using it.
 
 ## What local locks do not provide
 
@@ -94,9 +111,16 @@ All four requested runtime slices expose the same concepts:
 
 Defaults for the convenience acquisition path are a 30 second wait budget and
 a 50 ms retry interval. Callers that want no waiting use `try_acquire` (or
-`wait = false`). Retry sleeping is specific to this portable lockfile backend;
-zed-pkg's native Rust backend continues to use kernel-backed blocking without a
-polling loop.
+`wait = false`). A zero-millisecond wait budget is valid and returns `timeout`
+immediately when the lock is already held. Retry sleeping is specific to this
+portable lockfile backend; zed-pkg's native Rust backend continues to use
+kernel-backed blocking without a polling loop.
+
+The machine-readable authority for these portable semantics is
+`conformance/cases/local-file-lock.json`, with negative vectors in
+`conformance/cases/local-file-lock-invalid.json`. The dedicated cross-platform
+workflow validates those files before running the Rust, Go, TypeScript, and
+Gleam suites.
 
 ## Security and path assumptions
 

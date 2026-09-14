@@ -140,7 +140,21 @@ impl LocalFileLock {
                     released: false,
                 }))
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                match fs::symlink_metadata(path) {
+                    Ok(metadata) if metadata.is_dir() => Ok(None),
+                    Ok(_) => Err(LocalFileLockError::new(
+                        LocalFileLockErrorKind::Compromised,
+                        path,
+                        "lock path already exists but is not a directory",
+                    )),
+                    Err(inspect_error) => Err(LocalFileLockError::io(
+                        path,
+                        "inspect contended local lock path",
+                        inspect_error,
+                    )),
+                }
+            }
             Err(error) => Err(LocalFileLockError::io(
                 path,
                 "atomically create local lock directory",
@@ -214,9 +228,23 @@ impl LocalFileLock {
         }
 
         let owner_path = self.path.join(OWNER_FILE);
-        let observed = fs::read(&owner_path).map_err(|error| {
-            LocalFileLockError::io(&self.path, "read local lock owner token", error)
-        })?;
+        let observed = match fs::read(&owner_path) {
+            Ok(observed) => observed,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(LocalFileLockError::new(
+                    LocalFileLockErrorKind::Compromised,
+                    &self.path,
+                    "owner token is missing; refusing to treat externally altered lock state as a successful release",
+                ));
+            }
+            Err(error) => {
+                return Err(LocalFileLockError::io(
+                    &self.path,
+                    "read local lock owner token",
+                    error,
+                ));
+            }
+        };
         if observed != self.owner.as_bytes() {
             return Err(LocalFileLockError::new(
                 LocalFileLockErrorKind::Compromised,
@@ -369,6 +397,43 @@ mod tests {
     }
 
     #[test]
+    fn zero_timeout_under_contention_times_out_immediately() {
+        let path = test_path("zero-timeout");
+        let _first = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("first acquire")
+            .expect("first holder");
+        let error = LocalFileLock::acquire(
+            &path,
+            "owner-b",
+            LocalFileLockOptions {
+                wait: true,
+                wait_timeout: Duration::ZERO,
+                retry_interval: Duration::from_millis(50),
+            },
+        )
+        .expect_err("zero wait budget must time out under contention");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Timeout);
+    }
+
+    #[test]
+    fn empty_owner_is_invalid_input() {
+        let path = test_path("empty-owner");
+        let error =
+            LocalFileLock::try_acquire(&path, "").expect_err("empty owner must be rejected");
+        assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn existing_regular_file_is_compromised_not_contention() {
+        let path = test_path("existing-file");
+        fs::write(&path, b"not a lock directory").expect("seed regular file");
+        let error = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect_err("regular file must not be treated as normal contention");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_file(path).expect("cleanup regular file");
+    }
+
+    #[test]
     fn changed_owner_token_fails_closed() {
         let path = test_path("compromised");
         let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
@@ -380,5 +445,29 @@ mod tests {
         fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
         fs::remove_dir(path).expect("cleanup lock");
         lock.released = true;
+    }
+
+    #[test]
+    fn missing_owner_token_fails_closed() {
+        let path = test_path("missing-owner");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        fs::remove_file(path.join(OWNER_FILE)).expect("remove owner marker");
+        let error = lock.release().expect_err("missing owner must fail closed");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_dir(&path).expect("cleanup lock directory");
+        lock.released = true;
+    }
+
+    #[test]
+    fn unicode_nested_path_round_trips() {
+        let path = test_path("unicode").join("锁").join("paquete-ñ.lock");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-λ")
+            .expect("unicode acquire")
+            .expect("unicode holder");
+        assert_eq!(lock.owner(), "owner-λ");
+        lock.release().expect("unicode release");
+        assert!(!local_file_lock_exists(&path).expect("lock existence"));
     }
 }

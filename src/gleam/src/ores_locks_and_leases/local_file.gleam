@@ -80,7 +80,16 @@ pub fn try_acquire(
       ))
     Ok(Nil) ->
       case simplifile.create_directory(path) {
-        Error(simplifile.Eexist) -> Ok(None)
+        Error(simplifile.Eexist) ->
+          case path_is_directory(path) {
+            True -> Ok(None)
+            False ->
+              Error(LocalFileLockError(
+                Compromised,
+                path,
+                "lock path already exists but is not a directory",
+              ))
+          }
         Error(error) ->
           Error(io_error(
             path,
@@ -141,8 +150,8 @@ fn acquire_loop(
 
 /// Release after verifying the persisted owner token.
 ///
-/// A second release after the directory is already gone is a no-op. If the
-/// path has been recreated by another holder, the owner mismatch fails closed.
+/// A release observes structural changes to the lock directory and fails
+/// closed rather than treating externally removed state as a successful unlock.
 pub fn release(lock: LocalFileLock) -> Result(Nil, LocalFileLockError) {
   let path = lock.path
   let owner_path = path <> "/" <> owner_file
@@ -156,20 +165,11 @@ pub fn release(lock: LocalFileLock) -> Result(Nil, LocalFileLockError) {
         "owner token changed; refusing to remove a lock that may belong to another acquisition",
       ))
     Error(simplifile.Enoent) ->
-      case simplifile.exists(path, False) {
-        Ok(False) -> Ok(Nil)
-        Ok(True) ->
-          Error(io_error(
-            path,
-            "owner token is missing while the lock directory still exists",
-          ))
-        Error(error) ->
-          Error(io_error(
-            path,
-            "inspect local lock path failed: "
-              <> simplifile.describe_error(error),
-          ))
-      }
+      Error(LocalFileLockError(
+        Compromised,
+        path,
+        "owner token is missing; refusing to treat externally altered lock state as a successful release",
+      ))
     Error(error) ->
       Error(io_error(
         path,
@@ -317,3 +317,6 @@ fn io_error(path: String, message: String) -> LocalFileLockError {
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "delete_empty_directory")
 fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "is_directory")
+fn path_is_directory(path: String) -> Bool

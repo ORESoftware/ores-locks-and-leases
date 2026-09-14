@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const OWNER_FILE = "owner";
@@ -65,6 +65,14 @@ export class LocalFileLock {
     try {
       observed = await readFile(owner_path, "utf8");
     } catch (error) {
+      if (error_code(error) === "ENOENT") {
+        throw new LocalFileLockError(
+          "compromised",
+          this.path,
+          "owner token is missing; refusing to treat externally altered lock state as a successful release",
+          error,
+        );
+      }
       throw io_error(this.path, "read local lock owner token", error);
     }
     if (observed !== this.owner) {
@@ -101,7 +109,19 @@ export async function try_acquire_local_file_lock(
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     await mkdir(path, { mode: 0o700 });
   } catch (error) {
-    if (error_code(error) === "EEXIST") return null;
+    if (error_code(error) === "EEXIST") {
+      try {
+        if ((await lstat(path)).isDirectory()) return null;
+      } catch (inspectError) {
+        throw io_error(path, "inspect contended local lock path", inspectError);
+      }
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        "lock path already exists but is not a directory",
+        error,
+      );
+    }
     throw io_error(path, "atomically create local lock directory", error);
   }
 

@@ -1,0 +1,5 @@
+{
+  "wait": true,
+  "waitTimeoutMs": -1,
+  "retryIntervalMs": 50
+}

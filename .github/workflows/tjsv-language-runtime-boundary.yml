@@ -7,6 +7,7 @@ on:
       - 'conformance/**'
       - 'src/**'
       - 'scripts/check-tjsv-contracts.sh'
+      - 'scripts/check-tjsv-optional-projections.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   push:
@@ -16,6 +17,7 @@ on:
       - 'conformance/**'
       - 'src/**'
       - 'scripts/check-tjsv-contracts.sh'
+      - 'scripts/check-tjsv-optional-projections.sh'
       - 'scripts/verify-language-runtime-boundaries.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   workflow_dispatch:
@@ -30,8 +32,8 @@ concurrency:
 
 env:
   EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-  TJSV_COMMIT: dfc28bfc000faba5a963f23c708171dfd5f8debf
-  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/dfc28bfc000faba5a963f23c708171dfd5f8debf.tar.gz
+  TJSV_COMMIT: b2c4810400625829114a56087ad33937caac735a
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/b2c4810400625829114a56087ad33937caac735a.tar.gz
 
 jobs:
   boundary:
@@ -68,7 +70,7 @@ jobs:
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
 
-      - name: Run current TJSV against both independent authority bundles
+      - name: Run current TJSV against all independent authority bundles
         id: contracts
         continue-on-error: true
         run: |
@@ -78,6 +80,11 @@ jobs:
             scripts/check-tjsv-contracts.sh > "$tmp"
           chmod +x "$tmp"
           sh "$tmp" all
+
+      - name: Admit optional Protobuf, WIT, and Dafny projections with TJSV
+        id: additive
+        continue-on-error: true
+        run: sh scripts/check-tjsv-optional-projections.sh
 
       - name: Verify Rust projection with live PostgreSQL
         id: rust
@@ -170,6 +177,7 @@ jobs:
         if: always()
         env:
           CONTRACTS_OUTCOME: ${{ steps.contracts.outcome }}
+          ADDITIVE_OUTCOME: ${{ steps.additive.outcome }}
           RUST_OUTCOME: ${{ steps.rust.outcome }}
           GO_OUTCOME: ${{ steps.go.outcome }}
           TYPESCRIPT_OUTCOME: ${{ steps.typescript.outcome }}
@@ -178,7 +186,7 @@ jobs:
           VALIDATOR_OUTCOME: ${{ steps.validator.outcome }}
           BOUNDARY_OUTCOME: ${{ steps.boundary.outcome }}
         run: |
-          for name in CONTRACTS RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY; do
+          for name in CONTRACTS ADDITIVE RUST GO TYPESCRIPT DART GLEAM VALIDATOR BOUNDARY; do
             eval "value=\${${name}_OUTCOME}"
             printf '%s=%s\n' "$name" "$value"
             test "$value" = success

@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "conformance/cases/local-file-lock.json"
+      - "conformance/cases/local-file-lock-invalid.json"
+      - "conformance/LOCAL_FILE_LOCKS.md"
+      - "scripts/check-local-file-corpus.mjs"
       - "src/rust/local_file.rs"
       - "src/rust/lib.rs"
       - "src/rust/tests/local_file_fail_closed.rs"
@@ -24,6 +28,10 @@ on:
       - ".github/workflows/local-file-locks-cross-platform.yml"
   pull_request:
     paths:
+      - "conformance/cases/local-file-lock.json"
+      - "conformance/cases/local-file-lock-invalid.json"
+      - "conformance/LOCAL_FILE_LOCKS.md"
+      - "scripts/check-local-file-corpus.mjs"
       - "src/rust/local_file.rs"
       - "src/rust/lib.rs"
       - "src/rust/tests/local_file_fail_closed.rs"
@@ -84,6 +92,9 @@ jobs:
           otp-version: "27"
           gleam-version: "1.16.0"
           rebar3-version: "3"
+
+      - name: Validate local lock conformance corpus
+        run: node scripts/check-local-file-corpus.mjs
 
       - name: Rust portable local lock tests
         working-directory: src/rust
