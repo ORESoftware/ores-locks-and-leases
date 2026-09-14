@@ -1,4 +1,5 @@
 {
   "state": "compromised",
+  "reason": "owner_contract_violation",
   "message": "owner token is invalid"
 }
