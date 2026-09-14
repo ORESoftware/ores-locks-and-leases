@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 )
 
 // LocalFileLockInspectionState describes read-only portable-lock state.
@@ -61,6 +62,12 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	if len(owner) == 0 {
 		return compromisedInspection("owner token is empty"), nil
 	}
+	if !utf8.Valid(owner) {
+		return compromisedInspection("owner token is not valid UTF-8"), nil
+	}
+	if utf8.RuneCount(owner) > localFileOwnerMaxCodepoints {
+		return compromisedInspection("owner token exceeds the portable 512-code-point contract bound"), nil
+	}
 	return LocalFileLockInspection{State: LocalFileLockHeld, Owner: string(owner)}, nil
 }
 
@@ -71,8 +78,8 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 	if !confirmedInactive {
 		return false, localFileError(LocalFileInvalidInput, path, "explicit confirmed_inactive=true is required for recovery", nil)
 	}
-	if expectedOwner == "" {
-		return false, localFileError(LocalFileInvalidInput, path, "expected owner must not be empty", nil)
+	if err := validateLocalOwner(path, expectedOwner); err != nil {
+		return false, err
 	}
 
 	inspection, err := InspectLocalFileLock(path)
