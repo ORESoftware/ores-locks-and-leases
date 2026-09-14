@@ -32,3 +32,5 @@ jobs:
           name: den-566-rust-lockfile
           path: src/rust/Cargo.lock
           if-no-files-found: error
+
+# Temporary proof workflow; remove after the generated lockfile is committed.
