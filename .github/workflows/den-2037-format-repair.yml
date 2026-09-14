@@ -1,0 +1,63 @@
+name: DEN-2037 exact-head format repair
+
+on:
+  push:
+    branches:
+      - den-2037-local-lock-scoped-recovery
+    paths:
+      - '.github/workflows/den-2037-format-repair.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  format-and-commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.85.1'
+          components: rustfmt
+      - name: Install pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.22'
+          cache: false
+      - name: Install pinned Gleam/OTP
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: '27'
+          gleam-version: '1.16.0'
+          rebar3-version: '3'
+      - name: Apply repository format gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path src/rust/Cargo.toml --all
+          gofmt -w \
+            src/go/local_file.go \
+            src/go/local_file_path_identity_test.go \
+            src/go/local_file_recovery.go \
+            src/go/local_file_recovery_test.go \
+            src/go/local_file_scoped.go \
+            src/go/local_file_scoped_test.go
+          (cd src/gleam && gleam format src test)
+          git diff --check
+      - name: Commit formatting and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/den-2037-format-repair.yml
+          git add src/rust src/go src/gleam .github/workflows/den-2037-format-repair.yml
+          git diff --cached --check
+          git config user.name 'ORESoftware'
+          git config user.email 'alex@oresoftware.com'
+          git commit -m 'style(DEN-2037): satisfy exact-head format gates'
+          git push origin HEAD:den-2037-local-lock-scoped-recovery
