@@ -9,7 +9,8 @@
 @doc("Cross-language contract for composed distributed leases and Postgres advisory locks.")
 namespace Ores.LocksAndLeases;
 
-@doc("A caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`.")
+@doc("A non-empty caller-chosen lock identity. Convention: `<org>/<domain>/<name>`, e.g. `zed-pkg/registry/publish:zed-lib-core`.")
+@minLength(1)
 @maxLength(512)
 scalar LockKey extends string;
 
