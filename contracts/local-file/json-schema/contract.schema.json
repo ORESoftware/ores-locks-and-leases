@@ -28,6 +28,20 @@
       "type": "string",
       "enum": ["absent", "held", "incomplete", "compromised"]
     },
+    "LocalFileLockInspectionReason": {
+      "type": "string",
+      "enum": [
+        "owner_marker_missing",
+        "path_not_directory",
+        "dirty_directory",
+        "owner_not_regular_file",
+        "owner_too_large",
+        "owner_invalid_utf8",
+        "owner_identity_changed",
+        "permissions_widened",
+        "owner_contract_violation"
+      ]
+    },
     "ScopedLocalFileLockOutcomeKind": {
       "type": "string",
       "enum": ["success", "lock_error", "work_error", "work_and_release_error"]
@@ -85,18 +99,20 @@
           "unevaluatedProperties": false,
           "properties": {
             "state": { "const": "incomplete" },
+            "reason": { "const": "owner_marker_missing" },
             "message": { "type": "string", "minLength": 1 }
           },
-          "required": ["state", "message"]
+          "required": ["state", "reason", "message"]
         },
         {
           "type": "object",
           "unevaluatedProperties": false,
           "properties": {
             "state": { "const": "compromised" },
+            "reason": { "$ref": "#/$defs/LocalFileLockInspectionReason" },
             "message": { "type": "string", "minLength": 1 }
           },
-          "required": ["state", "message"]
+          "required": ["state", "reason", "message"]
         }
       ]
     },
