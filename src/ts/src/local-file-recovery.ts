@@ -64,11 +64,11 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   try {
     owner = await read_bounded_utf8_owner(path, ownerPath);
   } catch (error) {
+    if (error instanceof OwnerMissingDuringInspectionError) {
+      return incomplete(error.message);
+    }
     if (error instanceof LocalFileLockError && error.kind === "compromised") {
       return compromised(error.message);
-    }
-    if (error instanceof LocalFileLockError && error.kind === "incomplete") {
-      return incomplete(error.message);
     }
     throw error;
   }
@@ -156,6 +156,8 @@ export async function recover_local_file_lock(
   return true;
 }
 
+class OwnerMissingDuringInspectionError extends Error {}
+
 async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Promise<string> {
   let handle;
   try {
@@ -182,7 +184,7 @@ async function read_bounded_utf8_owner(lockPath: string, ownerPath: string): Pro
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "ENOENT") {
-      throw new LocalFileLockError("incomplete", lockPath, "owner token disappeared during inspection", error);
+      throw new OwnerMissingDuringInspectionError("owner token disappeared during inspection");
     }
     throw io_error(lockPath, "read local lock owner token", error);
   } finally {
