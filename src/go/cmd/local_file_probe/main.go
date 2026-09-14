@@ -19,6 +19,9 @@ func main() {
 		usage()
 	}
 	mode, path, owner := os.Args[1], os.Args[2], os.Args[3]
+	if mode != "hold" && mode != "try" && mode != "crash" {
+		usage()
+	}
 	holdMs := int64(0)
 	if len(os.Args) == 5 {
 		parsed, err := strconv.ParseInt(os.Args[4], 10, 64)
@@ -46,8 +49,6 @@ func main() {
 	case "crash":
 		fmt.Println("CRASHED")
 		os.Exit(30)
-	default:
-		usage()
 	}
 	if err := lock.Release(); err != nil {
 		fmt.Fprintf(os.Stderr, "RELEASE_ERROR:%v\n", err)
