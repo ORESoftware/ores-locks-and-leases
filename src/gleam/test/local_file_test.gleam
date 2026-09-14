@@ -1,3 +1,4 @@
+import gleam/option.{None, Some}
 import gleeunit/should
 import ores_locks_and_leases/local_file
 import simplifile
