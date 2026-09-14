@@ -16,11 +16,30 @@ export { MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES } from "./local-file.js";
 
 export type LocalFileLockInspectionState = "absent" | "held" | "incomplete" | "compromised";
 
+export type LocalFileLockInspectionReason =
+  | "owner_marker_missing"
+  | "path_not_directory"
+  | "dirty_directory"
+  | "owner_not_regular_file"
+  | "owner_too_large"
+  | "owner_invalid_utf8"
+  | "owner_identity_changed"
+  | "permissions_widened"
+  | "owner_contract_violation";
+
 export type LocalFileLockInspection =
   | { state: "absent" }
   | { state: "held"; owner: string }
-  | { state: "incomplete"; message: string }
-  | { state: "compromised"; message: string };
+  | {
+      state: "incomplete";
+      reason: "owner_marker_missing";
+      message: string;
+    }
+  | {
+      state: "compromised";
+      reason: LocalFileLockInspectionReason;
+      message: string;
+    };
 
 /** Read-only inspection. This never acquires, repairs, or removes a lock. */
 export async function inspect_local_file_lock(path: string): Promise<LocalFileLockInspection> {
@@ -33,7 +52,13 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     throw io_error(path, "inspect local lock path", error);
   }
   if (!lockMetadata.isDirectory() || lockMetadata.isSymbolicLink()) {
-    return compromised("lock path is not an unaliased directory");
+    return compromised("path_not_directory", "lock path is not an unaliased directory");
+  }
+  if (process.platform !== "win32" && (lockMetadata.mode & 0o077) !== 0) {
+    return compromised(
+      "permissions_widened",
+      "lock directory permissions widened beyond the private POSIX contract",
+    );
   }
 
   const entries = await read_local_file_lock_entry_names_bounded(path);
@@ -43,7 +68,7 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
     );
   }
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
-    return compromised("lock directory must contain exactly one owner marker");
+    return compromised("dirty_directory", "lock directory must contain exactly one owner marker");
   }
 
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
@@ -51,14 +76,21 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   try {
     ownerMetadata = await lstat(ownerPath);
     if (!ownerMetadata.isFile() || ownerMetadata.isSymbolicLink()) {
-      return compromised("owner token is not an unaliased regular file");
+      return compromised("owner_not_regular_file", "owner token is not an unaliased regular file");
     }
   } catch (error) {
     if (error_code(error) === "ENOENT") return incomplete("owner token disappeared during inspection");
     throw io_error(path, "inspect local lock owner token", error);
   }
+  if (process.platform !== "win32" && (ownerMetadata.mode & 0o077) !== 0) {
+    return compromised(
+      "permissions_widened",
+      "owner token permissions widened beyond the private POSIX contract",
+    );
+  }
   if (ownerMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
     return compromised(
+      "owner_too_large",
       `owner token exceeds the portable ${MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES}-byte UTF-8 storage bound`,
     );
   }
@@ -71,13 +103,18 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
       if (error.message.includes("owner token is missing")) {
         return incomplete("owner token disappeared during inspection");
       }
-      return compromised(error.message);
+      return compromised(classify_bounded_owner_error(error), error.message);
     }
     throw error;
   }
-  if (owner.length === 0) return compromised("owner token is empty");
+  if (owner.length === 0) {
+    return compromised("owner_contract_violation", "owner token is empty");
+  }
   if (Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
-    return compromised("owner token exceeds the portable 512-code-point contract bound");
+    return compromised(
+      "owner_contract_violation",
+      "owner token exceeds the portable 512-code-point contract bound",
+    );
   }
   return { state: "held", owner };
 }
@@ -149,11 +186,25 @@ export async function recover_local_file_lock(
 }
 
 function incomplete(message: string): LocalFileLockInspection {
-  return { state: "incomplete", message };
+  return { state: "incomplete", reason: "owner_marker_missing", message };
 }
 
-function compromised(message: string): LocalFileLockInspection {
-  return { state: "compromised", message };
+function compromised(
+  reason: LocalFileLockInspectionReason,
+  message: string,
+): LocalFileLockInspection {
+  return { state: "compromised", reason, message };
+}
+
+function classify_bounded_owner_error(error: LocalFileLockError): LocalFileLockInspectionReason {
+  if (error.message.includes("valid UTF-8")) return "owner_invalid_utf8";
+  if (error.message.includes("identity changed")) return "owner_identity_changed";
+  if (error.message.includes("permissions widened")) return "permissions_widened";
+  if (error.message.includes("exceeds the portable") && error.message.includes("byte")) {
+    return "owner_too_large";
+  }
+  if (error.message.includes("regular file")) return "owner_not_regular_file";
+  return "owner_contract_violation";
 }
 
 function error_code(error: unknown): string | undefined {
