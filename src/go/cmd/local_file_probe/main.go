@@ -10,7 +10,7 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: local_file_probe <hold|try> <path> <owner> [hold_ms]")
+	fmt.Fprintln(os.Stderr, "usage: local_file_probe <hold|try|crash> <path> <owner> [hold_ms]")
 	os.Exit(2)
 }
 
@@ -39,9 +39,14 @@ func main() {
 	}
 
 	fmt.Println("ACQUIRED")
-	if mode == "hold" {
+	switch mode {
+	case "hold":
 		time.Sleep(time.Duration(holdMs) * time.Millisecond)
-	} else if mode != "try" {
+	case "try":
+	case "crash":
+		fmt.Println("CRASHED")
+		os.Exit(30)
+	default:
 		usage()
 	}
 	if err := lock.Release(); err != nil {
