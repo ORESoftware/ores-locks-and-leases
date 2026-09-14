@@ -40,9 +40,23 @@ jobs:
       - name: Managed maintained path compiles without Fiducia
         working-directory: src/rust
         run: cargo check --locked --no-default-features --features maintained
-      - name: Package Rust crate from the locked graph
-        working-directory: src/rust
-        run: cargo package --locked --allow-dirty --no-verify
+      - name: External Git/Zed consumer builds the default Rust boundary
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/ores-locks-external-consumer"
+          rm -rf "$root"
+          mkdir -p "$root/src"
+          cat > "$root/Cargo.toml" <<EOF
+          [package]
+          name = "ores-locks-external-consumer"
+          version = "0.0.0"
+          edition = "2024"
+          [workspace]
+          [dependencies]
+          ores-locks-and-leases = { path = "$GITHUB_WORKSPACE/src/rust", default-features = false }
+          EOF
+          printf 'use ores_locks_and_leases::{LockKey, LocalFileLock};\nfn main() { let _ = std::mem::size_of::<LocalFileLock>(); let _ = LockKey::new("consumer"); }\n' > "$root/src/main.rs"
+          cargo check --manifest-path "$root/Cargo.toml"
       - name: Clippy (all features)
         working-directory: src/rust
         run: cargo clippy --locked --all-targets --features full -- -D warnings
