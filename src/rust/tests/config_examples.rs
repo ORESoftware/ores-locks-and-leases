@@ -2,12 +2,10 @@
 
 use ores_locks_and_leases::OresLockConfigV1;
 
-const LOCAL_EXAMPLE: &str = include_str!(
-    "../../../contracts/lock-config/examples/local-install.ores-lock.toml"
-);
-const SERVICE_EXAMPLE: &str = include_str!(
-    "../../../contracts/lock-config/examples/service-composed.ores-lock.toml"
-);
+const LOCAL_EXAMPLE: &str =
+    include_str!("../../../contracts/lock-config/examples/local-install.ores-lock.toml");
+const SERVICE_EXAMPLE: &str =
+    include_str!("../../../contracts/lock-config/examples/service-composed.ores-lock.toml");
 const ROOT_CONFIG: &str = include_str!("../../../.ores-lock.toml");
 const ZPKG: &str = include_str!("../../../.zpkg.toml");
 
@@ -15,7 +13,10 @@ const ZPKG: &str = include_str!("../../../.zpkg.toml");
 fn canonical_examples_are_runtime_admissible() {
     let local = OresLockConfigV1::from_toml_str(LOCAL_EXAMPLE).expect("local example must admit");
     assert_eq!(
-        local.select_profile(None).expect("local default").profile_id,
+        local
+            .select_profile(None)
+            .expect("local default")
+            .profile_id,
         "local-install"
     );
 

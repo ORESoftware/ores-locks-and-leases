@@ -11,7 +11,9 @@ fn parse(source: &str) -> OresLockConfigV1 {
 #[test]
 fn selects_default_profile_without_resolved_override() {
     let config = parse(CONFIG);
-    let profile = config.select_profile(None).expect("default profile must exist");
+    let profile = config
+        .select_profile(None)
+        .expect("default profile must exist");
     assert_eq!(profile.profile_id, "local-install");
     assert!(profile.providers.local_file);
     assert!(!profile.providers.fiducia);
@@ -47,7 +49,8 @@ fn rejects_profile_with_no_enabled_provider() {
         "local_file = false\nfiducia = false\npg_advisory = false",
         1,
     );
-    let error = OresLockConfigV1::from_toml_str(&source).expect_err("providerless profile must fail");
+    let error =
+        OresLockConfigV1::from_toml_str(&source).expect_err("providerless profile must fail");
     assert_eq!(error.code, "provider_selection");
 }
 
@@ -58,7 +61,8 @@ fn rejects_dormant_local_provider_table() {
         "local_file = false\nfiducia = false\npg_advisory = true",
         1,
     );
-    let error = OresLockConfigV1::from_toml_str(&source).expect_err("dormant local table must fail");
+    let error =
+        OresLockConfigV1::from_toml_str(&source).expect_err("dormant local table must fail");
     assert_eq!(error.code, "local_file_dormant");
 }
 
@@ -75,7 +79,8 @@ fn rejects_secret_profile_selector_binding() {
 #[test]
 fn rejects_renewal_interval_above_half_ttl() {
     let source = CONFIG.replace("renew_interval_ms = 10000", "renew_interval_ms = 20000");
-    let error = OresLockConfigV1::from_toml_str(&source).expect_err("unsafe renewal cadence must fail");
+    let error =
+        OresLockConfigV1::from_toml_str(&source).expect_err("unsafe renewal cadence must fail");
     assert_eq!(error.code, "renew_interval");
 }
 
@@ -85,6 +90,7 @@ fn rejects_unknown_toml_fields() {
         "schema_version = \"ores.lock.config.v1\"",
         "schema_version = \"ores.lock.config.v1\"\nundeclared_setting = true",
     );
-    let error = OresLockConfigV1::from_toml_str(&source).expect_err("unknown fields must fail closed");
+    let error =
+        OresLockConfigV1::from_toml_str(&source).expect_err("unknown fields must fail closed");
     assert_eq!(error.code, "invalid_toml");
 }
