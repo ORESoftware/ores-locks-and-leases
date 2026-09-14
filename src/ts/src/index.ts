@@ -22,11 +22,14 @@ export { MAX_LOCK_KEY_BYTES, advisoryKey, fnv1a64, lockKey, type LockKey } from 
 export * from "./fence.js";
 export * from "./renewal.js";
 export {
+  LOCAL_FILE_LOCK_OWNER_FILE,
   LocalFileLock,
   LocalFileLockError,
   DEFAULT_LOCAL_FILE_LOCK_OPTIONS,
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
+  MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
   acquire_local_file_lock,
+  generated_local_file_lock_owner,
   local_file_lock_exists,
   try_acquire_local_file_lock,
   type LocalFileLockErrorKind,
