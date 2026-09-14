@@ -46,6 +46,16 @@ test("inspection marks missing owner and dirty directories compromised", async (
   });
 });
 
+test("inspection rejects persisted owners over the contract bound", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "install.lock");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    await writeFile(join(path, "owner"), "😀".repeat(513), "utf8");
+    assert.equal((await inspect_local_file_lock(path)).state, "compromised");
+  });
+});
+
 test("recovery requires confirmation and exact expected owner", async () => {
   await withTempDir(async (root) => {
     const path = join(root, "install.lock");
@@ -62,6 +72,16 @@ test("recovery requires confirmation and exact expected owner", async () => {
     );
     assert.equal(await recover_local_file_lock(path, "owner-a", true), true);
     assert.equal(await inspect_local_file_lock(path).then((value) => value.state), "absent");
+  });
+});
+
+test("recovery rejects an oversized expected owner before inspecting state", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "absent.lock");
+    await assert.rejects(
+      recover_local_file_lock(path, "😀".repeat(513), true),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
   });
 });
 
