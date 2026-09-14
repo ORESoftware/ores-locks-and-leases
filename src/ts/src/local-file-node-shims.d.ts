@@ -1,14 +1,27 @@
 declare module "node:fs/promises" {
   interface LocalFileStats {
+    readonly size: number;
     isDirectory(): boolean;
     isFile(): boolean;
     isSymbolicLink(): boolean;
+  }
+
+  interface LocalFileHandle {
+    read(
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number,
+    ): Promise<{ bytesRead: number; buffer: Uint8Array }>;
+    close(): Promise<void>;
   }
 
   export function mkdir(
     path: string,
     options?: { recursive?: boolean; mode?: number },
   ): Promise<string | undefined>;
+
+  export function open(path: string, flags: string): Promise<LocalFileHandle>;
 
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
 
