@@ -1,11 +1,12 @@
 {
   "schema": "ores.locks.local-file.recovery.v1",
-  "inspection_states": ["absent", "held", "compromised"],
+  "inspection_states": ["absent", "held", "incomplete", "compromised"],
   "inspection": {
     "claims_ownership": false,
     "follows_rendezvous_symlink": false,
     "expected_entries_when_held": ["owner"],
-    "missing_owner": "compromised",
+    "empty_directory": "incomplete",
+    "missing_owner_after_observed_owner_entry": "incomplete",
     "unexpected_entry": "compromised",
     "non_directory_rendezvous": "compromised"
   },
@@ -15,15 +16,18 @@
     "requires_expected_owner": true,
     "recursive_delete": false,
     "absent_is_successful_noop": true,
+    "incomplete_is_auto_recoverable": false,
     "operator_precondition": "independently confirm the previous owner is inactive and the protected local state is quiescent before recovery"
   },
   "cases": [
     {"name": "inspect-absent", "state": "absent"},
     {"name": "inspect-clean-owner", "state": "held", "owner": "owner-a"},
-    {"name": "inspect-missing-owner", "state": "compromised"},
+    {"name": "inspect-mkdir-before-owner-crash", "state": "incomplete"},
+    {"name": "inspect-owner-removed-before-rmdir-crash", "state": "incomplete"},
     {"name": "inspect-unexpected-entry", "state": "compromised"},
     {"name": "recover-without-confirmation", "expect_error": "invalid_input"},
     {"name": "recover-owner-mismatch", "expect_error": "compromised"},
+    {"name": "recover-incomplete", "expect_error": "compromised", "must_preserve_directory": true},
     {"name": "recover-dirty-directory", "expect_error": "compromised"},
     {"name": "recover-absent", "expect_recovered": false},
     {"name": "recover-clean-confirmed-owner", "expect_recovered": true}
