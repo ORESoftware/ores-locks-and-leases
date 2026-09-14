@@ -32,6 +32,12 @@ export {
   type LocalFileLockOptions,
 } from "./local-file.js";
 export {
+  inspect_local_file_lock,
+  recover_local_file_lock,
+  type LocalFileLockInspection,
+  type LocalFileLockInspectionState,
+} from "./local-file-recovery.js";
+export {
   ScopedLocalFileLockError,
   with_local_file_lock,
   type ScopedLocalFileLockErrorKind,
