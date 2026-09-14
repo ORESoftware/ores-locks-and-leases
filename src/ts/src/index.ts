@@ -40,6 +40,7 @@ export {
   inspect_local_file_lock,
   recover_local_file_lock,
   type LocalFileLockInspection,
+  type LocalFileLockInspectionReason,
   type LocalFileLockInspectionState,
 } from "./local-file-recovery.js";
 export {
