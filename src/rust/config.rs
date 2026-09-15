@@ -127,22 +127,26 @@ impl LockProfileConfig {
         })
     }
 
-    #[must_use]
-    pub fn lease_acquire_options(&self) -> Option<(AcquireOptions, bool)> {
-        self.providers.fiducia.then(|| {
-            (
-                AcquireOptions {
-                    ttl: Duration::from_millis(
-                        self.ttl_ms
-                            .expect("validated Fiducia profiles require ttl_ms"),
-                    ),
-                    wait_timeout: Duration::from_millis(self.wait_timeout_ms),
-                    retry_interval: Duration::from_millis(self.retry_interval_ms),
-                    holder: None,
-                },
-                self.wait,
+    pub fn lease_acquire_options(&self) -> Result<Option<(AcquireOptions, bool)>, LockConfigError> {
+        if !self.providers.fiducia {
+            return Ok(None);
+        }
+        let ttl_ms = self.ttl_ms.ok_or_else(|| {
+            LockConfigError::new(
+                "ttl_missing",
+                "profiles.ttl_ms",
+                "enabled Fiducia provider requires ttl_ms",
             )
-        })
+        })?;
+        Ok(Some((
+            AcquireOptions {
+                ttl: Duration::from_millis(ttl_ms),
+                wait_timeout: Duration::from_millis(self.wait_timeout_ms),
+                retry_interval: Duration::from_millis(self.retry_interval_ms),
+                holder: None,
+            },
+            self.wait,
+        )))
     }
 }
 
@@ -564,14 +568,22 @@ mod tests {
         let local = config.profile("local-install").expect("local profile");
         assert_eq!(local.layers(), LockLayers::NONE);
         assert!(local.local_file_options().is_some());
-        assert!(local.lease_acquire_options().is_none());
+        assert!(
+            local
+                .lease_acquire_options()
+                .expect("local projection")
+                .is_none()
+        );
         assert_eq!(local.pg_scope(), None);
 
         let service = config.profile("service-composed").expect("service profile");
         assert_eq!(service.layers(), LockLayers::BOTH);
         assert!(service.local_file_options().is_none());
         assert_eq!(service.pg_scope(), Some(PgScope::Transaction));
-        let (options, wait) = service.lease_acquire_options().expect("lease options");
+        let (options, wait) = service
+            .lease_acquire_options()
+            .expect("service projection")
+            .expect("lease options");
         assert!(wait);
         assert_eq!(options.ttl, Duration::from_millis(30_000));
         assert_eq!(options.wait_timeout, Duration::from_millis(30_000));
