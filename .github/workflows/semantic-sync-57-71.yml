@@ -48,18 +48,10 @@ jobs:
           file=src/rust/local_file.rs
           recovery=src/rust/local_file_recovery.rs
 
-          # The child already has the portable cfg-split mkdir helper while the parent
-          # adds the stronger private-directory helper. Their textual insertion points
-          # cause both mkdir helpers to survive an otherwise clean ort merge. Keep the
-          # parent's single cross-platform DirBuilder implementation and preserve the
-          # child's public path validation around its callers.
           test "$(grep -c '^fn create_lock_directory' "$file")" -eq 2
           perl -0pi -e 's/fn create_lock_directory\(path: &Path\) -> io::Result<\(\)> \{\n    #\[cfg\(unix\)\]\n    \{\n        let mut builder = fs::DirBuilder::new\(\);\n        builder\.mode\(0o700\);\n        builder\.create\(path\)\n    \}\n    #\[cfg\(not\(unix\)\)\]\n    \{\n        fs::create_dir\(path\)\n    \}\n\}\n\n//' "$file"
           test "$(grep -c '^fn create_lock_directory' "$file")" -eq 1
 
-          # Parent hardening introduces bounded handle reads and POSIX permission
-          # checks; the child branch owns newer path-admission helpers. Compose both
-          # import sets explicitly instead of selecting either side wholesale.
           perl -0pi -e 's/use std::fs::\{self, OpenOptions\};/use std::fs::{self, File, OpenOptions};/' "$file"
           perl -0pi -e 's/use std::io::\{self, Write\};/use std::io::{self, Read, Write};/' "$file"
           perl -0pi -e 's/use std::os::unix::fs::\{DirBuilderExt, MetadataExt, OpenOptionsExt\};/use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};/' "$file"
@@ -67,10 +59,8 @@ jobs:
           grep -q 'use std::io::{self, Read, Write};' "$file"
           grep -q 'PermissionsExt' "$file"
 
-          # Parent bounded directory enumeration uses OsString; child path admission
-          # imports otherwise remain authoritative in the composed recovery module.
           if ! grep -q '^use std::ffi::OsString;' "$recovery"; then
-            sed -i '/^use crate::local_file/a use std::ffi::OsString;' "$recovery"
+            perl -0pi -e 's/(use crate::local_file::\{.*?\n\};\n)/$1use std::ffi::OsString;\n/s' "$recovery"
           fi
           grep -q '^use std::ffi::OsString;' "$recovery"
 
