@@ -17,6 +17,7 @@ pub fn inspect_absent_and_held_local_lock_test() {
     local_file_recovery.Absent,
     None,
     None,
+    None,
   )) = local_file_recovery.inspect(root, "install.lock")
 
   let assert Ok(Some(_lock)) =
@@ -24,6 +25,7 @@ pub fn inspect_absent_and_held_local_lock_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Held,
     Some("owner-a"),
+    None,
     None,
   )) = local_file_recovery.inspect(root, "install.lock")
   local_file_recovery.recover(root, "install.lock", "owner-a", True)
@@ -39,8 +41,13 @@ pub fn inspect_empty_directory_is_incomplete_crash_state_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Incomplete,
     None,
+    Some(local_file_recovery.OwnerMarkerMissing),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
+  local_file_recovery.inspection_reason_string(
+    local_file_recovery.OwnerMarkerMissing,
+  )
+  |> should.equal("owner_marker_missing")
   let assert Error(error) =
     local_file_recovery.recover(root, "install.lock", "owner-a", True)
   error.kind |> should.equal(local_file.Compromised)
@@ -58,6 +65,7 @@ pub fn owner_removed_before_rmdir_is_incomplete_crash_state_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Incomplete,
     None,
+    Some(local_file_recovery.OwnerMarkerMissing),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
   let assert Error(error) =
@@ -79,8 +87,13 @@ pub fn inspect_dirty_directory_is_compromised_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Compromised,
     _,
+    Some(local_file_recovery.DirtyDirectory),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
+  local_file_recovery.inspection_reason_string(
+    local_file_recovery.DirtyDirectory,
+  )
+  |> should.equal("dirty_directory")
   clean(root)
 }
 
@@ -95,6 +108,7 @@ pub fn inspect_oversized_persisted_owner_is_compromised_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Compromised,
     _,
+    Some(local_file_recovery.OwnerContractViolation),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
   clean(root)
@@ -120,6 +134,7 @@ pub fn recovery_requires_confirmation_and_exact_owner_test() {
   |> should.equal(
     Ok(local_file_recovery.LocalFileLockInspection(
       local_file_recovery.Absent,
+      None,
       None,
       None,
     )),
