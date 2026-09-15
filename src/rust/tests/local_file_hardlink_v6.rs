@@ -23,6 +23,28 @@ fn test_path(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn release_fails_closed_while_owner_marker_is_hardlinked() {
+    let path = test_path("release");
+    let alias = test_path("release-owner-alias");
+    let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+        .expect("acquire")
+        .expect("holder");
+
+    fs::hard_link(path.join("owner"), &alias).expect("create owner hard link");
+    let release = lock
+        .release()
+        .expect_err("multiply linked owner must block destructive release");
+    assert_eq!(release.kind, LocalFileLockErrorKind::Compromised);
+    assert!(path.exists(), "failed release must preserve rendezvous");
+    assert!(path.join("owner").exists(), "failed release must preserve owner marker");
+    assert!(alias.exists(), "failed release must preserve external alias");
+
+    fs::remove_file(&alias).expect("remove external alias");
+    lock.release().expect("release after alias repair");
+    assert!(!path.exists());
+}
+
+#[test]
 fn inspection_and_recovery_fail_closed_while_owner_marker_is_hardlinked() {
     let path = test_path("recovery");
     let alias = test_path("owner-alias");
