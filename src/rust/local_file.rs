@@ -462,7 +462,7 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
 fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
-        return metadata.nlink() != 1;
+        metadata.nlink() != 1
     }
     #[cfg(not(unix))]
     {
