@@ -41,6 +41,39 @@ jobs:
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
 
+      - name: Reconcile overlapping Rust helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=src/rust/local_file.rs
+          recovery=src/rust/local_file_recovery.rs
+
+          # The child already has the portable cfg-split mkdir helper while the parent
+          # adds the stronger private-directory helper. Their textual insertion points
+          # cause both mkdir helpers to survive an otherwise clean ort merge. Keep the
+          # parent's single cross-platform DirBuilder implementation and preserve the
+          # child's public path validation around its callers.
+          test "$(grep -c '^fn create_lock_directory' "$file")" -eq 2
+          perl -0pi -e 's/fn create_lock_directory\(path: &Path\) -> io::Result<\(\)> \{\n    #\[cfg\(unix\)\]\n    \{\n        let mut builder = fs::DirBuilder::new\(\);\n        builder\.mode\(0o700\);\n        builder\.create\(path\)\n    \}\n    #\[cfg\(not\(unix\)\)\]\n    \{\n        fs::create_dir\(path\)\n    \}\n\}\n\n//' "$file"
+          test "$(grep -c '^fn create_lock_directory' "$file")" -eq 1
+
+          # Parent hardening introduces bounded handle reads and POSIX permission
+          # checks; the child branch owns newer path-admission helpers. Compose both
+          # import sets explicitly instead of selecting either side wholesale.
+          perl -0pi -e 's/use std::fs::\{self, OpenOptions\};/use std::fs::{self, File, OpenOptions};/' "$file"
+          perl -0pi -e 's/use std::io::\{self, Write\};/use std::io::{self, Read, Write};/' "$file"
+          perl -0pi -e 's/use std::os::unix::fs::\{DirBuilderExt, MetadataExt, OpenOptionsExt\};/use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};/' "$file"
+          grep -q 'use std::fs::{self, File, OpenOptions};' "$file"
+          grep -q 'use std::io::{self, Read, Write};' "$file"
+          grep -q 'PermissionsExt' "$file"
+
+          # Parent bounded directory enumeration uses OsString; child path admission
+          # imports otherwise remain authoritative in the composed recovery module.
+          if ! grep -q '^use std::ffi::OsString;' "$recovery"; then
+            sed -i '/^use crate::local_file/a use std::ffi::OsString;' "$recovery"
+          fi
+          grep -q '^use std::ffi::OsString;' "$recovery"
+
       - name: Normalize merge-only Rust formatting
         working-directory: src/rust
         shell: bash
