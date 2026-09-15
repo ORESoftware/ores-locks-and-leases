@@ -1,0 +1,51 @@
+{
+  "schema": "ores.typespec-json-schema-validator.language-boundaries/v1",
+  "minimumDistinctLanguages": 5,
+  "authorities": {
+    "typeSpec": "peer",
+    "jsonSchema": "peer",
+    "generatedWitness": "evidence_only"
+  },
+  "targets": [
+    {
+      "language": "rust",
+      "runtime": "native",
+      "required": true,
+      "ingress": true,
+      "egress": true,
+      "evidence": "runtime-evidence/rust-native.json"
+    },
+    {
+      "language": "typescript",
+      "runtime": "node",
+      "required": true,
+      "ingress": true,
+      "egress": true,
+      "evidence": "runtime-evidence/typescript-node.json"
+    },
+    {
+      "language": "go",
+      "runtime": "native",
+      "required": true,
+      "ingress": true,
+      "egress": true,
+      "evidence": "runtime-evidence/go-native.json"
+    },
+    {
+      "language": "gleam",
+      "runtime": "beam",
+      "required": true,
+      "ingress": true,
+      "egress": true,
+      "evidence": "runtime-evidence/gleam-beam.json"
+    },
+    {
+      "language": "dart",
+      "runtime": "dart-vm",
+      "required": true,
+      "ingress": true,
+      "egress": true,
+      "evidence": "runtime-evidence/dart-dart-vm.json"
+    }
+  ]
+}
