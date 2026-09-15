@@ -113,6 +113,7 @@ jobs:
           cargo test --locked --no-default-features --test local_file_retry_budget_v6
           cargo test --locked --no-default-features --test local_file_parent_lifecycle_v6
           cargo test --locked --no-default-features --test local_file_hardlink_v6
+          cargo test --locked --no-default-features --test local_file_path_admission_v7
 
       - name: Go portable local lock tests
         working-directory: src/go
@@ -146,3 +147,6 @@ jobs:
 
       - name: Sixth-order process and recovery matrix
         run: node scripts/check-local-file-process-sixth-order.mjs
+
+      - name: Eighth-order process identity, isolation, and recovery matrix
+        run: node scripts/check-local-file-process-eighth-order.mjs

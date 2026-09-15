@@ -1,6 +1,8 @@
 //! Explicit inspection and operator-driven recovery for portable local locks.
 
-use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};
+use crate::local_file::{
+    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_owner, validate_local_file_path,
+};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
@@ -41,6 +43,7 @@ pub fn inspect_local_file_lock(
     path: impl AsRef<Path>,
 ) -> Result<LocalFileLockInspection, LocalFileLockError> {
     let path = path.as_ref();
+    validate_local_file_path(path)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -145,6 +148,7 @@ pub fn recover_local_file_lock(
     confirmed_inactive: bool,
 ) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
+    validate_local_file_path(path)?;
     if !confirmed_inactive {
         return Err(error(
             LocalFileLockErrorKind::InvalidInput,
@@ -152,20 +156,7 @@ pub fn recover_local_file_lock(
             "explicit confirmed_inactive=true is required for recovery",
         ));
     }
-    if expected_owner.is_empty() {
-        return Err(error(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "expected owner must not be empty",
-        ));
-    }
-    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {
-        return Err(error(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "expected owner must not exceed 512 Unicode code points",
-        ));
-    }
+    validate_local_file_owner(path, expected_owner)?;
 
     let inspection = inspect_local_file_lock(path)?;
     match inspection.state {
@@ -285,7 +276,7 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
 fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
-        return metadata.nlink() != 1;
+        metadata.nlink() != 1
     }
     #[cfg(not(unix))]
     {

@@ -10,11 +10,10 @@ import gleam/erlang/process
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import ores_locks_and_leases/local_file_owner_validation as owner_validation
 import simplifile
 
 const owner_file = "owner"
-
-const owner_max_codepoints = 512
 
 /// Why a portable local filesystem lock operation failed.
 pub type LocalFileLockErrorKind {
@@ -313,40 +312,39 @@ fn validate_inputs(
     || lock_name == ".."
     || string.contains(lock_name, "/")
     || string.contains(lock_name, "\\"),
-    string.is_empty(owner),
-    unicode_codepoint_count(owner) > owner_max_codepoints
+    owner_validation.validate(owner)
   {
-    True, _, _, _, _ ->
+    True, _, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock root must not be empty",
       ))
-    _, True, _, _, _ ->
+    _, True, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock name must not be empty",
       ))
-    _, _, True, _, _ ->
+    _, _, True, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock name must be one non-dot path component",
       ))
-    _, _, _, True, _ ->
+    _, _, _, owner_validation.OwnerEmpty ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "owner token must not be empty",
       ))
-    _, _, _, _, True ->
+    _, _, _, owner_validation.OwnerOversized ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "owner token must not exceed 512 Unicode code points",
       ))
-    False, False, False, False, False -> Ok(Nil)
+    False, False, False, owner_validation.OwnerValid -> Ok(Nil)
   }
 }
 
@@ -406,6 +404,3 @@ fn make_private_directory_status(path: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "write_new_file_status")
 fn write_new_file_status(path: String, contents: String) -> Int
-
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "unicode_codepoint_count")
-fn unicode_codepoint_count(value: String) -> Int
