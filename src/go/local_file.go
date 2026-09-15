@@ -16,6 +16,7 @@ import (
 )
 
 const localFileOwnerName = "owner"
+const localFileOwnerPendingName = "owner.pending"
 const localFileOwnerMaxCodepoints = 512
 const localFileOwnerMaxUTF8Bytes = localFileOwnerMaxCodepoints * 4
 
@@ -140,14 +141,15 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 	}
 
 	ownerPath := filepath.Join(path, localFileOwnerName)
-	ownerFile, openErr := os.OpenFile(ownerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	pendingPath := filepath.Join(path, localFileOwnerPendingName)
+	ownerFile, openErr := os.OpenFile(pendingPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if openErr != nil {
 		_ = os.Remove(path)
 		kind := LocalFileIO
 		if errors.Is(openErr, os.ErrExist) {
 			kind = LocalFileCompromised
 		}
-		return nil, false, localFileError(kind, path, "create local lock owner token failed", openErr)
+		return nil, false, localFileError(kind, path, "create pending local lock owner token failed", openErr)
 	}
 	n, writeErr := ownerFile.WriteString(owner)
 	if writeErr == nil && n != len(owner) {
@@ -159,15 +161,29 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 	}
 	closeErr := ownerFile.Close()
 	if writeErr != nil || syncErr != nil || closeErr != nil {
-		_ = os.Remove(ownerPath)
+		_ = os.Remove(pendingPath)
 		_ = os.Remove(path)
 		if writeErr != nil {
-			return nil, false, localFileError(LocalFileIO, path, "write local lock owner token failed", writeErr)
+			return nil, false, localFileError(LocalFileIO, path, "write pending local lock owner token failed", writeErr)
 		}
 		if syncErr != nil {
-			return nil, false, localFileError(LocalFileIO, path, "sync local lock owner token failed", syncErr)
+			return nil, false, localFileError(LocalFileIO, path, "sync pending local lock owner token failed", syncErr)
 		}
-		return nil, false, localFileError(LocalFileIO, path, "close local lock owner token failed", closeErr)
+		return nil, false, localFileError(LocalFileIO, path, "close pending local lock owner token failed", closeErr)
+	}
+	if _, statErr := os.Lstat(ownerPath); statErr == nil {
+		_ = os.Remove(pendingPath)
+		_ = os.Remove(path)
+		return nil, false, localFileError(LocalFileCompromised, path, "published owner target already exists before atomic publication", nil)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		_ = os.Remove(pendingPath)
+		_ = os.Remove(path)
+		return nil, false, localFileError(LocalFileIO, path, "inspect owner publication target failed", statErr)
+	}
+	if renameErr := os.Rename(pendingPath, ownerPath); renameErr != nil {
+		_ = os.Remove(pendingPath)
+		_ = os.Remove(path)
+		return nil, false, localFileError(LocalFileIO, path, "atomically publish local lock owner token failed", renameErr)
 	}
 
 	return &LocalFileLock{path: path, owner: owner}, true, nil
