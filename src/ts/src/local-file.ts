@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { lstat, mkdir, open, opendir, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises";
 
 export const LOCAL_FILE_LOCK_OWNER_FILE = "owner";
+export const LOCAL_FILE_LOCK_OWNER_PENDING_FILE = "owner.pending";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
 export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES =
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS * 4;
@@ -110,7 +111,7 @@ export class LocalFileLock {
       throw new LocalFileLockError(
         "compromised",
         this.path,
-        "lock directory must contain exactly one owner marker before release",
+        "lock directory must contain exactly one published owner marker before release",
       );
     }
 
@@ -201,11 +202,43 @@ export async function try_acquire_local_file_lock(
   if (!created) return null;
 
   const owner_path = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
+  const pending_path = join(path, LOCAL_FILE_LOCK_OWNER_PENDING_FILE);
+  let pendingHandle;
   try {
-    await writeFile(owner_path, owner, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    pendingHandle = await open(pending_path, "wx", 0o600);
+    await pendingHandle.writeFile(owner, { encoding: "utf8" });
+    await pendingHandle.sync();
+    await pendingHandle.close();
+    pendingHandle = undefined;
+
+    try {
+      await lstat(owner_path);
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        "published owner target already exists before atomic publication",
+      );
+    } catch (targetError) {
+      if (targetError instanceof LocalFileLockError) throw targetError;
+      if (error_code(targetError) !== "ENOENT") {
+        throw io_error(path, "inspect owner publication target", targetError);
+      }
+    }
+    await rename(pending_path, owner_path);
   } catch (error) {
+    try {
+      await pendingHandle?.close();
+    } catch {
+      // Preserve the original publication failure below.
+    }
     let rollbackError: unknown;
     try {
+      await unlink(pending_path).catch((cleanupError) => {
+        if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
+      });
+      await unlink(owner_path).catch((cleanupError) => {
+        if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
+      });
       await rmdir(path);
     } catch (cleanupError) {
       rollbackError = cleanupError;
@@ -214,19 +247,20 @@ export async function try_acquire_local_file_lock(
       throw new LocalFileLockError(
         "compromised",
         path,
-        `owner-token write failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
+        `owner publication failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
         rollbackError,
       );
     }
+    if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "EEXIST") {
       throw new LocalFileLockError(
         "compromised",
         path,
-        "owner token already exists after winning lock directory creation",
+        "owner publication marker already exists after winning lock directory creation",
         error,
       );
     }
-    throw io_error(path, "write local lock owner token", error);
+    throw io_error(path, "publish local lock owner token", error);
   }
 
   try {
@@ -322,7 +356,7 @@ export async function local_file_lock_exists(path: string): Promise<boolean> {
     throw new LocalFileLockError(
       "compromised",
       path,
-      "lock directory must contain exactly one owner marker",
+      "lock directory must contain exactly one published owner marker",
     );
   }
 
