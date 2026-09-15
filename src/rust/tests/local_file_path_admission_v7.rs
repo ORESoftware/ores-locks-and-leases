@@ -1,6 +1,6 @@
 use ores_locks_and_leases::{
-    inspect_local_file_lock, local_file_lock_exists, recover_local_file_lock, LocalFileLock,
-    LocalFileLockErrorKind,
+    LocalFileLock, LocalFileLockErrorKind, inspect_local_file_lock, local_file_lock_exists,
+    recover_local_file_lock,
 };
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
