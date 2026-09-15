@@ -25,100 +25,72 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs = require('node:fs');
-
           function replaceOnce(text, from, to, label) {
             const first = text.indexOf(from);
             if (first < 0) throw new Error(`missing guarded replacement: ${label}`);
             if (text.indexOf(from, first + from.length) >= 0) throw new Error(`non-unique guarded replacement: ${label}`);
             return text.slice(0, first) + to + text.slice(first + from.length);
           }
-
+          const pathValidator = [
+            'pub(crate) fn validate_local_file_path(path: &Path) -> Result<(), LocalFileLockError> {',
+            '    if path.as_os_str().is_empty() {',
+            '        return Err(LocalFileLockError::new(',
+            '            LocalFileLockErrorKind::InvalidInput,',
+            '            path,',
+            '            "local lock path must not be empty",',
+            '        ));',
+            '    }',
+            '    let text = path.to_str().ok_or_else(|| {',
+            '        LocalFileLockError::new(',
+            '            LocalFileLockErrorKind::InvalidInput,',
+            '            path,',
+            '            "local lock path must be valid Unicode scalar data",',
+            '        )',
+            '    })?;',
+            "    if text.contains('\\0') {",
+            '        return Err(LocalFileLockError::new(',
+            '            LocalFileLockErrorKind::InvalidInput,',
+            '            path,',
+            '            "local lock path must not contain NUL",',
+            '        ));',
+            '    }',
+            '    Ok(())',
+            '}',
+            '',
+            'pub(crate) fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {',
+          ].join('\n');
           const localPath = 'src/rust/local_file.rs';
           let local = fs.readFileSync(localPath, 'utf8');
-          local = replaceOnce(
-            local,
-            '        let owner = owner.into();\n        validate_owner(path, &owner)?;',
-            '        let owner = owner.into();\n        validate_local_file_path(path)?;\n        validate_owner(path, &owner)?;',
-            'try_acquire path admission',
-          );
-          local = replaceOnce(
-            local,
-            '        let owner = owner.into();\n        validate_options(&path, &options)?;',
-            '        let owner = owner.into();\n        validate_local_file_path(&path)?;\n        validate_options(&path, &options)?;',
-            'acquire path admission',
-          );
-          local = replaceOnce(
-            local,
-            'pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {\n    let path = path.as_ref();\n    match fs::symlink_metadata(path) {',
-            'pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {\n    let path = path.as_ref();\n    validate_local_file_path(path)?;\n    match fs::symlink_metadata(path) {',
-            'exists path admission',
-          );
-          local = replaceOnce(
-            local,
-            'fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {',
-            `pub(crate) fn validate_local_file_path(path: &Path) -> Result<(), LocalFileLockError> {
-    if path.as_os_str().is_empty() {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "local lock path must not be empty",
-        ));
-    }
-    let text = path.to_str().ok_or_else(|| {
-        LocalFileLockError::new(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "local lock path must be valid Unicode scalar data",
-        )
-    })?;
-    if text.contains('\\0') {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "local lock path must not contain NUL",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {`,
-            'shared path/owner validators',
-          );
+          local = replaceOnce(local, '        let owner = owner.into();\n        validate_owner(path, &owner)?;', '        let owner = owner.into();\n        validate_local_file_path(path)?;\n        validate_owner(path, &owner)?;', 'try_acquire path admission');
+          local = replaceOnce(local, '        let owner = owner.into();\n        validate_options(&path, &options)?;', '        let owner = owner.into();\n        validate_local_file_path(&path)?;\n        validate_options(&path, &options)?;', 'acquire path admission');
+          local = replaceOnce(local, 'pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {\n    let path = path.as_ref();\n    match fs::symlink_metadata(path) {', 'pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {\n    let path = path.as_ref();\n    validate_local_file_path(path)?;\n    match fs::symlink_metadata(path) {', 'exists path admission');
+          local = replaceOnce(local, 'fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {', pathValidator, 'shared path/owner validators');
           fs.writeFileSync(localPath, local);
-
           const recoveryPath = 'src/rust/local_file_recovery.rs';
           let recovery = fs.readFileSync(recoveryPath, 'utf8');
-          recovery = replaceOnce(
-            recovery,
-            'use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};',
-            'use crate::local_file::{\n    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_path, validate_owner,\n};',
-            'recovery validator imports',
-          );
+          recovery = replaceOnce(recovery, 'use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};', 'use crate::local_file::{\n    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_path, validate_owner,\n};', 'recovery validator imports');
           const pathAnchor = '    let path = path.as_ref();\n';
-          const positions = [];
-          for (let i = recovery.indexOf(pathAnchor); i >= 0; i = recovery.indexOf(pathAnchor, i + pathAnchor.length)) positions.push(i);
-          if (positions.length !== 2) throw new Error(`expected two recovery path anchors, found ${positions.length}`);
+          const anchors = recovery.split(pathAnchor).length - 1;
+          if (anchors !== 2) throw new Error(`expected two recovery path anchors, found ${anchors}`);
           recovery = recovery.replaceAll(pathAnchor, pathAnchor + '    validate_local_file_path(path)?;\n');
-          recovery = replaceOnce(
-            recovery,
-            `    if expected_owner.is_empty() {
-        return Err(error(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "expected owner must not be empty",
-        ));
-    }
-    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {
-        return Err(error(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "expected owner must not exceed 512 Unicode code points",
-        ));
-    }
-`,
-            '    validate_owner(path, expected_owner)?;\n',
-            'recovery shared owner admission',
-          );
+          const oldOwner = [
+            '    if expected_owner.is_empty() {',
+            '        return Err(error(',
+            '            LocalFileLockErrorKind::InvalidInput,',
+            '            path,',
+            '            "expected owner must not be empty",',
+            '        ));',
+            '    }',
+            '    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {',
+            '        return Err(error(',
+            '            LocalFileLockErrorKind::InvalidInput,',
+            '            path,',
+            '            "expected owner must not exceed 512 Unicode code points",',
+            '        ));',
+            '    }',
+            '',
+          ].join('\n');
+          recovery = replaceOnce(recovery, oldOwner, '    validate_owner(path, expected_owner)?;\n', 'recovery shared owner admission');
           fs.writeFileSync(recoveryPath, recovery);
           NODE
       - name: Format Rust
