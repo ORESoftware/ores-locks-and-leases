@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ORESoftware/ores-locks-and-leases/contracts/local-file/json-schema/contract.schema.json",
-  "$comment": "Portable local filesystem lock contract — independent JSON Schema authority. Peer of ../typespec/main.tsp; neither is generated from the other.",
+  "$comment": "Portable local filesystem lock contract — independent JSON Schema authority. Peer of ../typespec/main.tsp; neither is generated from the other. LocalFileLockInspection uses anyOf because its state const discriminators make the branches mutually exclusive while matching the TypeSpec union semantics without oneOf evaluation overhead.",
   "x-ores-namespace": "Ores.LocksAndLeases.LocalFile",
   "$defs": {
     "LocalFileLockPath": {

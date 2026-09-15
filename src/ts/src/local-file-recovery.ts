@@ -49,13 +49,8 @@ type InspectionOwnerRead =
 /** Read-only inspection. This never acquires, repairs, or removes a lock. */
 export async function inspect_local_file_lock(path: string): Promise<LocalFileLockInspection> {
   validate_local_file_lock_path(path);
-  let lockMetadata;
-  try {
-    lockMetadata = await lstat(path);
-  } catch (error) {
-    if (error_code(error) === "ENOENT") return { state: "absent" };
-    throw io_error(path, "inspect local lock path", error);
-  }
+  const lockMetadata = await lstat_inspection_lock_path(path);
+  if (lockMetadata === null) return { state: "absent" };
   if (!lockMetadata.isDirectory() || lockMetadata.isSymbolicLink()) {
     return compromised("path_not_directory", "lock path is not an unaliased directory");
   }
@@ -78,37 +73,11 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   }
 
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
-  let ownerMetadata;
-  try {
-    ownerMetadata = await lstat(ownerPath);
-    if (!ownerMetadata.isFile() || ownerMetadata.isSymbolicLink()) {
-      return compromised("owner_not_regular_file", "owner token is not an unaliased regular file");
-    }
-  } catch (error) {
-    if (error_code(error) === "ENOENT") return incomplete("owner token disappeared during inspection");
-    throw io_error(path, "inspect local lock owner token", error);
-  }
-  if (process.platform !== "win32" && (ownerMetadata.mode & 0o077) !== 0) {
-    return compromised(
-      "permissions_widened",
-      "owner token permissions widened beyond the private POSIX contract",
-    );
-  }
-  if (ownerMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
-    return compromised(
-      "owner_too_large",
-      `owner token exceeds the portable ${MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES}-byte UTF-8 storage bound`,
-    );
-  }
-
   let ownerRead: InspectionOwnerRead;
   try {
     ownerRead = await read_inspection_owner(path, ownerPath);
   } catch (error) {
     if (error instanceof LocalFileLockError && error.kind === "compromised") {
-      if (error.message.includes("owner token is missing")) {
-        return incomplete("owner token disappeared during inspection");
-      }
       return compromised(classify_bounded_owner_error(error), error.message);
     }
     throw error;
@@ -198,6 +167,34 @@ export async function recover_local_file_lock(
 }
 
 /**
+ * Initial path metadata can itself observe Windows deletion-pending EPERM.
+ * Retry only that transient condition, bounded to a few milliseconds. A path
+ * that disappears linearizes as absent; persistent denial remains an IO error.
+ */
+async function lstat_inspection_lock_path(path: string) {
+  const maxAttempts = process.platform === "win32" ? 4 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await lstat(path);
+    } catch (error) {
+      lastError = error;
+      if (error_code(error) === "ENOENT") return null;
+      if (process.platform !== "win32" || error_code(error) !== "EPERM") {
+        throw io_error(path, "inspect local lock path", error);
+      }
+      if (attempt + 1 < maxAttempts) {
+        await sleep_ms(1);
+        continue;
+      }
+    }
+  }
+
+  throw io_error(path, "inspect local lock path", lastError);
+}
+
+/**
  * Read the bounded directory shape while tolerating only the two OS-level
  * disappearance signals produced by a concurrent clean release.
  *
@@ -226,7 +223,9 @@ async function read_inspection_entry_names(path: string): Promise<string[] | nul
         await lstat(path);
       } catch (probeError) {
         if (error_code(probeError) === "ENOENT") return null;
-        throw io_error(path, "recheck Windows deletion-pending local lock path", probeError);
+        if (error_code(probeError) !== "EPERM") {
+          throw io_error(path, "recheck Windows deletion-pending local lock path", probeError);
+        }
       }
 
       if (attempt + 1 < maxAttempts) {
@@ -240,14 +239,16 @@ async function read_inspection_entry_names(path: string): Promise<string[] | nul
 }
 
 /**
- * Read the owner marker for read-only inspection without weakening release.
- *
- * Windows may report EPERM from `open(owner)` while a concurrent clean release
- * has already made the owner or rendezvous deletion-pending. A bounded recheck
- * converts only observed disappearance into the corresponding inspection
- * transition. Persistent EPERM on extant state remains a real I/O failure.
+ * Read the owner marker for diagnostics while preserving fail-closed release
+ * behavior. Windows may report EPERM when a clean concurrent release has
+ * already put the owner/directory into deletion-pending state. Inspection may
+ * linearize that bounded race as absent/incomplete, but persistent EPERM on an
+ * extant lock remains an IO error and is never converted to healthy state.
  */
-async function read_inspection_owner(path: string, ownerPath: string): Promise<InspectionOwnerRead> {
+async function read_inspection_owner(
+  path: string,
+  ownerPath: string,
+): Promise<InspectionOwnerRead> {
   const maxAttempts = process.platform === "win32" ? 4 : 1;
   let lastError: unknown;
 
@@ -256,24 +257,44 @@ async function read_inspection_owner(path: string, ownerPath: string): Promise<I
       return { state: "owner", owner: await read_bounded_local_file_lock_owner(path, ownerPath) };
     } catch (error) {
       lastError = error;
-      if (!(error instanceof LocalFileLockError) || error.kind !== "io") throw error;
-      if (process.platform !== "win32" || !caused_by_error_code(error, "EPERM")) {
+
+      if (error instanceof LocalFileLockError && error.kind === "compromised") {
+        if (error.message.includes("owner token is missing")) {
+          try {
+            await lstat(path);
+            return { state: "incomplete" };
+          } catch (probeError) {
+            if (error_code(probeError) === "ENOENT") return { state: "absent" };
+            if (
+              process.platform === "win32" &&
+              error_code(probeError) === "EPERM" &&
+              attempt + 1 < maxAttempts
+            ) {
+              await sleep_ms(1);
+              continue;
+            }
+            throw io_error(path, "recheck local lock after owner disappearance", probeError);
+          }
+        }
+        throw error;
+      }
+
+      if (
+        !(error instanceof LocalFileLockError) ||
+        error.kind !== "io" ||
+        process.platform !== "win32" ||
+        !caused_by_error_code(error, "EPERM")
+      ) {
         throw error;
       }
 
       try {
-        await lstat(ownerPath);
-      } catch (ownerProbeError) {
-        if (error_code(ownerProbeError) === "ENOENT") {
-          try {
-            await lstat(path);
-            return { state: "incomplete" };
-          } catch (pathProbeError) {
-            if (error_code(pathProbeError) === "ENOENT") return { state: "absent" };
-            throw io_error(path, "recheck Windows deletion-pending local lock path", pathProbeError);
-          }
+        await lstat(path);
+      } catch (probeError) {
+        if (error_code(probeError) === "ENOENT") return { state: "absent" };
+        if (error_code(probeError) !== "EPERM") {
+          throw io_error(path, "recheck Windows deletion-pending local lock path", probeError);
         }
-        throw io_error(path, "recheck Windows deletion-pending owner token", ownerProbeError);
       }
 
       if (attempt + 1 < maxAttempts) {
@@ -301,6 +322,9 @@ function classify_bounded_owner_error(error: LocalFileLockError): LocalFileLockI
   if (error.message.includes("valid UTF-8")) return "owner_invalid_utf8";
   if (error.message.includes("identity changed")) return "owner_identity_changed";
   if (error.message.includes("permissions widened")) return "permissions_widened";
+  if (error.message.includes("multiple filesystem links") || error.message.includes("multiply linked")) {
+    return "owner_identity_changed";
+  }
   if (error.message.includes("exceeds the portable") && error.message.includes("byte")) {
     return "owner_too_large";
   }
