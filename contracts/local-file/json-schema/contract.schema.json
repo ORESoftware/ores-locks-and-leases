@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ORESoftware/ores-locks-and-leases/contracts/local-file/json-schema/contract.schema.json",
-  "$comment": "Portable local filesystem lock contract — independent JSON Schema authority. Peer of ../typespec/main.tsp; neither is generated from the other.",
+  "$comment": "Portable local filesystem lock contract — independent JSON Schema authority. Peer of ../typespec/main.tsp; neither is generated from the other. LocalFileLockInspection uses anyOf because its state const discriminators make the branches mutually exclusive while matching the TypeSpec union semantics without oneOf evaluation overhead.",
   "x-ores-namespace": "Ores.LocksAndLeases.LocalFile",
   "$defs": {
     "LocalFileLockPath": {
@@ -27,6 +27,20 @@
     "LocalFileLockInspectionState": {
       "type": "string",
       "enum": ["absent", "held", "incomplete", "compromised"]
+    },
+    "LocalFileLockInspectionReason": {
+      "type": "string",
+      "enum": [
+        "owner_marker_missing",
+        "path_not_directory",
+        "dirty_directory",
+        "owner_not_regular_file",
+        "owner_too_large",
+        "owner_invalid_utf8",
+        "owner_identity_changed",
+        "permissions_widened",
+        "owner_contract_violation"
+      ]
     },
     "ScopedLocalFileLockOutcomeKind": {
       "type": "string",
@@ -62,14 +76,45 @@
       "required": ["path", "owner", "released"]
     },
     "LocalFileLockInspection": {
-      "type": "object",
-      "unevaluatedProperties": false,
-      "properties": {
-        "state": { "$ref": "#/$defs/LocalFileLockInspectionState" },
-        "owner": { "$ref": "#/$defs/LocalFileLockOwner" },
-        "message": { "type": "string", "minLength": 1 }
-      },
-      "required": ["state"]
+      "anyOf": [
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "absent" }
+          },
+          "required": ["state"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "held" },
+            "owner": { "$ref": "#/$defs/LocalFileLockOwner" }
+          },
+          "required": ["state", "owner"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "incomplete" },
+            "reason": { "const": "owner_marker_missing" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "required": ["state", "reason", "message"]
+        },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "state": { "const": "compromised" },
+            "reason": { "$ref": "#/$defs/LocalFileLockInspectionReason" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "required": ["state", "reason", "message"]
+        }
+      ]
     },
     "LocalFileLockRecoveryRequest": {
       "type": "object",

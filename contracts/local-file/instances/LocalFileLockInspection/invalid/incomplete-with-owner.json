@@ -1,0 +1,6 @@
+{
+  "state": "incomplete",
+  "reason": "owner_marker_missing",
+  "owner": "owner-a",
+  "message": "publication incomplete"
+}

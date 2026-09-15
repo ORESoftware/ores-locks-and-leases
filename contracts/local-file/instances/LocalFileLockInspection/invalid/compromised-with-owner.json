@@ -1,0 +1,6 @@
+{
+  "state": "compromised",
+  "reason": "dirty_directory",
+  "owner": "owner-a",
+  "message": "bad state"
+}

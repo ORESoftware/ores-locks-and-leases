@@ -17,6 +17,8 @@ contracts/projections/<bundle>/<lane>/
 
 The projection manifest is evidence, not a third schema authority. It must bind the current projection outputs to the exact current TJSV parity receipt, Contract IR, TypeSpec source, authored JSON Schema, and TypeSpec-generated JSON Schema witness. The trusted projection policy controls which outputs and representation deltas are admissible.
 
+For the `local` bundle, `LocalFileLockInspection` is a state-valid discriminated contract. Any optional projection that represents inspection state must preserve all four states — `absent`, `held`, `incomplete`, and `compromised` — and must preserve the state-specific payload rules (`held` requires an owner; `incomplete` and `compromised` require diagnostics; `absent` carries neither). A projection that drops `incomplete`, makes `owner` universally optional, or permits impossible state/payload combinations must be rejected by `tjsv verify-projection`, not grandfathered as a representation delta.
+
 Run the mandatory peer-authority checks first, then the optional lanes:
 
 ```sh

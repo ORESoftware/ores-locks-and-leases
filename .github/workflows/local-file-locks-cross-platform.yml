@@ -8,19 +8,22 @@ on:
       - "conformance/LOCAL_FILE_LOCKS.md"
       - "docs/local-file-*.md"
       - "docs/scoped-local-file-locks.md"
-      - "scripts/check-local-file-corpus.mjs"
+      - "scripts/check-local-file-*.mjs"
       - "src/rust/local_file*.rs"
       - "src/rust/lib.rs"
       - "src/rust/tests/local_file*.rs"
+      - "src/rust/examples/local_file_probe.rs"
       - "src/go/local_file*.go"
+      - "src/go/cmd/local_file_probe/**"
       - "src/ts/src/local-file*.ts"
       - "src/ts/src/index.ts"
-      - "src/ts/test/local-file*.test.mjs"
+      - "src/ts/test/local-file*.mjs"
       - "src/ts/package.json"
       - "src/ts/package-lock.json"
       - "src/ts/tsconfig.json"
       - "src/gleam/src/ores_locks_and_leases/local_file*.gleam"
       - "src/gleam/src/ores_locks_and_leases_local_file_ffi.erl"
+      - "src/gleam/src/local_file_*"
       - "src/gleam/test/local_file*_test.gleam"
       - "src/gleam/gleam.toml"
       - "src/gleam/manifest.toml"
@@ -31,19 +34,22 @@ on:
       - "conformance/LOCAL_FILE_LOCKS.md"
       - "docs/local-file-*.md"
       - "docs/scoped-local-file-locks.md"
-      - "scripts/check-local-file-corpus.mjs"
+      - "scripts/check-local-file-*.mjs"
       - "src/rust/local_file*.rs"
       - "src/rust/lib.rs"
       - "src/rust/tests/local_file*.rs"
+      - "src/rust/examples/local_file_probe.rs"
       - "src/go/local_file*.go"
+      - "src/go/cmd/local_file_probe/**"
       - "src/ts/src/local-file*.ts"
       - "src/ts/src/index.ts"
-      - "src/ts/test/local-file*.test.mjs"
+      - "src/ts/test/local-file*.mjs"
       - "src/ts/package.json"
       - "src/ts/package-lock.json"
       - "src/ts/tsconfig.json"
       - "src/gleam/src/ores_locks_and_leases/local_file*.gleam"
       - "src/gleam/src/ores_locks_and_leases_local_file_ffi.erl"
+      - "src/gleam/src/local_file_*"
       - "src/gleam/test/local_file*_test.gleam"
       - "src/gleam/gleam.toml"
       - "src/gleam/manifest.toml"
@@ -65,7 +71,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,6 +109,11 @@ jobs:
           cargo test --locked --no-default-features --test local_file_recovery
           cargo test --locked --no-default-features --test local_file_path_identity
           cargo test --locked --no-default-features --test local_file_adversarial_v2
+          cargo test --locked --no-default-features --test local_file_semantic_v5
+          cargo test --locked --no-default-features --test local_file_retry_budget_v6
+          cargo test --locked --no-default-features --test local_file_parent_lifecycle_v6
+          cargo test --locked --no-default-features --test local_file_hardlink_v6
+          cargo test --locked --no-default-features --test local_file_path_admission_v7
 
       - name: Go portable local lock tests
         working-directory: src/go
@@ -113,8 +124,32 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs test/local-file-recovery.test.mjs test/local-file-path-identity.test.mjs test/local-file-adversarial-v2.test.mjs test/local-file-hardening-v3.test.mjs test/local-file-semantic-v4.test.mjs
+          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs test/local-file-recovery.test.mjs test/local-file-path-identity.test.mjs test/local-file-adversarial-v2.test.mjs test/local-file-hardening-v3.test.mjs test/local-file-semantic-v4.test.mjs test/local-file-transition-stress.test.mjs test/local-file-fourth-order-v5.test.mjs test/local-file-fs-identity-v6.test.mjs test/local-file-retry-budget-v6.test.mjs test/local-file-parent-lifecycle-v6.test.mjs
 
       - name: Gleam portable local lock tests
         working-directory: src/gleam
         run: gleam test
+
+      - name: Build local-lock process probes
+        shell: bash
+        run: |
+          mkdir -p tmp
+          (cd src/rust && cargo build --locked --no-default-features --example local_file_probe)
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            (cd src/go && go build -o ../../tmp/local-file-go-probe.exe ./cmd/local_file_probe)
+          else
+            (cd src/go && go build -o ../../tmp/local-file-go-probe ./cmd/local_file_probe)
+          fi
+          (cd src/gleam && gleam build)
+
+      - name: Cross-runtime process interoperability and crash matrix
+        run: node scripts/check-local-file-process-interop.mjs
+
+      - name: Sixth-order process and recovery matrix
+        run: node scripts/check-local-file-process-sixth-order.mjs
+
+      - name: Eighth-order process identity, isolation, and recovery matrix
+        run: node scripts/check-local-file-process-eighth-order.mjs
+
+      - name: Ninth-order path alias, transition, and recovery isolation matrix
+        run: node scripts/check-local-file-process-ninth-order.mjs

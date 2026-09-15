@@ -74,6 +74,27 @@ test("Node timer scheduling caps huge valid waits without collapsing them", () =
   assert.equal(local_file_lock_sleep_delay_ms(5, 500), 5);
 });
 
+test("portable path admission rejects empty NUL and lone-surrogate paths", async () => {
+  for (const path of ["", "bad\0path", "bad-\ud800-path"]) {
+    await assert.rejects(
+      try_acquire_local_file_lock(path, "owner-a"),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
+    await assert.rejects(
+      local_file_lock_exists(path),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
+    await assert.rejects(
+      inspect_local_file_lock(path),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
+    await assert.rejects(
+      recover_local_file_lock(path, "owner-a", true),
+      (error) => error instanceof LocalFileLockError && error.kind === "invalid_input",
+    );
+  }
+});
+
 test("owner input rejects lone UTF-16 surrogates before persistence", async () => {
   await withTempDir(async (root) => {
     for (const [suffix, owner] of [
@@ -102,6 +123,18 @@ test("generated owner identities are fresh, bounded, and usable", async () => {
     const path = join(root, "generated.lock");
     const lock = await try_acquire_local_file_lock(path, firstOwner);
     assert.ok(lock);
+    await lock.release();
+  });
+});
+
+test("concurrent release calls share one linearized successful transition", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "concurrent-release.lock");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    await Promise.all([lock.release(), lock.release(), lock.release()]);
+    assert.equal(lock.released, true);
+    assert.equal(lock.release_state, "released");
     await lock.release();
   });
 });

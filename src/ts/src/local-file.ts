@@ -151,26 +151,44 @@ export async function try_acquire_local_file_lock(
     await mkdir(parent, { recursive: true, mode: 0o700 });
     await validate_real_directory(path, parent, "lock parent");
     await validate_posix_trusted_parent(path, parent);
-    await mkdir(path, { mode: 0o700 });
-    await validate_posix_private_lock_directory(path, path);
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
-    if (error_code(error) === "EEXIST") {
+    throw io_error(path, "prepare local lock parent", error);
+  }
+
+  let created = false;
+  for (let transitionAttempt = 0; transitionAttempt < 2; transitionAttempt += 1) {
+    try {
+      await mkdir(path, { mode: 0o700 });
+      await validate_posix_private_lock_directory(path, path);
+      created = true;
+      break;
+    } catch (error) {
+      if (error instanceof LocalFileLockError) throw error;
+      if (error_code(error) !== "EEXIST") {
+        throw io_error(path, "atomically create local lock directory", error);
+      }
+
       try {
         const metadata = await lstat(path);
         if (metadata.isDirectory() && !metadata.isSymbolicLink()) return null;
+        throw new LocalFileLockError(
+          "compromised",
+          path,
+          "lock path already exists but is not an unaliased directory",
+          error,
+        );
       } catch (inspectError) {
+        if (inspectError instanceof LocalFileLockError) throw inspectError;
+        if (error_code(inspectError) === "ENOENT") {
+          if (transitionAttempt === 0) continue;
+          return null;
+        }
         throw io_error(path, "inspect contended local lock path", inspectError);
       }
-      throw new LocalFileLockError(
-        "compromised",
-        path,
-        "lock path already exists but is not an unaliased directory",
-        error,
-      );
     }
-    throw io_error(path, "atomically create local lock directory", error);
   }
+  if (!created) return null;
 
   const owner_path = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   try {
@@ -342,6 +360,13 @@ export async function read_bounded_local_file_lock_owner(
         "owner token is not an unaliased regular file",
       );
     }
+    if (pathMetadata.nlink !== 1) {
+      throw new LocalFileLockError(
+        "compromised",
+        lockPath,
+        "owner token has multiple filesystem links; refusing aliased ownership state",
+      );
+    }
     validate_posix_private_mode(lockPath, pathMetadata.mode, "owner token");
     if (pathMetadata.size > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
@@ -356,13 +381,14 @@ export async function read_bounded_local_file_lock_owner(
     if (
       !openedMetadata.isFile() ||
       openedMetadata.isSymbolicLink() ||
+      openedMetadata.nlink !== 1 ||
       openedMetadata.dev !== pathMetadata.dev ||
       openedMetadata.ino !== pathMetadata.ino
     ) {
       throw new LocalFileLockError(
         "compromised",
         lockPath,
-        "owner token identity changed while opening; refusing raced path-to-handle state",
+        "owner token identity changed or became multiply linked while opening; refusing raced path-to-handle state",
       );
     }
     validate_posix_private_mode(lockPath, openedMetadata.mode, "opened owner token");
@@ -547,14 +573,17 @@ function validate_posix_private_mode(lockPath: string, mode: number, label: stri
 async function validate_regular_file(lock_path: string, path: string, label: string): Promise<void> {
   try {
     const metadata = await lstat(path);
-    if (metadata.isFile() && !metadata.isSymbolicLink()) {
+    if (metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1) {
       validate_posix_private_mode(lock_path, metadata.mode, label);
       return;
     }
+    const detail = metadata.isFile() && metadata.nlink !== 1
+      ? `${label} has multiple filesystem links`
+      : `${label} is not an unaliased regular file`;
     throw new LocalFileLockError(
       "compromised",
       lock_path,
-      `${label} is not an unaliased regular file`,
+      detail,
     );
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;

@@ -12,6 +12,7 @@ declare module "node:fs/promises" {
     readonly dev: number;
     readonly ino: number;
     readonly mode: number;
+    readonly nlink: number;
     isDirectory(): boolean;
     isFile(): boolean;
     isSymbolicLink(): boolean;

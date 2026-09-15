@@ -6,7 +6,10 @@
     path_kind/1,
     directory_shape/1,
     write_new_file_status/2,
+    make_private_directory_status/1,
     make_symlink_status/2,
+    make_hardlink_status/2,
+    make_hard_link_status/2,
     unicode_codepoint_count/1,
     owner_private_mode_status/1
 ]).
@@ -27,12 +30,14 @@ is_directory(Path) ->
 
 %% Alias-aware path classification using read_link_info so symbolic links are
 %% never followed. Values are intentionally tiny and stable for the Gleam FFI:
-%% 0 absent, 1 real directory, 2 real regular file, 3 alias/other node, 4 IO.
+%% 0 absent, 1 real directory, 2 single-linked regular file, 3 alias/other
+%% node (including a multiply linked regular owner marker), 4 IO.
 path_kind(Path) ->
     case file:read_link_info(Path) of
         {error, enoent} -> 0;
         {ok, #file_info{type = directory}} -> 1;
-        {ok, #file_info{type = regular}} -> 2;
+        {ok, #file_info{type = regular, links = 1}} -> 2;
+        {ok, #file_info{type = regular}} -> 3;
         {ok, _} -> 3;
         {error, _} -> 4
     end.
@@ -48,6 +53,29 @@ directory_shape(Path) ->
             end;
         {ok, _} -> 1;
         {error, _} -> 2
+    end.
+
+%% Atomically claim the rendezvous with make_dir, then tighten the newly owned
+%% directory to 0700 before publishing any owner identity. Erlang's file API
+%% does not expose a per-call mkdir mode, so POSIX mode tightening is the first
+%% operation after the atomic claim. If chmod fails, roll the still-empty
+%% provisional directory back and fail closed.
+%% 0 success, 1 already exists, 2 other IO/mode failure.
+make_private_directory_status(Path) ->
+    case file:make_dir(Path) of
+        {error, eexist} -> 1;
+        {error, _} -> 2;
+        ok ->
+            case os:type() of
+                {unix, _} ->
+                    case file:change_mode(Path, 8#700) of
+                        ok -> 0;
+                        {error, _} ->
+                            _ = file:del_dir(Path),
+                            2
+                    end;
+                _ -> 0
+            end
     end.
 
 %% Create the owner marker without overwriting an attacker- or race-created
@@ -115,3 +143,16 @@ make_symlink_status(Target, Link) ->
         {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup -> 1;
         {error, _} -> 2
     end.
+
+%% Test-support primitive for owner-marker hard-link policy.
+%% 0 success; 1 platform/filesystem does not permit hard links; 2 other.
+make_hardlink_status(Existing, Link) ->
+    case file:make_link(Existing, Link) of
+        ok -> 0;
+        {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup; Reason =:= exdev -> 1;
+        {error, _} -> 2
+    end.
+
+%% Compatibility spelling used by the newer Gleam recovery test surface.
+make_hard_link_status(Existing, Link) ->
+    make_hardlink_status(Existing, Link).

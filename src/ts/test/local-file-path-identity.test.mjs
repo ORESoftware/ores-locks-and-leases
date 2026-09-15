@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   LocalFileLockError,
+  inspect_local_file_lock,
   local_file_lock_exists,
   try_acquire_local_file_lock,
 } from "../dist/index.js";
@@ -95,6 +96,23 @@ test("owner marker symlink is compromised on release", async (t) => {
   });
 });
 
+test("owner marker hard links are compromised on POSIX", { skip: process.platform === "win32" }, async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "hard-link.lock");
+    const alias = join(root, "owner-alias");
+    const lock = await try_acquire_local_file_lock(path, "owner-a");
+    assert.ok(lock);
+    await link(join(path, "owner"), alias);
+
+    const inspection = await inspect_local_file_lock(path);
+    assert.equal(inspection.state, "compromised");
+    await assert.rejects(
+      lock.release(),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+  });
+});
+
 test("case aliases contend when the filesystem is case-insensitive", async () => {
   await withTempDir(async (root) => {
     const upper = join(root, "Install.lock");
@@ -110,6 +128,26 @@ test("case aliases contend when the filesystem is case-insensitive", async () =>
     }
     if (aliases) {
       assert.equal(await try_acquire_local_file_lock(lower, "owner-b"), null);
+    }
+    await first.release();
+  });
+});
+
+test("Unicode normalization aliases contend when the filesystem normalizes names", async () => {
+  await withTempDir(async (root) => {
+    const composed = join(root, "café.lock");
+    const decomposed = join(root, "cafe\u0301.lock");
+    const first = await try_acquire_local_file_lock(composed, "owner-a");
+    assert.ok(first);
+
+    let aliases = false;
+    try {
+      aliases = (await realpath(decomposed)) === (await realpath(composed));
+    } catch {
+      // Filesystem preserves the two Unicode spellings as distinct names.
+    }
+    if (aliases) {
+      assert.equal(await try_acquire_local_file_lock(decomposed, "owner-b"), null);
     }
     await first.release();
   });

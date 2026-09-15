@@ -4,11 +4,10 @@ import gleam/dynamic.{type Dynamic}
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import ores_locks_and_leases/local_file
+import ores_locks_and_leases/local_file_owner_validation as owner_validation
 import simplifile
 
 const owner_file = "owner"
-
-const owner_max_codepoints = 512
 
 pub type LocalFileLockInspectionState {
   Absent
@@ -86,16 +85,14 @@ fn inspect_owner(
 fn inspect_owner_value(
   owner: String,
 ) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
-  case
-    string.is_empty(owner),
-    unicode_codepoint_count(owner) > owner_max_codepoints
-  {
-    True, _ -> Ok(compromised("owner token is empty"))
-    _, True ->
+  case owner_validation.validate(owner) {
+    owner_validation.OwnerEmpty -> Ok(compromised("owner token is empty"))
+    owner_validation.OwnerOversized ->
       Ok(compromised(
         "owner token exceeds the portable 512-code-point contract bound",
       ))
-    False, False -> Ok(LocalFileLockInspection(Held, Some(owner), None))
+    owner_validation.OwnerValid ->
+      Ok(LocalFileLockInspection(Held, Some(owner), None))
   }
 }
 
@@ -120,30 +117,26 @@ fn validate_recovery_owner(
   expected_owner: String,
   confirmed_inactive: Bool,
 ) -> Result(Bool, local_file.LocalFileLockError) {
-  case
-    confirmed_inactive,
-    string.is_empty(expected_owner),
-    unicode_codepoint_count(expected_owner) > owner_max_codepoints
-  {
-    False, _, _ ->
+  case confirmed_inactive, owner_validation.validate(expected_owner) {
+    False, _ ->
       Error(local_file.LocalFileLockError(
         local_file.InvalidInput,
         path,
         "explicit confirmed_inactive=true is required for recovery",
       ))
-    True, True, _ ->
+    True, owner_validation.OwnerEmpty ->
       Error(local_file.LocalFileLockError(
         local_file.InvalidInput,
         path,
         "expected owner must not be empty",
       ))
-    True, _, True ->
+    True, owner_validation.OwnerOversized ->
       Error(local_file.LocalFileLockError(
         local_file.InvalidInput,
         path,
         "expected owner must not exceed 512 Unicode code points",
       ))
-    True, False, False -> recover_inspected(path, expected_owner)
+    True, owner_validation.OwnerValid -> recover_inspected(path, expected_owner)
   }
 }
 
@@ -290,6 +283,3 @@ fn directory_shape(path: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "delete_empty_directory")
 fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)
-
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "unicode_codepoint_count")
-fn unicode_codepoint_count(value: String) -> Int
