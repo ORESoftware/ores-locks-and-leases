@@ -99,6 +99,19 @@ test("ownerless publication window is modeled as incomplete with a reason code",
   });
 });
 
+test("pending owner publication can never be mistaken for a held owner", async () => {
+  await withRoot(async (root) => {
+    const path = join(root, "pending.lock");
+    await mkdir(path, { mode: 0o700 });
+    await writeFile(join(path, "owner.pending"), "syntactically-valid-owner-prefix", { mode: 0o600 });
+    assert.deepEqual(await inspect_local_file_lock(path), {
+      state: "incomplete",
+      reason: "owner_marker_missing",
+      message: "owner publication is incomplete; pending owner marker is not ownership authority",
+    });
+  });
+});
+
 test("inspection reason codes remain machine-readable for compromised state", async () => {
   await withRoot(async (root) => {
     const path = join(root, "dirty.lock");
