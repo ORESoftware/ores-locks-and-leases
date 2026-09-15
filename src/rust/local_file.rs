@@ -363,8 +363,9 @@ fn create_lock_directory(path: &Path) -> io::Result<()> {
 fn validate_private_lock_directory(path: &Path) -> Result<(), LocalFileLockError> {
     #[cfg(unix)]
     {
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|error| LocalFileLockError::io(path, "inspect lock directory permissions", error))?;
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            LocalFileLockError::io(path, "inspect lock directory permissions", error)
+        })?;
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(LocalFileLockError::new(
                 LocalFileLockErrorKind::Compromised,
@@ -524,7 +525,10 @@ fn validate_regular_file(
 }
 
 #[cfg(unix)]
-fn validate_single_link(lock_path: &Path, metadata: &fs::Metadata) -> Result<(), LocalFileLockError> {
+fn validate_single_link(
+    lock_path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), LocalFileLockError> {
     if metadata.nlink() != 1 {
         return Err(LocalFileLockError::new(
             LocalFileLockErrorKind::Compromised,
@@ -727,7 +731,9 @@ mod tests {
             .expect("acquire")
             .expect("holder");
         fs::hard_link(path.join(OWNER_FILE), &alias).expect("create hard-link alias");
-        let error = lock.release().expect_err("hard-linked owner must fail closed");
+        let error = lock
+            .release()
+            .expect_err("hard-linked owner must fail closed");
         assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
         fs::remove_file(alias).expect("remove hard-link alias");
         fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
@@ -757,7 +763,9 @@ mod tests {
             .expect("acquire")
             .expect("holder");
         fs::write(path.join(OWNER_FILE), [0xff]).expect("replace owner with invalid UTF-8");
-        let error = lock.release().expect_err("invalid UTF-8 owner must fail closed");
+        let error = lock
+            .release()
+            .expect_err("invalid UTF-8 owner must fail closed");
         assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
         fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
         fs::remove_dir(&path).expect("cleanup lock directory");
