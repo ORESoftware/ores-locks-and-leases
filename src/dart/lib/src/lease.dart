@@ -2,6 +2,12 @@ import 'errors.dart';
 import 'key.dart';
 import 'plan.dart';
 
+/// Contract bound for one stable logical acquisition identity.
+const int maxRequestIdChars = 256;
+
+bool validRequestId(String value) =>
+    value.isNotEmpty && value.runes.length <= maxRequestIdChars;
+
 /// Acquisition tuning shared by every layer. The contract's `AcquireOptions`.
 final class AcquireOptions {
   /// Lease TTL. Size it to the longest the guarded work can take.
@@ -17,12 +23,17 @@ final class AcquireOptions {
   /// the adapter generate an unguessable id.
   final String? holder;
 
+  /// Stable logical acquisition identity reused across every poll/retry for
+  /// one acquire attempt. Null generates one once per logical acquisition.
+  final String? requestId;
+
   /// Mirrors the official fiducia clients: 60s lease, 30s wait budget, 250ms poll.
   const AcquireOptions({
     this.ttl = const Duration(seconds: 60),
     this.waitTimeout = const Duration(seconds: 30),
     this.retryInterval = const Duration(milliseconds: 250),
     this.holder,
+    this.requestId,
   });
 
   AcquireOptions copyWith({
@@ -30,12 +41,14 @@ final class AcquireOptions {
     Duration? waitTimeout,
     Duration? retryInterval,
     String? holder,
+    String? requestId,
   }) =>
       AcquireOptions(
         ttl: ttl ?? this.ttl,
         waitTimeout: waitTimeout ?? this.waitTimeout,
         retryInterval: retryInterval ?? this.retryInterval,
         holder: holder ?? this.holder,
+        requestId: requestId ?? this.requestId,
       );
 }
 
