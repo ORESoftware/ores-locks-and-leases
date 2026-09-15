@@ -51,6 +51,7 @@ pub fn maintenance_options_are_fail_closed_test() {
       wait_timeout_ms: 30,
       retry_interval_ms: 5,
       holder: None,
+      request_id: None,
     )
 
   locks.validate_lease_maintenance_options(
@@ -78,6 +79,7 @@ pub fn acquired_grant_preserves_holder_ttl_and_expiry_test() {
       wait_timeout_ms: 30_000,
       retry_interval_ms: 250,
       holder: Some("holder-a"),
+      request_id: Some("attempt-42"),
     )
   maintained.validate_acquired_grant(key(), True, opts, grant())
   |> should.equal(Ok(Nil))
