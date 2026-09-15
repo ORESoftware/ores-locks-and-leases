@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { LockLeaseAuthority } from "./src/authority.js";
+import {
+  LockLeaseAuthority,
+  MAX_REPLAY_RECORDS,
+  REPLAY_RETENTION_MS,
+  validRequestId,
+} from "./src/authority.js";
 import {
   MAX_BODY_BYTES,
   bearerMatches,
@@ -29,11 +34,14 @@ class FakeSql {
       next_token: "0",
       request_id: null,
     };
+    this.replay = new Map();
   }
 
   exec(query, ...args) {
     const sql = query.replace(/\s+/g, " ").trim();
     if (sql.startsWith("CREATE TABLE IF NOT EXISTS lease_state")) return rows();
+    if (sql.startsWith("CREATE TABLE IF NOT EXISTS acquire_replay")) return rows();
+    if (sql.startsWith("CREATE INDEX IF NOT EXISTS acquire_replay_retention")) return rows();
     if (sql === "PRAGMA table_info(lease_state)") {
       const columns = ["id", "holder", "token", "expires_ms", "next_token"];
       if (!this.legacy) columns.push("request_id");
@@ -47,6 +55,54 @@ class FakeSql {
     if (sql.startsWith("INSERT OR IGNORE INTO lease_state")) return rows();
     if (sql.startsWith("SELECT holder, token, expires_ms, next_token, request_id FROM lease_state")) {
       return rows([{ ...this.state }]);
+    }
+    if (sql.startsWith("SELECT request_id, holder, ttl_ms, token, lease_expires_ms, retain_until_ms FROM acquire_replay")) {
+      const row = this.replay.get(args[0]);
+      return rows(row ? [{ ...row }] : []);
+    }
+    if (sql.startsWith("SELECT MIN(retain_until_ms) AS retain_until_ms FROM acquire_replay")) {
+      const [now] = args;
+      const values = [...this.replay.values()]
+        .map((row) => row.retain_until_ms)
+        .filter((value) => value > now);
+      return rows([{ retain_until_ms: values.length ? Math.min(...values) : null }]);
+    }
+    if (sql === "DELETE FROM acquire_replay WHERE retain_until_ms <= ?") {
+      const [now] = args;
+      for (const [id, row] of this.replay) {
+        if (row.retain_until_ms <= now) this.replay.delete(id);
+      }
+      return rows();
+    }
+    if (sql.startsWith("DELETE FROM acquire_replay WHERE request_id IN")) {
+      const [limit] = args;
+      const keep = [...this.replay.values()]
+        .sort((a, b) => b.retain_until_ms - a.retain_until_ms || b.request_id.localeCompare(a.request_id))
+        .slice(0, limit)
+        .map((row) => row.request_id);
+      const keepSet = new Set(keep);
+      for (const id of this.replay.keys()) {
+        if (!keepSet.has(id)) this.replay.delete(id);
+      }
+      return rows();
+    }
+    if (sql.startsWith("INSERT OR REPLACE INTO acquire_replay")) {
+      const [request_id, holder, ttl_ms, token, lease_expires_ms, retain_until_ms] = args;
+      this.replay.set(request_id, {
+        request_id,
+        holder,
+        ttl_ms,
+        token,
+        lease_expires_ms,
+        retain_until_ms,
+      });
+      return rows();
+    }
+    if (sql === "UPDATE acquire_replay SET lease_expires_ms = ?, retain_until_ms = ? WHERE request_id = ?") {
+      const [lease_expires_ms, retain_until_ms, request_id] = args;
+      const row = this.replay.get(request_id);
+      if (row) this.replay.set(request_id, { ...row, lease_expires_ms, retain_until_ms });
+      return rows();
     }
     if (sql.startsWith("UPDATE lease_state SET holder = NULL")) {
       this.state.holder = null;
@@ -103,7 +159,15 @@ function authority(options) {
   return { authority: new LockLeaseAuthority({ storage }), storage };
 }
 
-test("Durable Object authority replays without extending and renews only by token", async (t) => {
+test("request ids follow the peer-authoritative 1..256 character bound", () => {
+  assert.equal(validRequestId(undefined), true);
+  assert.equal(validRequestId("attempt-1"), true);
+  assert.equal(validRequestId("x".repeat(256)), true);
+  assert.equal(validRequestId("x".repeat(257)), false);
+  assert.equal(validRequestId(""), false);
+});
+
+test("Durable Object authority replays only identical active acquisition semantics", async (t) => {
   const originalNow = Date.now;
   let now = 1_000;
   Date.now = () => now;
@@ -123,12 +187,21 @@ test("Durable Object authority replays without extending and renews only by toke
   });
 
   now = 1_500;
-  const replay = await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 50_000 });
+  const replay = await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 1_000 });
   assert.equal(replay.acquired, true);
   assert.equal(replay.replayed, true);
   assert.equal(replay.fencing_token, "1");
   assert.equal(replay.lease_expires_ms, 2_000);
   assert.equal(storage.sql.state.expires_ms, 2_000, "replay cannot extend authority");
+
+  assert.deepEqual(
+    await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 50_000 }),
+    { acquired: false, reason: "request_identity_collision" },
+  );
+  assert.deepEqual(
+    await leases.acquire({ holder: "worker-b", request_id: "attempt-1", ttl_ms: 1_000 }),
+    { acquired: false, reason: "request_identity_collision" },
+  );
 
   const differentAttempt = await leases.acquire({
     holder: "worker-a",
@@ -150,10 +223,43 @@ test("Durable Object authority replays without extending and renews only by toke
   await leases.alarm();
   assert.equal(storage.sql.state.holder, null);
   assert.equal(storage.sql.state.next_token, "1");
+  assert.equal(storage.alarm, 2_500 + REPLAY_RETENTION_MS);
+
+  assert.deepEqual(
+    await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 1_000 }),
+    { acquired: false, reason: "request_replayed_terminal" },
+  );
 
   now = 3_000;
   const second = await leases.acquire({ holder: "worker-b", request_id: "attempt-3", ttl_ms: 1_000 });
   assert.equal(second.fencing_token, "2");
+});
+
+test("replay retention is time bounded and count bounded", async (t) => {
+  const originalNow = Date.now;
+  let now = 50_000;
+  Date.now = () => now;
+  t.after(() => { Date.now = originalNow; });
+
+  const { authority: leases, storage } = authority();
+  for (let index = 0; index < MAX_REPLAY_RECORDS + 20; index += 1) {
+    const request_id = `old-${index.toString().padStart(3, "0")}`;
+    storage.sql.replay.set(request_id, {
+      request_id,
+      holder: "worker-a",
+      ttl_ms: 1_000,
+      token: String(index + 1),
+      lease_expires_ms: now,
+      retain_until_ms: now + REPLAY_RETENTION_MS + index,
+    });
+  }
+  leases.pruneReplay(now);
+  assert.equal(storage.sql.replay.size, MAX_REPLAY_RECORDS);
+
+  now += REPLAY_RETENTION_MS + MAX_REPLAY_RECORDS + 30;
+  await leases.alarm();
+  assert.equal(storage.sql.replay.size, 0);
+  assert.equal(storage.alarm, null);
 });
 
 test("Durable Object authority fails closed at the exact JSON fencing ceiling", async (t) => {
