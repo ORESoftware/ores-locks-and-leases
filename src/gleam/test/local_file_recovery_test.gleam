@@ -55,6 +55,25 @@ pub fn inspect_empty_directory_is_incomplete_crash_state_test() {
   clean(root)
 }
 
+pub fn inspect_pending_owner_publication_is_incomplete_test() {
+  let root = "./.tmp-local-file-recovery/pending"
+  clean(root)
+  let path = root <> "/install.lock"
+  let assert Ok(Nil) = simplifile.create_directory_all(path)
+  let assert Ok(Nil) =
+    simplifile.write(
+      to: path <> "/owner.pending",
+      contents: "syntactically-valid-owner-prefix",
+    )
+  let assert Ok(local_file_recovery.LocalFileLockInspection(
+    local_file_recovery.Incomplete,
+    None,
+    Some(local_file_recovery.OwnerMarkerMissing),
+    _,
+  )) = local_file_recovery.inspect(root, "install.lock")
+  clean(root)
+}
+
 pub fn owner_removed_before_rmdir_is_incomplete_crash_state_test() {
   let root = "./.tmp-local-file-recovery/release-crash"
   clean(root)
