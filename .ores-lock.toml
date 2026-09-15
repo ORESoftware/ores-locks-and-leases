@@ -37,6 +37,20 @@ secret = true
 purpose = "Credential for the Fiducia lease authority."
 
 [[env]]
+key = "ORES_LOCKS_CF_URL"
+kind = "url"
+required = false
+secret = false
+purpose = "Bearer-protected Worker endpoint fronting the Cloudflare Durable Object lease authority."
+
+[[env]]
+key = "ORES_LOCKS_CF_TOKEN"
+kind = "string"
+required = false
+secret = true
+purpose = "Credential for the Cloudflare Durable Object lease authority."
+
+[[env]]
 key = "DATABASE_URL"
 kind = "string"
 required = false
@@ -58,6 +72,8 @@ pg_advisory = false
 root_env = "ORES_LOCK_ROOT"
 require_existing_root = false
 
+# Backwards-compatible v1 Fiducia profile. Keep it for consumers that explicitly
+# choose Fiducia while the fleet moves service defaults to Cloudflare DO.
 [[profiles]]
 profile_id = "service-composed"
 wait = true
@@ -65,6 +81,7 @@ wait_timeout_ms = 30000
 retry_interval_ms = 50
 ttl_ms = 30000
 renew_interval_ms = 10000
+outer_authority = "fiducia"
 
 [profiles.providers]
 local_file = false
@@ -74,6 +91,32 @@ pg_advisory = true
 [profiles.fiducia]
 endpoint_env = "FIDUCIA_BASE_URL"
 auth_token_env = "FIDUCIA_AUTH_TOKEN"
+
+[profiles.postgres]
+database_url_env = "DATABASE_URL"
+scope = "transaction"
+
+# Preferred fleet profile for remote services: Cloudflare DO is the fenced outer
+# authority and the Postgres transaction-scoped advisory lock is the inner lock.
+# The historical providers.fiducia=true bit means "outer managed lease enabled"
+# in the v1 lock-plan shape; outer_authority selects the concrete implementation.
+[[profiles]]
+profile_id = "service-cloudflare-pg"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 250
+ttl_ms = 60000
+renew_interval_ms = 20000
+outer_authority = "cloudflare_durable_object"
+
+[profiles.providers]
+local_file = false
+fiducia = true
+pg_advisory = true
+
+[profiles.cloudflare_durable_object]
+endpoint_env = "ORES_LOCKS_CF_URL"
+api_token_env = "ORES_LOCKS_CF_TOKEN"
 
 [profiles.postgres]
 database_url_env = "DATABASE_URL"

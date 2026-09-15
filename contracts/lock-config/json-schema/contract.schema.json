@@ -12,6 +12,10 @@
       "type": "string",
       "enum": ["string", "boolean", "integer", "double", "url", "path"]
     },
+    "OuterLeaseAuthority": {
+      "type": "string",
+      "enum": ["fiducia", "cloudflare_durable_object", "redis"]
+    },
     "EnvKey": {
       "type": "string",
       "minLength": 1,
@@ -41,7 +45,10 @@
       "unevaluatedProperties": false,
       "properties": {
         "local_file": {"type": "boolean"},
-        "fiducia": {"type": "boolean"},
+        "fiducia": {
+          "type": "boolean",
+          "description": "Historical v1 name for the managed outer lease layer. outer_authority chooses its concrete backend; omission preserves Fiducia behavior."
+        },
         "pg_advisory": {"type": "boolean"}
       },
       "required": ["local_file", "fiducia", "pg_advisory"]
@@ -61,6 +68,25 @@
       "properties": {
         "endpoint_env": {"$ref": "#/$defs/EnvKey"},
         "auth_token_env": {"$ref": "#/$defs/EnvKey"}
+      },
+      "required": ["endpoint_env", "auth_token_env"]
+    },
+    "CloudflareDurableObjectProviderConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "endpoint_env": {"$ref": "#/$defs/EnvKey"},
+        "api_token_env": {"$ref": "#/$defs/EnvKey"}
+      },
+      "required": ["endpoint_env", "api_token_env"]
+    },
+    "RedisProviderConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "endpoint_env": {"$ref": "#/$defs/EnvKey"},
+        "auth_token_env": {"$ref": "#/$defs/EnvKey"},
+        "namespace": {"type": "string"}
       },
       "required": ["endpoint_env", "auth_token_env"]
     },
@@ -89,7 +115,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 86400000,
-          "description": "Fiducia lease TTL. Present only when the Fiducia provider is enabled."
+          "description": "Managed outer-lease TTL. Required whenever providers.fiducia=true, regardless of concrete outer_authority."
         },
         "renew_interval_ms": {
           "type": "integer",
@@ -98,8 +124,11 @@
           "description": "Maintained-lease renewal interval. When present, runtime policy also requires this to be <= ttl_ms / 2."
         },
         "providers": {"$ref": "#/$defs/ProviderSelection"},
+        "outer_authority": {"$ref": "#/$defs/OuterLeaseAuthority"},
         "local_file": {"$ref": "#/$defs/LocalFileProviderConfig"},
         "fiducia": {"$ref": "#/$defs/FiduciaProviderConfig"},
+        "cloudflare_durable_object": {"$ref": "#/$defs/CloudflareDurableObjectProviderConfig"},
+        "redis": {"$ref": "#/$defs/RedisProviderConfig"},
         "postgres": {"$ref": "#/$defs/PostgresProviderConfig"}
       },
       "required": ["profile_id", "wait", "wait_timeout_ms", "retry_interval_ms", "providers"]

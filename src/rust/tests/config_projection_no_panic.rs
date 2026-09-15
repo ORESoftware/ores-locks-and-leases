@@ -1,5 +1,3 @@
-#![cfg(feature = "config")]
-
 use ores_locks_and_leases::config::{FiduciaProviderConfig, LockProfileConfig, ProviderSelection};
 
 #[test]
@@ -16,11 +14,14 @@ fn mutated_fiducia_profile_without_ttl_fails_closed_without_panicking() {
             fiducia: true,
             pg_advisory: false,
         },
+        outer_authority: None,
         local_file: None,
         fiducia: Some(FiduciaProviderConfig {
             endpoint_env: "FIDUCIA_BASE_URL".to_owned(),
             auth_token_env: "FIDUCIA_AUTH_TOKEN".to_owned(),
         }),
+        cloudflare_durable_object: None,
+        redis: None,
         postgres: None,
     };
 
@@ -31,7 +32,7 @@ fn mutated_fiducia_profile_without_ttl_fails_closed_without_panicking() {
     );
     let error = caught
         .expect("no panic")
-        .expect_err("missing Fiducia TTL must fail closed");
+        .expect_err("missing managed-lease TTL must fail closed");
     assert_eq!(error.code, "ttl_missing");
     assert_eq!(error.path, "profiles.ttl_ms");
 }

@@ -29,11 +29,14 @@ fn local_config() -> OresLockConfigV1 {
                 fiducia: false,
                 pg_advisory: false,
             },
+            outer_authority: None,
             local_file: Some(LocalFileProviderConfig {
                 root_env: "ORES_LOCK_ROOT".to_owned(),
                 require_existing_root: false,
             }),
             fiducia: None,
+            cloudflare_durable_object: None,
+            redis: None,
             postgres: None,
         }],
     }

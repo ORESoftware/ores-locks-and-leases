@@ -20,6 +20,13 @@ enum EnvKind {
   path: "path",
 }
 
+@doc("Concrete managed authority behind the historical outer `fiducia` lock-plan layer. Omitted means the legacy Fiducia authority.")
+enum OuterLeaseAuthority {
+  fiducia: "fiducia",
+  cloudflare_durable_object: "cloudflare_durable_object",
+  redis: "redis",
+}
+
 @minLength(1)
 @maxLength(128)
 @pattern("^[A-Z_][A-Z0-9_]*$")
@@ -42,6 +49,7 @@ model EnvBinding {
 
 model ProviderSelection {
   local_file: boolean;
+  @doc("Historical v1 name for the managed outer lease layer. The concrete authority is selected by outer_authority; when outer_authority is omitted this means Fiducia.")
   fiducia: boolean;
   pg_advisory: boolean;
 }
@@ -54,6 +62,17 @@ model LocalFileProviderConfig {
 model FiduciaProviderConfig {
   endpoint_env: EnvKey;
   auth_token_env: EnvKey;
+}
+
+model CloudflareDurableObjectProviderConfig {
+  endpoint_env: EnvKey;
+  api_token_env: EnvKey;
+}
+
+model RedisProviderConfig {
+  endpoint_env: EnvKey;
+  auth_token_env: EnvKey;
+  namespace?: string;
 }
 
 enum PostgresLockScope {
@@ -78,7 +97,7 @@ model LockProfileConfig {
   @maxValue(60000)
   retry_interval_ms: int64;
 
-  @doc("Fiducia lease TTL. Present only when the Fiducia provider is enabled.")
+  @doc("Managed outer-lease TTL. Required whenever providers.fiducia=true, regardless of concrete outer_authority.")
   @minValue(1)
   @maxValue(86400000)
   ttl_ms?: int64;
@@ -89,8 +108,12 @@ model LockProfileConfig {
   renew_interval_ms?: int64;
 
   providers: ProviderSelection;
+  @doc("Optional concrete authority for the historical outer `fiducia` layer. Omitted preserves v1 Fiducia behavior.")
+  outer_authority?: OuterLeaseAuthority;
   local_file?: LocalFileProviderConfig;
   fiducia?: FiduciaProviderConfig;
+  cloudflare_durable_object?: CloudflareDurableObjectProviderConfig;
+  redis?: RedisProviderConfig;
   postgres?: PostgresProviderConfig;
 }
 
