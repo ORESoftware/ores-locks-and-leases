@@ -19,6 +19,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 
 // --- keys -------------------------------------------------------------------
 
@@ -242,23 +243,12 @@ pub fn plan(layers: Layers, pg_scope: PgScope, wait: Bool) -> Plan {
 
 /// Why an acquisition or guarded run failed. The contract's `LockErrorKind`.
 pub type Kind {
-  /// A layer is held by someone else and `wait` was `False`.
   Contention
-  /// The wait budget elapsed before every layer was held.
   Timeout
-  /// The fiducia lease could not be renewed or was reaped; fenced authority
-  /// is gone and the guarded work must not continue.
   LostLease
-  /// Transport/HTTP failure talking to the lease authority; ownership is
-  /// unknown — never treat this as "not held".
   Transport
-  /// The database refused the advisory statement, the transaction, or the
-  /// connection.
   Database
-  /// The caller's work failed; outer layers were still released and the
-  /// transaction, if any, rolled back.
   WorkFailed
-  /// The inputs cannot be planned.
   InvalidPlan
 }
 
@@ -293,8 +283,6 @@ pub fn error_to_string(error: LockError) -> String {
   <> error.message
 }
 
-/// Retrying the whole routine is reasonable: busy or out of budget, nothing
-/// half-done.
 pub fn retryable(error: LockError) -> Bool {
   case error.kind {
     Contention | Timeout -> True
@@ -340,7 +328,6 @@ pub fn transport_error(key: LockKey, message: String) -> LockError {
   LockError(Transport, key, None, message)
 }
 
-/// Fill in the step on an error that has none.
 pub fn tag_step(error: LockError, step: Step) -> LockError {
   case error.step {
     Some(_) -> error
@@ -348,10 +335,6 @@ pub fn tag_step(error: LockError, step: Step) -> LockError {
   }
 }
 
-/// Keep a safety-critical cleanup failure primary while retaining the guarded
-/// operation's earlier failure. A failed release/unlock leaves ownership or
-/// session state unknown, so callers must not see only a work error and assume
-/// an immediate whole-operation retry is safe.
 pub fn cleanup_failure(cleanup: LockError, inner: LockError) -> LockError {
   LockError(
     ..cleanup,
@@ -363,19 +346,23 @@ pub fn cleanup_failure(cleanup: LockError, inner: LockError) -> LockError {
 
 // --- lease ------------------------------------------------------------------
 
+/// Contract limit for a stable logical acquisition identity.
+pub const max_request_id_chars = 256
+
+pub fn valid_request_id(value: String) -> Bool {
+  string.length(value) > 0 && string.length(value) <= max_request_id_chars
+}
+
 /// Acquisition tuning shared by every layer. The contract's `AcquireOptions`.
 pub type AcquireOptions {
   AcquireOptions(
-    /// Lease TTL in ms. Size it to the longest the guarded work can take.
     ttl_ms: Int,
-    /// Total time to keep waiting, in ms. Ignored when `wait` is `False`.
     wait_timeout_ms: Int,
-    /// Poll interval while waiting on the fiducia and maintained PostgreSQL
-    /// advisory-lock layers, in ms.
     retry_interval_ms: Int,
-    /// Caller identity for the fiducia layer; also the release key. `None`
-    /// lets the adapter generate an unguessable id.
     holder: Option(String),
+    /// Stable identity for one logical acquisition. `None` lets the adapter
+    /// generate one once and reuse it across all polls.
+    request_id: Option(String),
   )
 }
 
@@ -386,6 +373,7 @@ pub fn default_acquire_options() -> AcquireOptions {
     wait_timeout_ms: 30_000,
     retry_interval_ms: 250,
     holder: None,
+    request_id: None,
   )
 }
 
@@ -398,7 +386,6 @@ pub fn default_lease_maintenance_options() -> LeaseMaintenanceOptions {
   LeaseMaintenanceOptions(renew_interval_ms: 20_000)
 }
 
-/// Reject unsafe timing before either coordination layer is acquired.
 pub fn validate_lease_maintenance_options(
   key: LockKey,
   opts: AcquireOptions,
@@ -438,8 +425,6 @@ pub fn validate_lease_maintenance_options(
   }
 }
 
-/// A held grant. The contract's `LeaseGrant`. `fencing_token` is minted on
-/// every grant and increases monotonically; guarded writes should record it.
 pub type LeaseGrant {
   LeaseGrant(
     key: LockKey,
@@ -450,27 +435,14 @@ pub type LeaseGrant {
   )
 }
 
-/// A lease authority: three verbs, fenced. Implementations map their native
-/// failures onto `Kind`.
 pub type Lease {
   Lease(
-    /// With `wait`, block up to `wait_timeout_ms`; without it, return
-    /// `Contention` at once if the key is held.
     acquire: fn(LockKey, AcquireOptions, Bool) -> Result(LeaseGrant, LockError),
-    /// Extend a grant without changing its fencing token. A refusal is
-    /// `LostLease`, never a warning.
     renew: fn(LeaseGrant, Int) -> Result(LeaseGrant, LockError),
-    /// `Ok(False)` is a committed no-op: the authority matched no grant —
-    /// the lease had already lapsed.
     release: fn(LeaseGrant) -> Result(Bool, LockError),
   )
 }
 
-/// Run `work` under a fiducia lease only — no database layer. `engage` is
-/// the `layers.fiducia` boolean: `False` is the contract's "neither" plan
-/// (work runs with `None`, nothing is acquired); `True` with no lease is
-/// `InvalidPlan`. The lease is always released, even when `work` fails; a
-/// release that matched no grant after a successful `work` is `LostLease`.
 pub fn with_lease(
   key: LockKey,
   engage: Bool,
@@ -494,7 +466,6 @@ pub fn with_lease(
   }
 }
 
-/// Acquire through the lease, tagging the step on an untagged error.
 pub fn acquire_lease(
   key: LockKey,
   wait: Bool,
@@ -508,8 +479,6 @@ pub fn acquire_lease(
   lease.acquire(key, opts, wait) |> result.map_error(tag_step(_, step))
 }
 
-/// Renew and prove the authority returned the same key, holder, and fencing
-/// token. Any changed identity is `LostLease` at `fiducia.renew`.
 pub fn renew_checked(
   lease: Lease,
   grant: LeaseGrant,
@@ -543,7 +512,6 @@ pub fn renew_checked(
   }
 }
 
-/// Release the lease and combine its outcome with the inner one.
 pub fn settle(
   key: LockKey,
   lease: Lease,
@@ -582,6 +550,14 @@ fn release_lost(key: LockKey, grant: LeaseGrant) -> LockError {
 pub fn holder_or(opts: AcquireOptions, generate: fn() -> String) -> String {
   case opts.holder {
     Some(holder) -> holder
+    None -> generate()
+  }
+}
+
+/// A request id for adapters when the caller supplied none.
+pub fn request_id_or(opts: AcquireOptions, generate: fn() -> String) -> String {
+  case opts.request_id {
+    Some(request_id) -> request_id
     None -> generate()
   }
 }
