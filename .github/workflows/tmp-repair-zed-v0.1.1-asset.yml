@@ -1,5 +1,8 @@
 name: tmp-repair-zed-v0.1.1-asset
 
+# One-shot release repair: package immutable v0.1.1 with pinned Zed, verify the
+# expected deterministic digest, and attach only that exact asset to the
+# already-existing GitHub Release. Remove this workflow after successful proof.
 on:
   push:
     branches: [release/repair-zed-v0.1.1-asset-20260915]
