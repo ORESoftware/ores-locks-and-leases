@@ -144,6 +144,7 @@ impl LockProfileConfig {
                 wait_timeout: Duration::from_millis(self.wait_timeout_ms),
                 retry_interval: Duration::from_millis(self.retry_interval_ms),
                 holder: None,
+                request_id: None,
             },
             self.wait,
         )))
