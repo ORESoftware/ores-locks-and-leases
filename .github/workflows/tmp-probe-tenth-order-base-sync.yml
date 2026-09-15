@@ -24,6 +24,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name ORESoftware
+          git config user.email noreply@github.com
           git fetch origin den-2037-interop-fifth-order-20260914
           set +e
           git merge --no-commit --no-ff origin/den-2037-interop-fifth-order-20260914
