@@ -29,7 +29,6 @@ jobs:
           git checkout --detach "$child"
           git merge --no-ff -X ours -m 'merge(DEN-2037): compose parent local-lock hardening with interop stack' "$parent"
           test -z "$(git diff --name-only --diff-filter=U)"
-          git status --short
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
@@ -41,6 +40,20 @@ jobs:
         with: { node-version: '22' }
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with: { otp-version: '27', gleam-version: '1.16.0', rebar3-version: '3' }
+
+      - name: Normalize merge-only Rust formatting
+        working-directory: src/rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cd ../..
+          git add src/rust
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
+          test "$(git rev-parse HEAD^1)" = '459cb2bbb0c96d53e0aa58dba7437cf1d4373b11'
+          test "$(git rev-parse HEAD^2)" = 'dc6869f647b256c4e0bc5f08f0f38ae990b864a7'
 
       - name: Verify merged contract corpus
         run: node scripts/check-local-file-corpus.mjs
