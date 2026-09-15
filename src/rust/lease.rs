@@ -18,6 +18,15 @@ use crate::plan::LockStep;
 /// lapsed cannot overwrite a newer holder's work.
 pub type FencingToken = u64;
 
+/// Contract bound for one stable logical acquisition identity.
+pub const MAX_REQUEST_ID_CHARS: usize = 256;
+
+/// Whether a request id satisfies the peer-authoritative contract shape.
+#[must_use]
+pub fn valid_request_id(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= MAX_REQUEST_ID_CHARS
+}
+
 /// Acquisition tuning shared by every layer. Contract model `AcquireOptions`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcquireOptions {
@@ -32,6 +41,9 @@ pub struct AcquireOptions {
     /// Caller identity for the fiducia layer; also the release key. `None`
     /// lets the adapter generate an unguessable id.
     pub holder: Option<String>,
+    /// Stable identity for one logical acquisition. When present it is reused
+    /// across every poll/retry and cancellation; it is distinct from `holder`.
+    pub request_id: Option<String>,
 }
 
 impl Default for AcquireOptions {
@@ -41,6 +53,7 @@ impl Default for AcquireOptions {
             wait_timeout: Duration::from_secs(30),
             retry_interval: Duration::from_millis(250),
             holder: None,
+            request_id: None,
         }
     }
 }
@@ -60,6 +73,10 @@ impl AcquireOptions {
     }
     pub fn holder(mut self, holder: impl Into<String>) -> Self {
         self.holder = Some(holder.into());
+        self
+    }
+    pub fn request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
         self
     }
     pub fn ttl_ms(&self) -> u64 {
@@ -343,6 +360,14 @@ mod tests {
                 return value;
             }
         }
+    }
+
+    #[test]
+    fn request_ids_match_the_peer_contract_bounds() {
+        assert!(!valid_request_id(""));
+        assert!(valid_request_id("attempt-42"));
+        assert!(valid_request_id(&"x".repeat(MAX_REQUEST_ID_CHARS)));
+        assert!(!valid_request_id(&"x".repeat(MAX_REQUEST_ID_CHARS + 1)));
     }
 
     #[test]
