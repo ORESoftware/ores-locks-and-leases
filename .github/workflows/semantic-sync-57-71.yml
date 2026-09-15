@@ -18,16 +18,16 @@ jobs:
           persist-credentials: true
           show-progress: false
 
-      - name: Compose reviewed parent into reviewed child
+      - name: Compose reviewed parent into latest reviewed child
         shell: bash
         run: |
           set -euo pipefail
-          child=459cb2bbb0c96d53e0aa58dba7437cf1d4373b11
+          child=8fa73c3f22fb2556edfcfb9ef73d0777c0132c3f
           parent=dc6869f647b256c4e0bc5f08f0f38ae990b864a7
           git config user.name 'ORESoftware semantic sync'
           git config user.email 'alex@oresoftware.com'
           git checkout --detach "$child"
-          git merge --no-ff -X ours -m 'merge(DEN-2037): compose parent local-lock hardening with interop stack' "$parent"
+          git merge --no-ff -X ours -m 'merge(DEN-2037): compose parent local-lock hardening with ninth-order interop stack' "$parent"
           test -z "$(git diff --name-only --diff-filter=U)"
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -48,10 +48,14 @@ jobs:
           file=src/rust/local_file.rs
           recovery=src/rust/local_file_recovery.rs
 
+          # Parent and child each carry a mkdir helper at different review points.
+          # Keep the parent's stronger single DirBuilder implementation while retaining
+          # the child's newer path-admission logic around all callers.
           test "$(grep -c '^fn create_lock_directory' "$file")" -eq 2
           perl -0pi -e 's/fn create_lock_directory\(path: &Path\) -> io::Result<\(\)> \{\n    #\[cfg\(unix\)\]\n    \{\n        let mut builder = fs::DirBuilder::new\(\);\n        builder\.mode\(0o700\);\n        builder\.create\(path\)\n    \}\n    #\[cfg\(not\(unix\)\)\]\n    \{\n        fs::create_dir\(path\)\n    \}\n\}\n\n//' "$file"
           test "$(grep -c '^fn create_lock_directory' "$file")" -eq 1
 
+          # Compose parent bounded-handle/private-mode hardening with child path logic.
           perl -0pi -e 's/use std::fs::\{self, OpenOptions\};/use std::fs::{self, File, OpenOptions};/' "$file"
           perl -0pi -e 's/use std::io::\{self, Write\};/use std::io::{self, Read, Write};/' "$file"
           perl -0pi -e 's/use std::os::unix::fs::\{DirBuilderExt, MetadataExt, OpenOptionsExt\};/use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};/' "$file"
@@ -63,6 +67,22 @@ jobs:
             perl -0pi -e 's/(use crate::local_file::\{.*?\n\};\n)/$1use std::ffi::OsString;\n/s' "$recovery"
           fi
           grep -q '^use std::ffi::OsString;' "$recovery"
+
+          # The child recovery path supersedes two older parent-local identity helpers.
+          # Strict all-feature Clippy proved these definitions dead in the composed tree;
+          # remove them rather than suppressing dead-code warnings.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src/rust/local_file_recovery.rs';
+          let source = fs.readFileSync(path, 'utf8');
+          const start = source.indexOf('#[cfg(unix)]\nfn owner_has_multiple_links');
+          const end = source.indexOf('fn metadata_is_alias(', start);
+          if (start < 0 || end < 0) throw new Error('expected superseded recovery helper block');
+          source = source.slice(0, start) + source.slice(end);
+          fs.writeFileSync(path, source);
+          NODE
+          test "$(grep -c '^fn owner_has_multiple_links' "$recovery" || true)" -eq 0
+          test "$(grep -c '^fn same_file_identity' "$recovery" || true)" -eq 0
 
       - name: Reconcile overlapping TypeScript inspection helper
         shell: bash
@@ -94,7 +114,7 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit --amend --no-edit
           fi
-          test "$(git rev-parse HEAD^1)" = '459cb2bbb0c96d53e0aa58dba7437cf1d4373b11'
+          test "$(git rev-parse HEAD^1)" = '8fa73c3f22fb2556edfcfb9ef73d0777c0132c3f'
           test "$(git rev-parse HEAD^2)" = 'dc6869f647b256c4e0bc5f08f0f38ae990b864a7'
 
       - name: Verify merged contract corpus
@@ -145,18 +165,19 @@ jobs:
           (cd src/go && go build -o ../../tmp/local-file-go-probe ./cmd/local_file_probe)
           (cd src/gleam && gleam build)
 
-      - name: Verify merged fifth through eighth order process behavior
+      - name: Verify merged fifth through ninth order process behavior
         run: |
           node scripts/check-local-file-process-interop.mjs
           node scripts/check-local-file-process-sixth-order.mjs
           node scripts/check-local-file-process-eighth-order.mjs
+          node scripts/check-local-file-process-ninth-order.mjs
 
       - name: Publish verified two-parent merge candidate
         shell: bash
         run: |
           set -euo pipefail
           merge_sha=$(git rev-parse HEAD)
-          test "$(git rev-parse HEAD^1)" = '459cb2bbb0c96d53e0aa58dba7437cf1d4373b11'
+          test "$(git rev-parse HEAD^1)" = '8fa73c3f22fb2556edfcfb9ef73d0777c0132c3f'
           test "$(git rev-parse HEAD^2)" = 'dc6869f647b256c4e0bc5f08f0f38ae990b864a7'
           git push --force-with-lease origin "HEAD:refs/heads/tmp/semantic-sync-result-57-71-20260915"
           echo "merge_sha=$merge_sha" >> "$GITHUB_STEP_SUMMARY"
