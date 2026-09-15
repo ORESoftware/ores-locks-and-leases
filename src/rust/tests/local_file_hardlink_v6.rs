@@ -36,8 +36,14 @@ fn release_fails_closed_while_owner_marker_is_hardlinked() {
         .expect_err("multiply linked owner must block destructive release");
     assert_eq!(release.kind, LocalFileLockErrorKind::Compromised);
     assert!(path.exists(), "failed release must preserve rendezvous");
-    assert!(path.join("owner").exists(), "failed release must preserve owner marker");
-    assert!(alias.exists(), "failed release must preserve external alias");
+    assert!(
+        path.join("owner").exists(),
+        "failed release must preserve owner marker"
+    );
+    assert!(
+        alias.exists(),
+        "failed release must preserve external alias"
+    );
 
     fs::remove_file(&alias).expect("remove external alias");
     lock.release().expect("release after alias repair");
