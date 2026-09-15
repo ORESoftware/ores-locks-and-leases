@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
@@ -287,6 +287,9 @@ impl LocalFileLock {
             ));
         }
 
+        // Re-check immediately before destructive removal so a hard-link alias
+        // introduced after the first metadata check cannot be silently ignored.
+        validate_regular_file(&self.path, &owner_path, "owner token")?;
         fs::remove_file(&owner_path).map_err(|error| {
             LocalFileLockError::io(&self.path, "remove local lock owner token", error)
         })?;
@@ -397,7 +400,20 @@ fn validate_regular_file(
     label: &str,
 ) -> Result<(), LocalFileLockError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() && !metadata_is_alias(&metadata) => Ok(()),
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata_is_alias(&metadata)
+                && !metadata_has_multiple_links(&metadata) =>
+        {
+            Ok(())
+        }
+        Ok(metadata) if metadata.is_file() && metadata_has_multiple_links(&metadata) => {
+            Err(LocalFileLockError::new(
+                LocalFileLockErrorKind::Compromised,
+                lock_path,
+                format!("{label} has multiple filesystem links"),
+            ))
+        }
         Ok(_) => Err(LocalFileLockError::new(
             LocalFileLockErrorKind::Compromised,
             lock_path,
@@ -426,6 +442,18 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     {
+        false
+    }
+}
+
+fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        return metadata.nlink() != 1;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
         false
     }
 }
