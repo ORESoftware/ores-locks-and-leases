@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
@@ -106,8 +106,9 @@ async function assertAbsent(lockPath) {
 }
 
 function record(name, details = {}) {
-  report.push({ name, status: "passed", ...details });
-  console.log(`PASS ${name}`);
+  const entry = { name, status: "passed", ...details };
+  report.push(entry);
+  console.log(`${entry.status.toUpperCase()} ${name}`);
 }
 
 async function expectRecoveryRefusal(lockPath, expectedOwner, confirmedInactive, actualOwner) {
@@ -235,10 +236,13 @@ async function proveSixthOrder(root) {
   record("concurrent-diagnostics-are-nondestructive-for-each-runtime-holder");
 
   // 18. Heavy diagnostics during a mixed contender wave never clear the holder.
+  // Slow `gleam run` startup can serialize on its build directory, so keep the
+  // holder alive well beyond runtime startup and explicitly crash/recover it
+  // once every contender has observed contention.
   {
     const lockPath = join(root, "diagnostic-contender-wave.lock");
     const owner = "diagnostic-wave-holder";
-    const holder = startProbe("node", "hold", lockPath, owner, 3_000);
+    const holder = startProbe("node", "hold", lockPath, owner, 30_000);
     await waitForAcquired(holder);
     const contenders = Array.from({ length: 16 }, (_, index) =>
       runProbe(runtimes[index % runtimes.length], "try", lockPath, `wave-${index}`));
@@ -252,8 +256,12 @@ async function proveSixthOrder(root) {
       inspectionResults.every((inspection) => inspection.state === "held" && inspection.owner === owner),
       JSON.stringify(inspectionResults),
     );
-    const holderResult = await holder.exit;
-    assert.equal(holderResult.code, 0, holderResult.stderr);
+    await assertHeld(lockPath, owner);
+    assert.equal(holder.child.kill(), true, "diagnostic holder must still be live after contender wave");
+    await holder.exit;
+    await assertHeld(lockPath, owner);
+    assert.equal(await recover_local_file_lock(lockPath, owner, true), true);
+    await assertAbsent(lockPath);
   }
   record("sixty-four-inspections-during-mixed-contender-wave-remain-held");
 
@@ -284,12 +292,40 @@ async function proveSixthOrder(root) {
     assert.deepEqual(await readdir(parent), [], "caller-owned nested parent must remain empty");
   }
   record("unicode-space-caller-parent-survives-four-runtime-handoff");
+
+  // 21-22. A maximally permissive process umask must not widen lock state.
+  // Windows has no POSIX umask/mode contract, so keep two explicit skipped
+  // evidence records there while Linux/macOS exercise every producer runtime.
+  if (!isWindows) {
+    const priorUmask = process.umask(0o000);
+    try {
+      for (const runtime of runtimes) {
+        const lockPath = join(root, `permissive-umask-${runtime}.lock`);
+        const owner = `umask-owner-${runtime}`;
+        const holder = startProbe(runtime, "hold", lockPath, owner, 1_500);
+        await waitForAcquired(holder);
+        const directoryMode = (await stat(lockPath)).mode & 0o777;
+        const ownerMode = (await stat(join(lockPath, "owner"))).mode & 0o777;
+        assert.equal(directoryMode, 0o700, `${runtime} lock directory widened under umask 000`);
+        assert.equal(ownerMode, 0o600, `${runtime} owner marker widened under umask 000`);
+        const result = await holder.exit;
+        assert.equal(result.code, 0, `${runtime} umask holder failed: ${result.stderr}`);
+      }
+    } finally {
+      process.umask(priorUmask);
+    }
+    record("permissive-umask-rendezvous-remains-0700", { platform: process.platform });
+    record("permissive-umask-owner-marker-remains-0600", { platform: process.platform });
+  } else {
+    record("permissive-umask-rendezvous-remains-0700", { status: "skipped", reason: "POSIX-only" });
+    record("permissive-umask-owner-marker-remains-0600", { status: "skipped", reason: "POSIX-only" });
+  }
 }
 
 const root = await mkdtemp(join(tmpdir(), "ores-local-sixth-order-"));
 try {
   await proveSixthOrder(root);
-  assert.equal(report.length, 13, `sixth-order batch must execute exactly 13 checks; got ${report.length}`);
+  assert.equal(report.length, 15, `sixth/seventh-order batch must execute exactly 15 checks; got ${report.length}`);
   console.log(JSON.stringify({ status: "passed", checks: report }, null, 2));
 } finally {
   await rm(root, { recursive: true, force: true });
