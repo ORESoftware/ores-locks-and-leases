@@ -31,7 +31,7 @@ export class LocalFileLockError extends Error {
 export interface LocalFileLockOptions {
   /** When false, acquisition is one immediate attempt. */
   wait?: boolean;
-  /** Finite wait budget. Defaults to 30 seconds. */
+  /** End-to-end finite wait budget, including filesystem-call latency. Defaults to 30 seconds. */
   wait_timeout_ms?: number;
   /** Delay between portable mkdir attempts. Defaults to 50 ms. */
   retry_interval_ms?: number;
@@ -49,12 +49,15 @@ export function generated_local_file_lock_owner(): string {
 }
 
 type LocalFileLockReleaseState = "held" | "released" | "partial";
+const LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN = Symbol("ores-local-file-lock-held-constructor");
 
 /**
  * Held portable single-host filesystem lock.
  *
  * Atomic directory creation is the admission authority. The owner file is an
  * owner-safe release token and diagnostics; it is never a stale PID authority.
+ * Construction is guarded by a module-private runtime token so callers cannot
+ * forge a held capability with `new LocalFileLock(...)`.
  */
 export class LocalFileLock {
   readonly path: string;
@@ -63,7 +66,14 @@ export class LocalFileLock {
   #release_promise: Promise<void> | undefined;
   #partial_release_error: unknown | undefined;
 
-  constructor(path: string, owner: string) {
+  constructor(path: string, owner: string, token: typeof LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN) {
+    if (token !== LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN) {
+      throw new LocalFileLockError(
+        "invalid_input",
+        path,
+        "LocalFileLock instances must be created by the acquisition API",
+      );
+    }
     this.path = path;
     this.owner = owner;
   }
@@ -240,7 +250,7 @@ export async function try_acquire_local_file_lock(
     throw error;
   }
 
-  return new LocalFileLock(path, owner);
+  return new LocalFileLock(path, owner, LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN);
 }
 
 /** Acquire with optional finite waiting. */
@@ -254,7 +264,8 @@ export async function acquire_local_file_lock(
   const resolved = { ...DEFAULT_LOCAL_FILE_LOCK_OPTIONS, ...options };
   validate_options(path, resolved);
   // `performance.now()` is monotonic in supported Node runtimes and avoids
-  // wall-clock jumps changing a finite lock-wait budget.
+  // wall-clock jumps changing a finite lock-wait budget. The budget is
+  // end-to-end: filesystem attempt latency is part of elapsed time.
   const started = performance.now();
 
   for (;;) {
@@ -401,8 +412,18 @@ export async function read_bounded_local_file_lock_owner(
     }
 
     const buffer = new Uint8Array(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, 0);
-    if (bytesRead > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
+    let totalBytesRead = 0;
+    while (totalBytesRead < buffer.byteLength) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        totalBytesRead,
+        buffer.byteLength - totalBytesRead,
+        totalBytesRead,
+      );
+      if (bytesRead === 0) break;
+      totalBytesRead += bytesRead;
+    }
+    if (totalBytesRead > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
         lockPath,
@@ -410,7 +431,7 @@ export async function read_bounded_local_file_lock_owner(
       );
     }
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead));
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, totalBytesRead));
     } catch (error) {
       throw new LocalFileLockError(
         "compromised",

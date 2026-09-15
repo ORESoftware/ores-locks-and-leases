@@ -14,6 +14,7 @@ import ores_locks_and_leases/local_file_owner_validation as owner_validation
 import simplifile
 
 const owner_file = "owner"
+const owner_pending_file = "owner.pending"
 
 /// Why a portable local filesystem lock operation failed.
 pub type LocalFileLockErrorKind {
@@ -119,6 +120,12 @@ fn create_lock_directory(
     1 ->
       case path_kind(path) {
         1 -> Ok(None)
+        0 ->
+          case make_private_directory_status(path) {
+            0 -> write_owner_or_unwind(path, owner)
+            1 -> Ok(None)
+            _ -> Error(io_error(path, "retry local lock directory creation failed"))
+          }
         4 -> Error(io_error(path, "inspect contended local lock path failed"))
         _ ->
           Error(LocalFileLockError(
@@ -137,6 +144,9 @@ fn create_lock_directory(
 }
 
 /// Acquire with optional finite waiting.
+///
+/// The finite wait budget is end-to-end: time spent in filesystem attempts
+/// consumes the same budget as retry sleeps.
 pub fn acquire(
   lock_root: String,
   lock_name: String,
@@ -257,20 +267,24 @@ fn write_owner_or_unwind(
   owner: String,
 ) -> Result(Option(LocalFileLock), LocalFileLockError) {
   let owner_path = path <> "/" <> owner_file
-  case write_new_file_status(owner_path, owner) {
+  let pending_path = path <> "/" <> owner_pending_file
+  case publish_owner_status(pending_path, owner_path, owner) {
     0 -> Ok(Some(LocalFileLock(path: path, owner: owner)))
     1 -> {
+      let _ = simplifile.delete_file(at: pending_path)
+      let _ = simplifile.delete_file(at: owner_path)
       let _ = delete_empty_directory(path)
       Error(LocalFileLockError(
         Compromised,
         path,
-        "owner token already exists after winning lock directory creation",
+        "owner publication target already exists after winning lock directory creation",
       ))
     }
     _ -> {
+      let _ = simplifile.delete_file(at: pending_path)
       let _ = simplifile.delete_file(at: owner_path)
       let _ = delete_empty_directory(path)
-      Error(io_error(path, "write local lock owner token failed"))
+      Error(io_error(path, "publish local lock owner token failed"))
     }
   }
 }
@@ -402,5 +416,9 @@ fn path_kind(path: String) -> Int
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "make_private_directory_status")
 fn make_private_directory_status(path: String) -> Int
 
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "write_new_file_status")
-fn write_new_file_status(path: String, contents: String) -> Int
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "publish_owner_status")
+fn publish_owner_status(
+  pending_path: String,
+  owner_path: String,
+  contents: String,
+) -> Int

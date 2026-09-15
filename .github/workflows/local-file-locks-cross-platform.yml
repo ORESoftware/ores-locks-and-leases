@@ -114,6 +114,7 @@ jobs:
           cargo test --locked --no-default-features --test local_file_parent_lifecycle_v6
           cargo test --locked --no-default-features --test local_file_hardlink_v6
           cargo test --locked --no-default-features --test local_file_path_admission_v7
+          cargo test --locked --no-default-features --test local_file_tenth_order_v10
 
       - name: Go portable local lock tests
         working-directory: src/go
@@ -124,7 +125,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs test/local-file-recovery.test.mjs test/local-file-path-identity.test.mjs test/local-file-adversarial-v2.test.mjs test/local-file-hardening-v3.test.mjs test/local-file-semantic-v4.test.mjs test/local-file-transition-stress.test.mjs test/local-file-fourth-order-v5.test.mjs test/local-file-fs-identity-v6.test.mjs test/local-file-retry-budget-v6.test.mjs test/local-file-parent-lifecycle-v6.test.mjs
+          node --test test/local-file.test.mjs test/local-file-scoped.test.mjs test/local-file-recovery.test.mjs test/local-file-path-identity.test.mjs test/local-file-adversarial-v2.test.mjs test/local-file-hardening-v3.test.mjs test/local-file-semantic-v4.test.mjs test/local-file-transition-stress.test.mjs test/local-file-fourth-order-v5.test.mjs test/local-file-fs-identity-v6.test.mjs test/local-file-retry-budget-v6.test.mjs test/local-file-parent-lifecycle-v6.test.mjs test/local-file-tenth-order-v10.test.mjs
 
       - name: Gleam portable local lock tests
         working-directory: src/gleam

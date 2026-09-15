@@ -6,6 +6,7 @@
     path_kind/1,
     directory_shape/1,
     write_new_file_status/2,
+    publish_owner_status/3,
     make_private_directory_status/1,
     make_symlink_status/2,
     make_hardlink_status/2,
@@ -41,13 +42,16 @@ path_kind(Path) ->
         {error, _} -> 4
     end.
 
-%% 0 exactly one owner; 1 dirty/unexpected; 2 IO; 3 empty/incomplete crash state.
+%% 0 exactly one published owner; 1 dirty/unexpected; 2 IO; 3 incomplete
+%% transition. A lone owner.pending is the reader-safe publication window and
+%% must never be interpreted as a held owner token.
 directory_shape(Path) ->
     case file:list_dir(Path) of
         {ok, []} -> 3;
         {ok, [Only]} ->
             case unicode:characters_to_binary(Only) of
                 <<"owner">> -> 0;
+                <<"owner.pending">> -> 3;
                 _ -> 1
             end;
         {ok, _} -> 1;
@@ -77,9 +81,8 @@ make_private_directory_status(Path) ->
             end
     end.
 
-%% Create the owner marker without overwriting an attacker- or race-created
-%% node. The owner token is not written until POSIX permissions have been
-%% tightened to 0600. 0 success, 1 already exists, 2 other IO failure.
+%% Legacy helper retained for compatibility. New lock acquisition uses
+%% publish_owner_status/3 so readers cannot observe a partially written owner.
 write_new_file_status(Path, Contents) ->
     case file:open(Path, [write, binary, exclusive]) of
         {error, eexist} -> 1;
@@ -93,6 +96,55 @@ write_new_file_status(Path, Contents) ->
                     _ = file:delete(Path),
                     2
             end
+    end.
+
+%% Reader-safe owner publication. Write the owner to a private, exclusive
+%% owner.pending marker, sync and close it, then atomically rename it to owner.
+%% Inspection treats owner.pending as Incomplete, never Held.
+%% 0 success, 1 target/pending already exists, 2 other IO failure.
+publish_owner_status(PendingPath, OwnerPath, Contents) ->
+    case file:open(PendingPath, [write, binary, exclusive]) of
+        {error, eexist} -> 1;
+        {error, _} -> 2;
+        {ok, IoDevice} ->
+            case ensure_private_mode(PendingPath) of
+                ok -> publish_owner_write_sync_close(IoDevice, PendingPath, OwnerPath, Contents);
+                {error, _} ->
+                    _ = file:close(IoDevice),
+                    _ = file:delete(PendingPath),
+                    2
+            end
+    end.
+
+publish_owner_write_sync_close(IoDevice, PendingPath, OwnerPath, Contents) ->
+    case file:write(IoDevice, Contents) of
+        ok ->
+            case file:sync(IoDevice) of
+                ok ->
+                    case file:close(IoDevice) of
+                        ok ->
+                            case file:rename(PendingPath, OwnerPath) of
+                                ok -> 0;
+                                {error, eexist} ->
+                                    _ = file:delete(PendingPath),
+                                    1;
+                                {error, _} ->
+                                    _ = file:delete(PendingPath),
+                                    2
+                            end;
+                        {error, _} ->
+                            _ = file:delete(PendingPath),
+                            2
+                    end;
+                {error, _} ->
+                    _ = file:close(IoDevice),
+                    _ = file:delete(PendingPath),
+                    2
+            end;
+        {error, _} ->
+            _ = file:close(IoDevice),
+            _ = file:delete(PendingPath),
+            2
     end.
 
 write_and_close(IoDevice, Contents) ->

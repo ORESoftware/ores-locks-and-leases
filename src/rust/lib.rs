@@ -62,7 +62,7 @@
 //!
 //! ```text
 //! local-only: mkdir(lock) -> write owner -> work -> verify owner -> rmdir(lock)
-//! distributed: lease.acquire -> pg.begin -> pg_advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
+//! distributed: lease.acquire -> pg.begin -> pg.advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
 //! ```
 
 pub mod error;
@@ -101,8 +101,8 @@ pub use local_file::{
     local_file_lock_exists,
 };
 pub use local_file_recovery::{
-    LocalFileLockInspection, LocalFileLockInspectionState, inspect_local_file_lock,
-    recover_local_file_lock,
+    LocalFileLockInspection, LocalFileLockInspectionReason, LocalFileLockInspectionState,
+    inspect_local_file_lock, recover_local_file_lock,
 };
 pub use local_file_scoped::{ScopedLocalFileLockError, with_local_file_lock};
 pub use managed::{
