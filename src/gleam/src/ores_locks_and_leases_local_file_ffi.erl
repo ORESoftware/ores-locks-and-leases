@@ -7,6 +7,7 @@
     directory_shape/1,
     write_new_file_status/2,
     make_symlink_status/2,
+    make_hard_link_status/2,
     unicode_codepoint_count/1,
     owner_private_mode_status/1
 ]).
@@ -27,12 +28,14 @@ is_directory(Path) ->
 
 %% Alias-aware path classification using read_link_info so symbolic links are
 %% never followed. Values are intentionally tiny and stable for the Gleam FFI:
-%% 0 absent, 1 real directory, 2 real regular file, 3 alias/other node, 4 IO.
+%% 0 absent, 1 real directory, 2 single-link regular file, 3 alias/other node, 4 IO.
+%% A regular file with multiple hard links is treated as aliased ownership state.
 path_kind(Path) ->
     case file:read_link_info(Path) of
         {error, enoent} -> 0;
         {ok, #file_info{type = directory}} -> 1;
-        {ok, #file_info{type = regular}} -> 2;
+        {ok, #file_info{type = regular, links = 1}} -> 2;
+        {ok, #file_info{type = regular}} -> 3;
         {ok, _} -> 3;
         {error, _} -> 4
     end.
@@ -113,5 +116,14 @@ make_symlink_status(Target, Link) ->
     case file:make_symlink(Target, Link) of
         ok -> 0;
         {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup -> 1;
+        {error, _} -> 2
+    end.
+
+%% Test-support primitive for POSIX owner-marker hard-link adversarial tests.
+%% 0 success; 1 platform/filesystem does not permit hard links; 2 other.
+make_hard_link_status(Target, Link) ->
+    case file:make_link(Target, Link) of
+        ok -> 0;
+        {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup; Reason =:= exdev -> 1;
         {error, _} -> 2
     end.
