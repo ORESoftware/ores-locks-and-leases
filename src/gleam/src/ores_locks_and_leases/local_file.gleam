@@ -53,6 +53,20 @@ pub opaque type LocalFileLock {
   LocalFileLock(path: String, owner: String)
 }
 
+/// Explicit lifecycle result for immutable Gleam handles.
+///
+/// Unlike the mutable Rust/Go/TypeScript holders, Gleam values cannot mutate
+/// themselves into a terminal state. `release_with_state` therefore returns
+/// the stable lifecycle transition explicitly. In particular, a directory
+/// cleanup failure after the owner marker was already removed is reported as
+/// `ReleaseFailedPartial` together with the original cleanup error; callers
+/// must discard that handle after observing the terminal partial state.
+pub type LocalFileLockReleaseOutcome {
+  ReleaseSucceeded
+  ReleaseFailedHeld(LocalFileLockError)
+  ReleaseFailedPartial(LocalFileLockError)
+}
+
 pub fn local_file_lock_path(lock: LocalFileLock) -> String {
   lock.path
 }
@@ -146,7 +160,7 @@ fn create_lock_directory(
 /// Acquire with optional finite waiting.
 ///
 /// The finite wait budget is end-to-end: time spent in filesystem attempts
-/// consumes the same budget as retry sleeps.
+/// consumes the same monotonic deadline as retry sleeps.
 pub fn acquire(
   lock_root: String,
   lock_name: String,
@@ -156,7 +170,8 @@ pub fn acquire(
   use _ <- result.try(validate_inputs(lock_root, lock_name, owner))
   let path = lock_path(lock_root, lock_name)
   use _ <- result.try(validate_options(path, options))
-  acquire_loop(lock_root, lock_name, owner, options, options.wait_timeout_ms)
+  let deadline_ms = monotonic_milliseconds() + options.wait_timeout_ms
+  acquire_loop(lock_root, lock_name, owner, options, deadline_ms)
 }
 
 fn acquire_loop(
@@ -164,7 +179,7 @@ fn acquire_loop(
   lock_name: String,
   owner: String,
   options: LocalFileLockOptions,
-  remaining_ms: Int,
+  deadline_ms: Int,
 ) -> Result(LocalFileLock, LocalFileLockError) {
   let path = lock_path(lock_root, lock_name)
   case try_acquire(lock_root, lock_name, owner) {
@@ -176,36 +191,49 @@ fn acquire_loop(
         path,
         "lock is already held by another owner",
       ))
-    Ok(None) if remaining_ms <= 0 ->
-      Error(LocalFileLockError(
-        Timeout,
-        path,
-        "timed out waiting for local lock",
-      ))
     Ok(None) -> {
-      let delay = case options.retry_interval_ms < remaining_ms {
-        True -> options.retry_interval_ms
-        False -> remaining_ms
+      let remaining_ms = deadline_ms - monotonic_milliseconds()
+      case remaining_ms <= 0 {
+        True ->
+          Error(LocalFileLockError(
+            Timeout,
+            path,
+            "timed out waiting for local lock",
+          ))
+        False -> {
+          let delay = case options.retry_interval_ms < remaining_ms {
+            True -> options.retry_interval_ms
+            False -> remaining_ms
+          }
+          process.sleep(delay)
+          acquire_loop(lock_root, lock_name, owner, options, deadline_ms)
+        }
       }
-      process.sleep(delay)
-      acquire_loop(lock_root, lock_name, owner, options, remaining_ms - delay)
     }
   }
 }
 
-/// Release after verifying the persisted owner token.
-///
-/// A release observes structural changes to the lock directory and fails
-/// closed rather than treating externally removed state as a successful unlock.
+/// Compatibility release API. Prefer `release_with_state` when callers need to
+/// distinguish a pre-destructive failure from a terminal partial release.
 pub fn release(lock: LocalFileLock) -> Result(Nil, LocalFileLockError) {
+  case release_with_state(lock) {
+    ReleaseSucceeded -> Ok(Nil)
+    ReleaseFailedHeld(error) -> Error(error)
+    ReleaseFailedPartial(error) -> Error(error)
+  }
+}
+
+/// Release after verifying the persisted owner token while returning the
+/// immutable handle's lifecycle transition explicitly.
+pub fn release_with_state(lock: LocalFileLock) -> LocalFileLockReleaseOutcome {
   let path = lock.path
   let owner_path = path <> "/" <> owner_file
   case path_kind(path), path_kind(owner_path) {
     1, 2 -> release_verified_shape(lock, path, owner_path)
-    4, _ -> Error(io_error(path, "inspect lock directory failed"))
-    _, 4 -> Error(io_error(path, "inspect owner token failed"))
+    4, _ -> ReleaseFailedHeld(io_error(path, "inspect lock directory failed"))
+    _, 4 -> ReleaseFailedHeld(io_error(path, "inspect owner token failed"))
     _, _ ->
-      Error(LocalFileLockError(
+      ReleaseFailedHeld(LocalFileLockError(
         Compromised,
         path,
         "lock directory or owner token has ambiguous path identity",
@@ -217,24 +245,24 @@ fn release_verified_shape(
   lock: LocalFileLock,
   path: String,
   owner_path: String,
-) -> Result(Nil, LocalFileLockError) {
+) -> LocalFileLockReleaseOutcome {
   case simplifile.read(owner_path) {
     Ok(observed) if observed == lock.owner ->
       remove_owned_lock(path, owner_path)
     Ok(_) ->
-      Error(LocalFileLockError(
+      ReleaseFailedHeld(LocalFileLockError(
         Compromised,
         path,
         "owner token changed; refusing to remove a lock that may belong to another acquisition",
       ))
     Error(simplifile.Enoent) ->
-      Error(LocalFileLockError(
+      ReleaseFailedHeld(LocalFileLockError(
         Compromised,
         path,
         "owner token is missing; refusing to treat externally altered lock state as a successful release",
       ))
     Error(error) ->
-      Error(io_error(
+      ReleaseFailedHeld(io_error(
         path,
         "read local lock owner token failed: "
           <> simplifile.describe_error(error),
@@ -292,23 +320,25 @@ fn write_owner_or_unwind(
 fn remove_owned_lock(
   path: String,
   owner_path: String,
-) -> Result(Nil, LocalFileLockError) {
+) -> LocalFileLockReleaseOutcome {
   case simplifile.delete_file(at: owner_path) {
     Error(error) ->
-      Error(io_error(
+      ReleaseFailedHeld(io_error(
         path,
         "remove local lock owner token failed: "
           <> simplifile.describe_error(error),
       ))
     Ok(Nil) ->
       case delete_empty_directory(path) {
-        Ok(Nil) -> Ok(Nil)
-        Error(_) ->
-          Error(LocalFileLockError(
+        Ok(Nil) -> ReleaseSucceeded
+        Error(_) -> {
+          let error = LocalFileLockError(
             Compromised,
             path,
-            "remove local lock directory failed; refusing recursive deletion of an unexpectedly non-empty directory",
-          ))
+            "remove local lock directory failed; refusing recursive deletion of an unexpectedly non-empty or inaccessible directory",
+          )
+          ReleaseFailedPartial(error)
+        }
       }
   }
 }
@@ -326,39 +356,46 @@ fn validate_inputs(
     || lock_name == ".."
     || string.contains(lock_name, "/")
     || string.contains(lock_name, "\\"),
+    windows_path_admission_status(path),
     owner_validation.validate(owner)
   {
-    True, _, _, _ ->
+    True, _, _, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock root must not be empty",
       ))
-    _, True, _, _ ->
+    _, True, _, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock name must not be empty",
       ))
-    _, _, True, _ ->
+    _, _, True, _, _ ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "lock name must be one non-dot path component",
       ))
-    _, _, _, owner_validation.OwnerEmpty ->
+    _, _, _, 1, _ ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "Windows local lock paths must avoid device namespaces, reserved device names, trailing dot/space components, and alternate-data-stream syntax",
+      ))
+    _, _, _, _, owner_validation.OwnerEmpty ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "owner token must not be empty",
       ))
-    _, _, _, owner_validation.OwnerOversized ->
+    _, _, _, _, owner_validation.OwnerOversized ->
       Error(LocalFileLockError(
         InvalidInput,
         path,
         "owner token must not exceed 512 Unicode code points",
       ))
-    False, False, False, owner_validation.OwnerValid -> Ok(Nil)
+    False, False, False, 0, owner_validation.OwnerValid -> Ok(Nil)
   }
 }
 
@@ -422,3 +459,9 @@ fn publish_owner_status(
   owner_path: String,
   contents: String,
 ) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "monotonic_milliseconds")
+fn monotonic_milliseconds() -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "windows_path_admission_status")
+fn windows_path_admission_status(path: String) -> Int
