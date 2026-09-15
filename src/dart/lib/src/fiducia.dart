@@ -25,6 +25,7 @@ final class FiduciaLease implements Lease {
   final http.Client _client;
   final String? _refusal;
   final String Function() _generateHolder;
+  final String Function() _generateRequestId;
 
   FiduciaLease._(
     this._base,
@@ -32,6 +33,7 @@ final class FiduciaLease implements Lease {
     this._client,
     this._refusal,
     this._generateHolder,
+    this._generateRequestId,
   );
 
   /// The trusted internal hop straight to a fiducia-node.
@@ -42,6 +44,7 @@ final class FiduciaLease implements Lease {
     http.Client? client,
     bool allowCleartextInternal = false,
     String Function()? generateHolder,
+    String Function()? generateRequestId,
   }) {
     return FiduciaLease._(
       _parseBase(baseUrl),
@@ -57,6 +60,7 @@ final class FiduciaLease implements Lease {
         allow: allowCleartextInternal,
       ),
       generateHolder ?? generatedHolder,
+      generateRequestId ?? generatedRequestId,
     );
   }
 
@@ -67,6 +71,7 @@ final class FiduciaLease implements Lease {
     http.Client? client,
     bool allowCleartextInternal = false,
     String Function()? generateHolder,
+    String Function()? generateRequestId,
   }) {
     return FiduciaLease._(
       _parseBase(baseUrl),
@@ -78,6 +83,7 @@ final class FiduciaLease implements Lease {
         allow: allowCleartextInternal,
       ),
       generateHolder ?? generatedHolder,
+      generateRequestId ?? generatedRequestId,
     );
   }
 
@@ -102,13 +108,19 @@ final class FiduciaLease implements Lease {
     return 'fiducia: refusing to send a credential over cleartext http to "$host"; use https or allowCleartextInternal';
   }
 
-  /// An unguessable holder identity; holder names carry queue identity and
-  /// cancellation authority.
-  static String generatedHolder() {
+  static String _generatedIdentity(String prefix) {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-    return 'ores-locks-${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
+    return '$prefix${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
   }
+
+  /// An unguessable holder identity; holder names carry queue identity and
+  /// cancellation authority.
+  static String generatedHolder() => _generatedIdentity('ores-locks-');
+
+  /// Stable identity generated once for one logical acquisition.
+  static String generatedRequestId() =>
+      _generatedIdentity('ores-lock-request-');
 
   Future<Map<String, Object?>> _post(
     String path,
@@ -144,13 +156,14 @@ final class FiduciaLease implements Lease {
   static BigInt? _uint(Object? value) {
     // Flutter web's JSON decoder rounds numeric literals above 2^53-1.
     // Apply the same bound on every Dart target so native and web callers
-    // fail closed identically. Decimal strings remain lossless for a future
-    // Fiducia wire revision.
+    // fail closed identically. Decimal strings are bounded too: accepting a
+    // larger string here would create a different authority domain by runtime.
     if (value is int && value >= 0 && value <= 9007199254740991) {
       return BigInt.from(value);
     }
     if (value is String && RegExp(r'^\d+$').hasMatch(value)) {
-      return BigInt.parse(value);
+      final parsed = BigInt.parse(value);
+      return parsed <= _maxSafeJsonInteger ? parsed : null;
     }
     return null;
   }
@@ -162,6 +175,13 @@ final class FiduciaLease implements Lease {
     required bool wait,
   }) async {
     final holder = opts.holder ?? _generateHolder();
+    final requestId = opts.requestId ?? _generateRequestId();
+    if (!validRequestId(requestId)) {
+      throw LockError.invalidPlan(
+        key,
+        'requestId must contain 1..=$maxRequestIdChars characters',
+      );
+    }
     final started = DateTime.now();
     for (;;) {
       final Map<String, Object?> out;
@@ -170,16 +190,17 @@ final class FiduciaLease implements Lease {
           'key': key.value,
           'holder': holder,
           'ttl_ms': opts.ttl.inMilliseconds,
+          'request_id': requestId,
         });
       } catch (cause) {
         throw LockError.transport(key, cause);
       }
       if (out['acquired'] == true) {
         final token = _uint(out['fencing_token']);
-        if (token == null) {
+        if (token == null || token == BigInt.zero) {
           throw LockError.transport(
             key,
-            'fiducia: acquired without a fencing token',
+            'fiducia: acquired without a positive safe fencing token',
           );
         }
         return LeaseGrant(
