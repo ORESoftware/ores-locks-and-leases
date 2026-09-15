@@ -94,7 +94,7 @@ jobs:
           fs.writeFileSync(recoveryPath, recovery);
           NODE
       - name: Format Rust
-        run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
+        run: cargo fmt --manifest-path src/rust/Cargo.toml --all
       - name: Prove focused path admission
         run: cargo test --manifest-path src/rust/Cargo.toml --locked --no-default-features --test local_file_path_admission_v7
       - name: Commit verified semantic union
