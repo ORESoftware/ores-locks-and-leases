@@ -115,7 +115,7 @@ export class LockLeaseAuthority {
     return Number.isSafeInteger(row?.retain_until_ms) ? row.retain_until_ms : null;
   }
 
-  pruneReplay(now) {
+  pruneReplay(now, maxRecords = MAX_REPLAY_RECORDS) {
     this.sql.exec("DELETE FROM acquire_replay WHERE retain_until_ms <= ?", now);
     this.sql.exec(
       `DELETE FROM acquire_replay
@@ -124,12 +124,15 @@ export class LockLeaseAuthority {
          ORDER BY retain_until_ms DESC, request_id DESC
          LIMIT -1 OFFSET ?
        )`,
-      MAX_REPLAY_RECORDS,
+      maxRecords,
     );
   }
 
-  recordReplay(body, token, leaseExpiresMs) {
+  recordReplay(body, token, leaseExpiresMs, now) {
     if (!body.request_id) return;
+    // Reserve one slot before insertion so the ledger never exceeds the hard
+    // cap and the newly active request cannot be selected for eviction.
+    this.pruneReplay(now, MAX_REPLAY_RECORDS - 1);
     const retainUntil = leaseExpiresMs + REPLAY_RETENTION_MS;
     this.sql.exec(
       `INSERT OR REPLACE INTO acquire_replay
@@ -238,7 +241,7 @@ export class LockLeaseAuthority {
           fencingToken,
           body.request_id ?? null,
         );
-        this.recordReplay(body, fencingToken, expires);
+        this.recordReplay(body, fencingToken, expires, now);
         return {
           acquired: true,
           fencing_token: fencingToken,
