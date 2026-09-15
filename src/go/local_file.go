@@ -63,8 +63,6 @@ func DefaultLocalFileLockOptions() LocalFileLockOptions {
 }
 
 // GeneratedLocalFileLockOwner returns a fresh OS-CSPRNG-backed owner identity.
-// It deliberately has no PID/time fallback because a weak fallback would turn
-// an entropy failure into an ownership-identity failure.
 func GeneratedLocalFileLockOwner() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -73,9 +71,7 @@ func GeneratedLocalFileLockOwner() (string, error) {
 	return "ores-locks-" + hex.EncodeToString(raw[:]), nil
 }
 
-// LocalFileLock is a held portable filesystem lock. Atomic directory creation
-// is the admission authority; the owner file is diagnostics plus an owner-safe
-// release token and is never a stale PID authority.
+// LocalFileLock is a held portable filesystem lock.
 type LocalFileLock struct {
 	path       string
 	owner      string
@@ -155,7 +151,7 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 	if writeErr == nil && n != len(owner) {
 		writeErr = io.ErrShortWrite
 	}
-	syncErr := error(nil)
+	var syncErr error
 	if writeErr == nil {
 		syncErr = ownerFile.Sync()
 	}
@@ -191,8 +187,6 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 
 // AcquireLocalFileLock acquires with optional finite waiting. The wait budget
 // is end-to-end: time spent in filesystem attempts counts toward WaitTimeout.
-// This portable backend retries mkdir; zed-pkg's native Rust lock should keep
-// one kernel-backed blocking request instead.
 func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*LocalFileLock, error) {
 	if err := validateLocalPath(path); err != nil {
 		return nil, err
@@ -219,14 +213,8 @@ func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*Lo
 
 		elapsed := time.Since(started)
 		if elapsed >= options.WaitTimeout {
-			return nil, localFileError(
-				LocalFileTimeout,
-				path,
-				fmt.Sprintf("timed out after %d ms waiting for local lock", options.WaitTimeout.Milliseconds()),
-				nil,
-			)
+			return nil, localFileError(LocalFileTimeout, path, fmt.Sprintf("timed out after %d ms waiting for local lock", options.WaitTimeout.Milliseconds()), nil)
 		}
-
 		remaining := options.WaitTimeout - elapsed
 		delay := options.RetryInterval
 		if delay > remaining {
@@ -237,9 +225,8 @@ func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*Lo
 }
 
 // Release verifies the owner token before removing the now-empty lock
-// directory. It is idempotent after a successful release. If owner removal
-// succeeds but directory removal fails, the original destructive-transition
-// error is retained and returned by every later Release call.
+// directory. It is idempotent after success and sticky after a destructive
+// partial release.
 func (l *LocalFileLock) Release() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -259,14 +246,8 @@ func (l *LocalFileLock) Release() error {
 		return err
 	}
 	if string(observed) != l.owner {
-		return localFileError(
-			LocalFileCompromised,
-			l.path,
-			"owner token changed; refusing to remove a lock that may belong to another acquisition",
-			nil,
-		)
+		return localFileError(LocalFileCompromised, l.path, "owner token changed; refusing to remove a lock that may belong to another acquisition", nil)
 	}
-
 	if err := os.Remove(ownerPath); err != nil {
 		return localFileError(LocalFileIO, l.path, "remove local lock owner token failed", err)
 	}
@@ -287,9 +268,7 @@ func (l *LocalFileLock) Release() error {
 	return nil
 }
 
-// LocalFileLockExists is a compatibility diagnostic. It returns true only for
-// a structurally healthy held lock, false only when absent, and fails closed on
-// incomplete or compromised state. Prefer InspectLocalFileLock for new code.
+// LocalFileLockExists is a compatibility diagnostic.
 func LocalFileLockExists(path string) (bool, error) {
 	if err := validateLocalPath(path); err != nil {
 		return false, err
@@ -320,7 +299,55 @@ func validateLocalPath(path string) error {
 	if !utf8.ValidString(path) {
 		return localFileError(LocalFileInvalidInput, path, "local lock path must be valid UTF-8 Unicode scalar data", nil)
 	}
+	if runtime.GOOS == "windows" && !localWindowsPathAdmitted(path) {
+		return localFileError(LocalFileInvalidInput, path, "Windows local lock paths must avoid device namespaces, reserved device names, trailing dot/space components, and alternate-data-stream syntax", nil)
+	}
 	return nil
+}
+
+func localWindowsPathAdmitted(path string) bool {
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	lower := strings.ToLower(normalized)
+	if strings.HasPrefix(lower, "//?/") || strings.HasPrefix(lower, "//./") || strings.HasPrefix(lower, "/??/") {
+		return false
+	}
+	first := true
+	for _, component := range strings.Split(normalized, "/") {
+		if component == "" {
+			continue
+		}
+		if component == "." || component == ".." {
+			continue
+		}
+		if first && len(component) == 2 && isASCIIAlpha(component[0]) && component[1] == ':' {
+			first = false
+			continue
+		}
+		first = false
+		if strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") || strings.Contains(component, ":") {
+			return false
+		}
+		base := strings.TrimSpace(strings.ToUpper(strings.SplitN(component, ".", 2)[0]))
+		if isWindowsReservedDeviceBase(base) {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlpha(value byte) bool {
+	return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z')
+}
+
+func isWindowsReservedDeviceBase(base string) bool {
+	switch base {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateLocalOwner(path, owner string) error {
