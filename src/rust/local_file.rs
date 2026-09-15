@@ -123,7 +123,7 @@ impl LocalFileLock {
         let path = path.as_ref();
         let owner = owner.into();
         validate_local_file_path(path)?;
-        validate_owner(path, &owner)?;
+        validate_local_file_owner(path, &owner)?;
 
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -208,7 +208,7 @@ impl LocalFileLock {
         let owner = owner.into();
         validate_local_file_path(&path)?;
         validate_options(&path, &options)?;
-        validate_owner(&path, &owner)?;
+        validate_local_file_owner(&path, &owner)?;
 
         let started = Instant::now();
         loop {
@@ -381,7 +381,10 @@ fn create_lock_directory(path: &Path) -> io::Result<()> {
     }
 }
 
-fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {
+pub(crate) fn validate_local_file_owner(
+    path: &Path,
+    owner: &str,
+) -> Result<(), LocalFileLockError> {
     if owner.is_empty() {
         return Err(LocalFileLockError::new(
             LocalFileLockErrorKind::InvalidInput,
