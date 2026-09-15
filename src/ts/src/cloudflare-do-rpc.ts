@@ -1,6 +1,6 @@
 import { LockError } from "./errors.js";
 import type { LockKey } from "./key.js";
-import type { AcquireOptions, Lease, LeaseGrant } from "./lease.js";
+import { validRequestId, type AcquireOptions, type Lease, type LeaseGrant } from "./lease.js";
 import type { LockStep } from "./plan.js";
 import { generatedHolder } from "./fiducia.js";
 import type {
@@ -63,7 +63,6 @@ export class CloudflareDurableObjectRpcLease implements Lease {
     invoke: (stub: CloudflareDurableObjectRpcStub) => Promise<T>,
   ): Promise<T> {
     try {
-      // RPC exceptions invalidate that stub; reacquire a stub for every call.
       return await invoke(this.#namespace.getByName(key));
     } catch (cause) {
       throw LockError.transport(key, cause, step);
@@ -73,6 +72,9 @@ export class CloudflareDurableObjectRpcLease implements Lease {
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
     const requestId = opts.requestId ?? this.#generateRequestId();
+    if (!validRequestId(requestId)) {
+      throw LockError.invalidPlan(key, "requestId must contain 1..=256 Unicode code points");
+    }
     const started = Date.now();
     const step: LockStep = wait ? "fiducia.acquire" : "fiducia.try_acquire";
 
