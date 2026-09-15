@@ -443,8 +443,7 @@ fn read_bounded_owner(lock_path: &Path, owner_path: &Path) -> Result<String, Loc
     }
 
     let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
-    owner_file
-        .by_ref()
+    std::io::Read::by_ref(&mut owner_file)
         .take((OWNER_MAX_UTF8_BYTES + 1) as u64)
         .read_to_end(&mut owner_bytes)
         .map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;
