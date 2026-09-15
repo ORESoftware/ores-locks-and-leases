@@ -4,6 +4,9 @@
   "policies": {
     "existing_parent_permissions": "trusted_private_root_required",
     "posix_reject_group_or_world_writable_immediate_parent": true,
+    "new_rendezvous_directory_mode_posix": "0700_or_stricter",
+    "owner_marker_mode_posix": "0600_or_stricter",
+    "owner_hard_links_posix": "reject_nlink_not_equal_to_1_when_observable",
     "windows_acl_confidentiality_claim": false,
     "windows_acl_policy": "platform_default_is_not_an_ownership_primitive",
     "live_permission_widening": "compromised_on_posix_when_observable",
@@ -32,6 +35,8 @@
     "runtime-constants-centralized",
     "opened-owner-handle-revalidated",
     "posix-existing-parent-permission-probe",
+    "posix-new-rendezvous-private-mode-probe",
+    "posix-owner-hard-link-rejection-probe",
     "windows-acl-policy-probe",
     "posix-live-permission-widening-probe",
     "owner-path-to-handle-race-probe",

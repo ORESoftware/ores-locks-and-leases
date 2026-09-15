@@ -1,8 +1,7 @@
 //! Explicit inspection and operator-driven recovery for portable local locks.
 
-use crate::local_file::{
-    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_owner, validate_local_file_path,
-};
+use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
@@ -15,6 +14,7 @@ use std::os::windows::fs::MetadataExt;
 const OWNER_FILE: &str = "owner";
 const OWNER_MAX_CODEPOINTS: usize = 512;
 const OWNER_MAX_UTF8_BYTES: usize = 2048;
+const INSPECTION_MAX_DIRECTORY_ENTRIES: usize = 2;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -43,7 +43,6 @@ pub fn inspect_local_file_lock(
     path: impl AsRef<Path>,
 ) -> Result<LocalFileLockInspection, LocalFileLockError> {
     let path = path.as_ref();
-    validate_local_file_path(path)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -59,30 +58,32 @@ pub fn inspect_local_file_lock(
         return Ok(compromised("lock path is not an unaliased directory"));
     }
 
-    let entries = fs::read_dir(path)
-        .map_err(|error| io_error(path, "list local lock directory", error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| io_error(path, "read local lock directory entry", error))?;
+    let entries = read_entry_names_bounded(path)?;
     if entries.is_empty() {
         return Ok(incomplete(
             "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
         ));
     }
-    if entries.len() != 1 || entries[0].file_name() != OWNER_FILE {
+    if entries.len() != 1 || entries[0] != OWNER_FILE {
         return Ok(compromised(
             "lock directory must contain exactly one owner marker",
         ));
     }
 
     let owner_path = path.join(OWNER_FILE);
-    let owner_metadata = fs::symlink_metadata(&owner_path)
-        .map_err(|error| io_error(path, "inspect local lock owner token", error))?;
+    let owner_metadata = match fs::symlink_metadata(&owner_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(incomplete("owner token disappeared during inspection"));
+        }
+        Err(error) => return Err(io_error(path, "inspect local lock owner token", error)),
+    };
     if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
         return Ok(compromised("owner token is not an unaliased regular file"));
     }
-    if metadata_has_multiple_links(&owner_metadata) {
+    if owner_has_multiple_links(&owner_metadata) {
         return Ok(compromised(
-            "owner token has multiple filesystem links; refusing aliased ownership state",
+            "owner token has multiple hard links; refusing aliased ownership state",
         ));
     }
     if owner_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
@@ -91,17 +92,29 @@ pub fn inspect_local_file_lock(
         ));
     }
 
-    let mut owner_file = File::open(&owner_path)
-        .map_err(|error| io_error(path, "open local lock owner token", error))?;
+    let mut owner_file = match File::open(&owner_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(incomplete("owner token disappeared during inspection"));
+        }
+        Err(error) => return Err(io_error(path, "open local lock owner token", error)),
+    };
     let opened_metadata = owner_file
         .metadata()
-        .map_err(|error| io_error(path, "reinspect opened local lock owner token", error))?;
-    if !opened_metadata.is_file()
-        || metadata_is_alias(&opened_metadata)
-        || metadata_has_multiple_links(&opened_metadata)
-    {
+        .map_err(|error| io_error(path, "inspect opened local lock owner token", error))?;
+    if !opened_metadata.is_file() || owner_has_multiple_links(&opened_metadata) {
         return Ok(compromised(
-            "opened owner token is aliased or multiply linked",
+            "opened owner token is not a single-link regular file",
+        ));
+    }
+    if !same_file_identity(&owner_metadata, &opened_metadata) {
+        return Ok(compromised(
+            "owner token identity changed while opening; refusing raced path-to-handle state",
+        ));
+    }
+    if opened_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
+        return Ok(compromised(
+            "owner token exceeds the portable 2048-byte UTF-8 storage bound",
         ));
     }
 
@@ -148,7 +161,6 @@ pub fn recover_local_file_lock(
     confirmed_inactive: bool,
 ) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
-    validate_local_file_path(path)?;
     if !confirmed_inactive {
         return Err(error(
             LocalFileLockErrorKind::InvalidInput,
@@ -156,7 +168,20 @@ pub fn recover_local_file_lock(
             "explicit confirmed_inactive=true is required for recovery",
         ));
     }
-    validate_local_file_owner(path, expected_owner)?;
+    if expected_owner.is_empty() {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "expected owner must not be empty",
+        ));
+    }
+    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "expected owner must not exceed 512 Unicode code points",
+        ));
+    }
 
     let inspection = inspect_local_file_lock(path)?;
     match inspection.state {
@@ -223,6 +248,22 @@ pub fn recover_local_file_lock(
     Ok(true)
 }
 
+fn read_entry_names_bounded(path: &Path) -> Result<Vec<OsString>, LocalFileLockError> {
+    let mut directory = fs::read_dir(path)
+        .map_err(|error| io_error(path, "list local lock directory", error))?;
+    let mut entries = Vec::with_capacity(INSPECTION_MAX_DIRECTORY_ENTRIES);
+    for _ in 0..INSPECTION_MAX_DIRECTORY_ENTRIES {
+        match directory.next() {
+            None => break,
+            Some(Ok(entry)) => entries.push(entry.file_name()),
+            Some(Err(error)) => {
+                return Err(io_error(path, "read local lock directory entry", error));
+            }
+        }
+    }
+    Ok(entries)
+}
+
 fn incomplete(message: &str) -> LocalFileLockInspection {
     LocalFileLockInspection {
         state: LocalFileLockInspectionState::Incomplete,
@@ -259,6 +300,26 @@ fn io_error(path: &Path, operation: &str, source: io::Error) -> LocalFileLockErr
     )
 }
 
+#[cfg(unix)]
+fn owner_has_multiple_links(metadata: &fs::Metadata) -> bool {
+    metadata.nlink() != 1
+}
+
+#[cfg(not(unix))]
+fn owner_has_multiple_links(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
+    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {
+    true
+}
+
 fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -269,18 +330,6 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     {
-        false
-    }
-}
-
-fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        metadata.nlink() != 1
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
         false
     }
 }
