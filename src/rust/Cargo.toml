@@ -29,7 +29,7 @@ pg = ["dep:sea-orm"]
 # of the concrete lease authority so Cloudflare/Redis do not pull Fiducia in.
 maintained = ["pg", "dep:tokio"]
 # The fiducia-cloud lease adapter over the official async Rust client.
-fiducia = ["dep:fiducia-client", "dep:tokio"]
+fiducia = ["dep:fiducia-client", "dep:tokio", "dep:serde_json"]
 # Everything, including the legacy Fiducia adapter and generic maintained path.
 full = ["pg", "maintained", "fiducia", "config"]
 
@@ -45,6 +45,7 @@ sea-orm = { version = "1", default-features = false, features = [
 fiducia-client = { git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
 tokio = { version = "1", features = ["macros", "time"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }
 
 [dev-dependencies]
