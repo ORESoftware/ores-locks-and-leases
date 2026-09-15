@@ -59,28 +59,32 @@ export class LockLeaseAuthority {
         token TEXT,
         expires_ms INTEGER,
         next_token TEXT NOT NULL,
-        request_id TEXT
+        request_id TEXT,
+        request_ttl_ms INTEGER
       )
     `);
     const columns = this.sql.exec("PRAGMA table_info(lease_state)").toArray();
     if (!columns.some((column) => column.name === "request_id")) {
       this.sql.exec("ALTER TABLE lease_state ADD COLUMN request_id TEXT");
     }
+    if (!columns.some((column) => column.name === "request_ttl_ms")) {
+      this.sql.exec("ALTER TABLE lease_state ADD COLUMN request_ttl_ms INTEGER");
+    }
     this.sql.exec(`
-      INSERT OR IGNORE INTO lease_state (id, holder, token, expires_ms, next_token, request_id)
-      VALUES (1, NULL, NULL, NULL, '0', NULL)
+      INSERT OR IGNORE INTO lease_state (id, holder, token, expires_ms, next_token, request_id, request_ttl_ms)
+      VALUES (1, NULL, NULL, NULL, '0', NULL, NULL)
     `);
   }
 
   row() {
     return this.sql.exec(
-      "SELECT holder, token, expires_ms, next_token, request_id FROM lease_state WHERE id = 1",
+      "SELECT holder, token, expires_ms, next_token, request_id, request_ttl_ms FROM lease_state WHERE id = 1",
     ).toArray()[0];
   }
 
   clearLease() {
     this.sql.exec(
-      "UPDATE lease_state SET holder = NULL, token = NULL, expires_ms = NULL, request_id = NULL WHERE id = 1",
+      "UPDATE lease_state SET holder = NULL, token = NULL, expires_ms = NULL, request_id = NULL, request_ttl_ms = NULL WHERE id = 1",
     );
   }
 
@@ -105,13 +109,32 @@ export class LockLeaseAuthority {
               lease_expires_ms: row.expires_ms,
             };
           }
+          if (
+            body.request_id &&
+            row.request_id === body.request_id &&
+            row.request_ttl_ms !== null &&
+            row.request_ttl_ms !== body.ttl_ms
+          ) {
+            return {
+              acquired: false,
+              reason: "request_replay_mismatch",
+              lease_expires_ms: row.expires_ms,
+            };
+          }
           if (body.request_id && !row.request_id) {
-            this.sql.exec("UPDATE lease_state SET request_id = ? WHERE id = 1", body.request_id);
+            this.sql.exec(
+              "UPDATE lease_state SET request_id = ?, request_ttl_ms = ? WHERE id = 1",
+              body.request_id,
+              body.ttl_ms,
+            );
+          } else if (body.request_id && row.request_id === body.request_id && row.request_ttl_ms === null) {
+            this.sql.exec("UPDATE lease_state SET request_ttl_ms = ? WHERE id = 1", body.ttl_ms);
           }
           return {
             acquired: true,
             fencing_token: row.token,
             lease_expires_ms: row.expires_ms,
+            ttl_ms: row.request_ttl_ms ?? body.ttl_ms,
             renewed: false,
             replayed: true,
           };
@@ -121,12 +144,13 @@ export class LockLeaseAuthority {
         const fencingToken = nextToken(row.next_token);
         const expires = now + body.ttl_ms;
         this.sql.exec(
-          "UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ?, request_id = ? WHERE id = 1",
+          "UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ?, request_id = ?, request_ttl_ms = ? WHERE id = 1",
           body.holder,
           fencingToken,
           expires,
           fencingToken,
           body.request_id ?? null,
+          body.request_id ? body.ttl_ms : null,
         );
         return {
           acquired: true,
