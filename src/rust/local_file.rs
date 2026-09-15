@@ -8,19 +8,20 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
 const OWNER_MAX_CODEPOINTS: usize = 512;
+const OWNER_MAX_UTF8_BYTES: usize = OWNER_MAX_CODEPOINTS * 4;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -123,7 +124,7 @@ impl LocalFileLock {
         let path = path.as_ref();
         let owner = owner.into();
         validate_local_file_path(path)?;
-        validate_local_file_owner(path, &owner)?;
+        validate_owner(path, &owner)?;
 
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -135,6 +136,7 @@ impl LocalFileLock {
 
         match create_lock_directory(path) {
             Ok(()) => {
+                validate_private_lock_directory(path)?;
                 let owner_path = path.join(OWNER_FILE);
                 let mut owner_options = OpenOptions::new();
                 owner_options.write(true).create_new(true);
@@ -208,7 +210,7 @@ impl LocalFileLock {
         let owner = owner.into();
         validate_local_file_path(&path)?;
         validate_options(&path, &options)?;
-        validate_local_file_owner(&path, &owner)?;
+        validate_owner(&path, &owner)?;
 
         let started = Instant::now();
         loop {
@@ -262,26 +264,10 @@ impl LocalFileLock {
         }
 
         validate_real_directory(&self.path, &self.path, "lock directory")?;
+        validate_private_lock_directory(&self.path)?;
         let owner_path = self.path.join(OWNER_FILE);
-        validate_regular_file(&self.path, &owner_path, "owner token")?;
-        let observed = match fs::read(&owner_path) {
-            Ok(observed) => observed,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(LocalFileLockError::new(
-                    LocalFileLockErrorKind::Compromised,
-                    &self.path,
-                    "owner token is missing; refusing to treat externally altered lock state as a successful release",
-                ));
-            }
-            Err(error) => {
-                return Err(LocalFileLockError::io(
-                    &self.path,
-                    "read local lock owner token",
-                    error,
-                ));
-            }
-        };
-        if observed != self.owner.as_bytes() {
+        let observed = read_bounded_owner(&self.path, &owner_path)?;
+        if observed != self.owner {
             return Err(LocalFileLockError::new(
                 LocalFileLockErrorKind::Compromised,
                 &self.path,
@@ -289,9 +275,6 @@ impl LocalFileLock {
             ));
         }
 
-        // Re-check immediately before destructive removal so a hard-link alias
-        // introduced after the first metadata check cannot be silently ignored.
-        validate_regular_file(&self.path, &owner_path, "owner token")?;
         fs::remove_file(&owner_path).map_err(|error| {
             LocalFileLockError::io(&self.path, "remove local lock owner token", error)
         })?;
@@ -368,23 +351,7 @@ pub(crate) fn validate_local_file_path(path: &Path) -> Result<(), LocalFileLockE
     Ok(())
 }
 
-fn create_lock_directory(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(path)
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(path)
-    }
-}
-
-pub(crate) fn validate_local_file_owner(
-    path: &Path,
-    owner: &str,
-) -> Result<(), LocalFileLockError> {
+pub(crate) fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {
     if owner.is_empty() {
         return Err(LocalFileLockError::new(
             LocalFileLockErrorKind::InvalidInput,
@@ -413,6 +380,128 @@ fn validate_options(path: &Path, options: &LocalFileLockOptions) -> Result<(), L
     Ok(())
 }
 
+fn create_lock_directory(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(false);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(path)
+}
+
+fn validate_private_lock_directory(path: &Path) -> Result<(), LocalFileLockError> {
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            LocalFileLockError::io(path, "inspect lock directory permissions", error)
+        })?;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(LocalFileLockError::new(
+                LocalFileLockErrorKind::Compromised,
+                path,
+                "lock directory permissions widened beyond the private POSIX contract",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_bounded_owner(lock_path: &Path, owner_path: &Path) -> Result<String, LocalFileLockError> {
+    let path_metadata = match fs::symlink_metadata(owner_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(LocalFileLockError::new(
+                LocalFileLockErrorKind::Compromised,
+                lock_path,
+                "owner token is missing; refusing to trust altered lock state",
+            ));
+        }
+        Err(error) => {
+            return Err(LocalFileLockError::io(
+                lock_path,
+                "inspect local lock owner token",
+                error,
+            ));
+        }
+    };
+    if !path_metadata.is_file() || metadata_is_alias(&path_metadata) {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token is not an unaliased regular file",
+        ));
+    }
+    validate_single_link(lock_path, &path_metadata)?;
+    if path_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!(
+                "owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound"
+            ),
+        ));
+    }
+
+    let mut owner_file = File::open(owner_path)
+        .map_err(|error| LocalFileLockError::io(lock_path, "open local lock owner token", error))?;
+    let opened_metadata = owner_file
+        .metadata()
+        .map_err(|error| LocalFileLockError::io(lock_path, "inspect opened owner token", error))?;
+    if !opened_metadata.is_file() {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "opened owner token is not a regular file",
+        ));
+    }
+    validate_single_link(lock_path, &opened_metadata)?;
+    if !same_file_identity(&path_metadata, &opened_metadata) {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token identity changed while opening; refusing raced path-to-handle state",
+        ));
+    }
+    if opened_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!(
+                "owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound"
+            ),
+        ));
+    }
+
+    let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
+    std::io::Read::by_ref(&mut owner_file)
+        .take((OWNER_MAX_UTF8_BYTES + 1) as u64)
+        .read_to_end(&mut owner_bytes)
+        .map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;
+    if owner_bytes.len() > OWNER_MAX_UTF8_BYTES {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            format!(
+                "owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound"
+            ),
+        ));
+    }
+    let owner = String::from_utf8(owner_bytes).map_err(|_| {
+        LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token is not valid UTF-8",
+        )
+    })?;
+    if owner.is_empty() || owner.chars().count() > OWNER_MAX_CODEPOINTS {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::Compromised,
+            lock_path,
+            "owner token violates the portable owner contract",
+        ));
+    }
+    Ok(owner)
+}
+
 fn validate_real_directory(
     lock_path: &Path,
     path: &Path,
@@ -438,42 +527,37 @@ fn validate_real_directory(
     }
 }
 
-fn validate_regular_file(
+#[cfg(unix)]
+fn validate_single_link(
     lock_path: &Path,
-    path: &Path,
-    label: &str,
+    metadata: &fs::Metadata,
 ) -> Result<(), LocalFileLockError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata)
-            if metadata.is_file()
-                && !metadata_is_alias(&metadata)
-                && !metadata_has_multiple_links(&metadata) =>
-        {
-            Ok(())
-        }
-        Ok(metadata) if metadata.is_file() && metadata_has_multiple_links(&metadata) => {
-            Err(LocalFileLockError::new(
-                LocalFileLockErrorKind::Compromised,
-                lock_path,
-                format!("{label} has multiple filesystem links"),
-            ))
-        }
-        Ok(_) => Err(LocalFileLockError::new(
+    if metadata.nlink() != 1 {
+        return Err(LocalFileLockError::new(
             LocalFileLockErrorKind::Compromised,
             lock_path,
-            format!("{label} is not an unaliased regular file"),
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            format!("{label} is missing"),
-        )),
-        Err(error) => Err(LocalFileLockError::io(
-            lock_path,
-            &format!("inspect {label}"),
-            error,
-        )),
+            "owner token has multiple hard links; refusing aliased ownership state",
+        ));
     }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_single_link(
+    _lock_path: &Path,
+    _metadata: &fs::Metadata,
+) -> Result<(), LocalFileLockError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
+    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
@@ -486,18 +570,6 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     {
-        false
-    }
-}
-
-fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        metadata.nlink() != 1
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
         false
     }
 }
@@ -625,23 +697,82 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn lock_directory_and_owner_marker_are_private_on_posix() {
-        use std::os::unix::fs::PermissionsExt;
-        let path = test_path("private-lock");
+    fn owner_marker_is_private_on_posix() {
+        let path = test_path("private-owner");
         let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
             .expect("acquire")
             .expect("holder");
-        let directory_mode = fs::metadata(&path)
-            .expect("lock directory metadata")
-            .permissions()
-            .mode();
-        assert_eq!(directory_mode & 0o077, 0, "lock directory must be private");
-        let owner_mode = fs::metadata(path.join(OWNER_FILE))
+        let mode = fs::metadata(path.join(OWNER_FILE))
             .expect("owner metadata")
             .permissions()
             .mode();
-        assert_eq!(owner_mode & 0o077, 0, "owner marker must be private");
+        assert_eq!(mode & 0o077, 0, "owner marker must be private");
         lock.release().expect("release private owner lock");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rendezvous_directory_is_private_on_posix() {
+        let path = test_path("private-rendezvous");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        let mode = fs::metadata(&path)
+            .expect("lock directory metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "lock rendezvous must be private");
+        lock.release().expect("release private rendezvous lock");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_linked_owner_marker_fails_closed() {
+        let path = test_path("hard-link-owner");
+        let alias = test_path("hard-link-alias");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        fs::hard_link(path.join(OWNER_FILE), &alias).expect("create hard-link alias");
+        let error = lock
+            .release()
+            .expect_err("hard-linked owner must fail closed");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_file(alias).expect("remove hard-link alias");
+        fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
+        fs::remove_dir(&path).expect("cleanup lock directory");
+        lock.released = true;
+    }
+
+    #[test]
+    fn persisted_oversize_owner_fails_closed_on_release() {
+        let path = test_path("oversize-persisted-owner");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        fs::write(path.join(OWNER_FILE), vec![b'a'; OWNER_MAX_UTF8_BYTES + 1])
+            .expect("replace owner with oversize marker");
+        let error = lock.release().expect_err("oversize owner must fail closed");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
+        fs::remove_dir(&path).expect("cleanup lock directory");
+        lock.released = true;
+    }
+
+    #[test]
+    fn persisted_invalid_utf8_owner_fails_closed_on_release() {
+        let path = test_path("invalid-utf8-persisted-owner");
+        let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
+            .expect("acquire")
+            .expect("holder");
+        fs::write(path.join(OWNER_FILE), [0xff]).expect("replace owner with invalid UTF-8");
+        let error = lock
+            .release()
+            .expect_err("invalid UTF-8 owner must fail closed");
+        assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+        fs::remove_file(path.join(OWNER_FILE)).expect("cleanup owner");
+        fs::remove_dir(&path).expect("cleanup lock directory");
+        lock.released = true;
     }
 
     #[test]

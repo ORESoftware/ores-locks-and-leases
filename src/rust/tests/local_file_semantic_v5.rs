@@ -50,6 +50,34 @@ fn owner_identity_is_exact_unicode_not_normalized() {
 }
 
 #[test]
+fn owner_token_is_redacted_from_release_diagnostics() {
+    let path = test_path("owner-redaction");
+    let secret = "owner-secret-do-not-log";
+    let mut lock = LocalFileLock::try_acquire(&path, secret)
+        .expect("acquire")
+        .expect("holder");
+    fs::write(path.join("owner"), "attacker-owner").expect("replace owner marker");
+
+    let error = lock.release().expect_err("mismatch must fail closed");
+    assert_eq!(error.kind, LocalFileLockErrorKind::Compromised);
+    assert!(
+        !error.message.contains(secret),
+        "structured message leaked owner token"
+    );
+    assert!(
+        !error.to_string().contains(secret),
+        "Display leaked owner token"
+    );
+    assert!(
+        !format!("{error:?}").contains(secret),
+        "Debug representation leaked owner token"
+    );
+
+    let _ = fs::remove_file(path.join("owner"));
+    let _ = fs::remove_dir(&path);
+}
+
+#[test]
 fn scoped_panic_keeps_panic_precedence_and_best_effort_releases() {
     let path = test_path("panic-release");
     let result = catch_unwind(AssertUnwindSafe(|| {
