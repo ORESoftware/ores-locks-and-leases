@@ -57,3 +57,27 @@ func TestLocalFileLockTenthOrderFiniteWaitBudgetIsEndToEnd(t *testing.T) {
 		t.Fatalf("timeout exceeded bounded end-to-end budget: %v", elapsed)
 	}
 }
+
+func TestLocalFileLockTenthOrderPendingPublicationIsIncomplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pending.lock")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(path, localFileOwnerPendingName),
+		[]byte("syntactically-valid-owner-prefix"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := InspectLocalFileLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != LocalFileLockIncomplete {
+		t.Fatalf("pending publication must be incomplete, got %+v", inspection)
+	}
+	if inspection.Reason != LocalFileOwnerMarkerMissing {
+		t.Fatalf("unexpected reason: %+v", inspection)
+	}
+}
