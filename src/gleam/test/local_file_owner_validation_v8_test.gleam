@@ -34,7 +34,12 @@ pub fn local_file_acquisition_and_recovery_share_owner_admission_test() {
   let assert Ok(Some(lock)) =
     local_file.try_acquire(root, "exact-bound.lock", exact_bound)
   local_file.release(lock) |> should.equal(Ok(Nil))
-  local_file_recovery.recover(root, "absent-exact-bound.lock", exact_bound, True)
+  local_file_recovery.recover(
+    root,
+    "absent-exact-bound.lock",
+    exact_bound,
+    True,
+  )
   |> should.equal(Ok(False))
 
   clean(root)
