@@ -7,7 +7,13 @@
 
 import { LockError } from "./errors.js";
 import type { LockKey } from "./key.js";
-import type { AcquireAbortSignal, AcquireOptions, Lease, LeaseGrant } from "./lease.js";
+import {
+  validRequestId,
+  type AcquireAbortSignal,
+  type AcquireOptions,
+  type Lease,
+  type LeaseGrant,
+} from "./lease.js";
 
 export type FetchLike = (input: string, init: { method: string; headers: Record<string, string>; body: string; redirect: "manual" }) => Promise<{
   status: number;
@@ -15,23 +21,17 @@ export type FetchLike = (input: string, init: { method: string; headers: Record<
 }>;
 
 export interface FiduciaLeaseOptions {
-  /** Base URL of the fiducia node or edge, e.g. `https://fiducia.example` or `http://localhost:8090`. */
   readonly baseUrl: string;
-  /** Trusted internal hop: `x-fiducia-internal-auth` + `x-fiducia-org-id`. */
   readonly internal?: { readonly secret: string; readonly orgId: string };
-  /** Public edge: `Authorization: Bearer`. */
   readonly apiKey?: string;
-  /** Send a credential over cleartext http to a non-local host. Only for fully trusted paths. */
   readonly allowCleartextInternal?: boolean;
-  /** Swap the transport (tests, custom agents). Defaults to global `fetch`. */
   readonly fetch?: FetchLike;
-  /** Source of holder ids when `AcquireOptions.holder` is absent. */
   readonly generateHolder?: () => string;
-  /** Source of stable logical acquisition ids when `AcquireOptions.requestId` is absent. */
   readonly generateRequestId?: () => string;
 }
 
 const LOCAL_SUFFIXES = [".svc", ".cluster.local", ".internal", ".local"];
+const MAX_SAFE_WIRE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
 
 export function cleartextRefusal(baseUrl: string, hasCredential: boolean, allow: boolean): string | undefined {
   if (!hasCredential || allow || !baseUrl.startsWith("http://")) return undefined;
@@ -47,12 +47,10 @@ function generatedIdentity(prefix: string): string {
   return prefix + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** An unguessable holder identity; holder names carry queue identity and cancellation authority. */
 export function generatedHolder(): string {
   return generatedIdentity("ores-locks-");
 }
 
-/** Stable per-acquisition identity used by acquire polling and `/v1/locks/cancel`. */
 export function generatedRequestId(): string {
   return generatedIdentity("ores-lock-request-");
 }
@@ -74,14 +72,16 @@ function sleepOrAbort(ms: number, signal: AcquireAbortSignal | undefined): Promi
 }
 
 function asUint(value: unknown): bigint | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
-  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
-  if (typeof value === "bigint" && value >= 0n) return value;
-  return undefined;
+  let parsed: bigint;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) parsed = BigInt(value);
+  else if (typeof value === "string" && /^\d+$/.test(value)) parsed = BigInt(value);
+  else if (typeof value === "bigint" && value >= 0n) parsed = value;
+  else return undefined;
+  return parsed <= MAX_SAFE_WIRE_INTEGER ? parsed : undefined;
 }
 
 function encodeWireInteger(value: bigint): number {
-  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (value < 0n || value > MAX_SAFE_WIRE_INTEGER) {
     throw new RangeError(
       `fiducia: fencing token ${value} cannot be represented exactly by the current numeric JSON wire format`,
     );
@@ -181,6 +181,9 @@ export class FiduciaLease implements Lease {
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
     const requestId = opts.requestId ?? this.#generateRequestId();
+    if (!validRequestId(requestId)) {
+      throw LockError.invalidPlan(key, "requestId must contain 1..=256 Unicode code points");
+    }
     const started = Date.now();
     let attempted = false;
 
@@ -211,7 +214,7 @@ export class FiduciaLease implements Lease {
       if (out["acquired"] === true) {
         const fencingToken = asUint(out["fencing_token"]);
         if (fencingToken === undefined || fencingToken === 0n) {
-          throw LockError.transport(key, new Error("fiducia: acquired without a positive fencing token"));
+          throw LockError.transport(key, new Error("fiducia: acquired without a positive safe fencing token"));
         }
         const expires = asUint(out["lease_expires_ms"]);
         return expires === undefined
