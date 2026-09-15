@@ -11,7 +11,9 @@
     make_symlink_status/2,
     make_hardlink_status/2,
     unicode_codepoint_count/1,
-    owner_private_mode_status/1
+    owner_private_mode_status/1,
+    monotonic_milliseconds/0,
+    windows_path_admission_status/1
 ]).
 
 %% file:del_dir/1 returns the atom `ok` on success, while Gleam's Result
@@ -164,6 +166,88 @@ ensure_private_mode(Path) ->
         {unix, _} -> file:change_mode(Path, 8#600);
         _ -> ok
     end.
+
+%% Monotonic clock used by the Gleam acquisition loop so filesystem-call
+%% latency consumes the same end-to-end wait budget as retry sleeps.
+monotonic_milliseconds() ->
+    erlang:monotonic_time(millisecond).
+
+%% Windows admission is intentionally conservative because Win32 normalizes
+%% several path spellings that would otherwise create ambiguous rendezvous
+%% identities. On non-Windows hosts the same strings retain ordinary POSIX
+%% semantics and are left untouched.
+%%
+%% Status: 0 admitted (or non-Windows), 1 rejected.
+windows_path_admission_status(Path) ->
+    case os:type() of
+        {win32, _} ->
+            try
+                Chars = unicode:characters_to_list(Path),
+                case windows_path_is_safe(Chars) of
+                    true -> 0;
+                    false -> 1
+                end
+            catch
+                _:_ -> 1
+            end;
+        _ -> 0
+    end.
+
+windows_path_is_safe(Chars) ->
+    Normalized = normalize_windows_separators(Chars),
+    not has_forbidden_windows_prefix(Normalized)
+        andalso windows_components_safe(string:split(Normalized, "/", all), true).
+
+normalize_windows_separators(Chars) ->
+    [case C of $\\ -> $/; _ -> C end || C <- Chars].
+
+has_forbidden_windows_prefix(Path) ->
+    lists:prefix("//?/", Path)
+        orelse lists:prefix("//./", Path)
+        orelse lists:prefix("/??/", Path).
+
+windows_components_safe([], _) -> true;
+windows_components_safe(["" | Rest], IsFirst) ->
+    windows_components_safe(Rest, IsFirst);
+windows_components_safe([Component | Rest], IsFirst) ->
+    case windows_component_safe(Component, IsFirst) of
+        true -> windows_components_safe(Rest, false);
+        false -> false
+    end.
+
+windows_component_safe(".", _) -> true;
+windows_component_safe("..", _) -> true;
+windows_component_safe(Component, true) ->
+    case is_drive_component(Component) of
+        true -> true;
+        false -> windows_ordinary_component_safe(Component)
+    end;
+windows_component_safe(Component, false) ->
+    windows_ordinary_component_safe(Component).
+
+is_drive_component([Letter, $:]) ->
+    (Letter >= $A andalso Letter =< $Z) orelse (Letter >= $a andalso Letter =< $z);
+is_drive_component(_) -> false.
+
+windows_ordinary_component_safe([]) -> false;
+windows_ordinary_component_safe(Component) ->
+    Last = lists:last(Component),
+    Last =/= $. andalso Last =/= 32
+        andalso not lists:member($:, Component)
+        andalso not windows_reserved_device_component(Component).
+
+windows_reserved_device_component(Component) ->
+    Upper = string:uppercase(Component),
+    Base = string:trim(take_until_dot(Upper)),
+    lists:member(Base, [
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    ]).
+
+take_until_dot([]) -> [];
+take_until_dot([$. | _]) -> [];
+take_until_dot([Head | Tail]) -> [Head | take_until_dot(Tail)].
 
 %% Count Unicode code points rather than UTF-8 bytes. This matches the string
 %% length bound represented in TypeSpec/JSON Schema closely enough for the
