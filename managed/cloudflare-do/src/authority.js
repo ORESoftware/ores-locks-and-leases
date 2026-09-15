@@ -1,7 +1,9 @@
 const MAX_HOLDER_BYTES = 512;
-const MAX_REQUEST_ID_BYTES = 128;
+const MAX_REQUEST_ID_CHARS = 256;
 const MAX_TTL_MS = 86_400_000;
 const MAX_FENCING_TOKEN = BigInt(Number.MAX_SAFE_INTEGER);
+export const REPLAY_RETENTION_MS = 10 * 60 * 1000;
+export const MAX_REPLAY_RECORDS = 256;
 const encoder = new TextEncoder();
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -20,7 +22,14 @@ export function validHolder(holder) {
 }
 
 export function validRequestId(requestId) {
-  return requestId === undefined || requestId === null || validIdentity(requestId, MAX_REQUEST_ID_BYTES);
+  if (requestId === undefined || requestId === null) return true;
+  return (
+    typeof requestId === "string" &&
+    requestId.length > 0 &&
+    requestId.trim().length > 0 &&
+    !CONTROL.test(requestId) &&
+    Array.from(requestId).length <= MAX_REQUEST_ID_CHARS
+  );
 }
 
 export function validTtl(ttl) {
@@ -70,6 +79,19 @@ export class LockLeaseAuthority {
       INSERT OR IGNORE INTO lease_state (id, holder, token, expires_ms, next_token, request_id)
       VALUES (1, NULL, NULL, NULL, '0', NULL)
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS acquire_replay (
+        request_id TEXT PRIMARY KEY,
+        holder TEXT NOT NULL,
+        ttl_ms INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        lease_expires_ms INTEGER NOT NULL,
+        retain_until_ms INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(
+      "CREATE INDEX IF NOT EXISTS acquire_replay_retention ON acquire_replay(retain_until_ms)",
+    );
   }
 
   row() {
@@ -78,10 +100,69 @@ export class LockLeaseAuthority {
     ).toArray()[0];
   }
 
+  replayRow(requestId) {
+    return this.sql.exec(
+      "SELECT request_id, holder, ttl_ms, token, lease_expires_ms, retain_until_ms FROM acquire_replay WHERE request_id = ?",
+      requestId,
+    ).toArray()[0] ?? null;
+  }
+
+  earliestReplayExpiry(now) {
+    const row = this.sql.exec(
+      "SELECT MIN(retain_until_ms) AS retain_until_ms FROM acquire_replay WHERE retain_until_ms > ?",
+      now,
+    ).toArray()[0];
+    return Number.isSafeInteger(row?.retain_until_ms) ? row.retain_until_ms : null;
+  }
+
+  pruneReplay(now) {
+    this.sql.exec("DELETE FROM acquire_replay WHERE retain_until_ms <= ?", now);
+    this.sql.exec(
+      `DELETE FROM acquire_replay
+       WHERE request_id IN (
+         SELECT request_id FROM acquire_replay
+         ORDER BY retain_until_ms DESC, request_id DESC
+         LIMIT -1 OFFSET ?
+       )`,
+      MAX_REPLAY_RECORDS,
+    );
+  }
+
+  recordReplay(body, token, leaseExpiresMs) {
+    if (!body.request_id) return;
+    const retainUntil = leaseExpiresMs + REPLAY_RETENTION_MS;
+    this.sql.exec(
+      `INSERT OR REPLACE INTO acquire_replay
+       (request_id, holder, ttl_ms, token, lease_expires_ms, retain_until_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      body.request_id,
+      body.holder,
+      body.ttl_ms,
+      token,
+      leaseExpiresMs,
+      retainUntil,
+    );
+  }
+
   clearLease() {
     this.sql.exec(
       "UPDATE lease_state SET holder = NULL, token = NULL, expires_ms = NULL, request_id = NULL WHERE id = 1",
     );
+  }
+
+  async scheduleNextAlarm(now = Date.now()) {
+    const row = this.row();
+    const candidates = [];
+    if (Number.isSafeInteger(row.expires_ms) && row.expires_ms > now) {
+      candidates.push(row.expires_ms);
+    }
+    const replayExpiry = this.earliestReplayExpiry(now);
+    if (replayExpiry !== null) candidates.push(replayExpiry);
+    if (candidates.length === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    await this.ctx.storage.setAlarm(Math.min(...candidates));
   }
 
   async acquire(body) {
@@ -93,8 +174,37 @@ export class LockLeaseAuthority {
     let outcome;
     try {
       outcome = this.ctx.storage.transactionSync(() => {
+        this.pruneReplay(now);
         const row = this.row();
+        const replay = body.request_id ? this.replayRow(body.request_id) : null;
+
+        if (replay !== null) {
+          if (replay.holder !== body.holder || replay.ttl_ms !== body.ttl_ms) {
+            return { acquired: false, reason: "request_identity_collision" };
+          }
+          const activeExactReplay =
+            row.holder === body.holder &&
+            row.request_id === body.request_id &&
+            row.token === replay.token &&
+            row.expires_ms !== null &&
+            row.expires_ms > now;
+          if (activeExactReplay) {
+            return {
+              acquired: true,
+              fencing_token: row.token,
+              lease_expires_ms: row.expires_ms,
+              ttl_ms: replay.ttl_ms,
+              renewed: false,
+              replayed: true,
+            };
+          }
+          return { acquired: false, reason: "request_replayed_terminal" };
+        }
+
         if (row.holder !== null && row.expires_ms !== null && row.expires_ms > now) {
+          if (row.request_id && body.request_id === row.request_id) {
+            return { acquired: false, reason: "request_identity_unverifiable" };
+          }
           if (row.holder !== body.holder) {
             return { acquired: false, reason: "contention", lease_expires_ms: row.expires_ms };
           }
@@ -106,7 +216,7 @@ export class LockLeaseAuthority {
             };
           }
           if (body.request_id && !row.request_id) {
-            this.sql.exec("UPDATE lease_state SET request_id = ? WHERE id = 1", body.request_id);
+            return { acquired: false, reason: "request_identity_unverifiable" };
           }
           return {
             acquired: true,
@@ -128,6 +238,7 @@ export class LockLeaseAuthority {
           fencingToken,
           body.request_id ?? null,
         );
+        this.recordReplay(body, fencingToken, expires);
         return {
           acquired: true,
           fencing_token: fencingToken,
@@ -144,7 +255,7 @@ export class LockLeaseAuthority {
       throw error;
     }
 
-    if (outcome.acquired) await this.ctx.storage.setAlarm(outcome.lease_expires_ms);
+    await this.scheduleNextAlarm(now);
     return outcome;
   }
 
@@ -156,6 +267,7 @@ export class LockLeaseAuthority {
 
     const now = Date.now();
     const outcome = this.ctx.storage.transactionSync(() => {
+      this.pruneReplay(now);
       const row = this.row();
       if (
         row.holder !== body.holder ||
@@ -169,10 +281,18 @@ export class LockLeaseAuthority {
       }
       const expires = now + body.ttl_ms;
       this.sql.exec("UPDATE lease_state SET expires_ms = ? WHERE id = 1", expires);
+      if (row.request_id) {
+        this.sql.exec(
+          "UPDATE acquire_replay SET lease_expires_ms = ?, retain_until_ms = ? WHERE request_id = ?",
+          expires,
+          expires + REPLAY_RETENTION_MS,
+          row.request_id,
+        );
+      }
       return { renewed: true, lease_expires_ms: expires, ttl_ms: body.ttl_ms };
     });
 
-    if (outcome.renewed) await this.ctx.storage.setAlarm(outcome.lease_expires_ms);
+    await this.scheduleNextAlarm(now);
     return outcome;
   }
 
@@ -183,6 +303,7 @@ export class LockLeaseAuthority {
 
     const now = Date.now();
     const outcome = this.ctx.storage.transactionSync(() => {
+      this.pruneReplay(now);
       const row = this.row();
       if (row.expires_ms !== null && row.expires_ms <= now) {
         this.clearLease();
@@ -195,22 +316,18 @@ export class LockLeaseAuthority {
       return { released: true, cleared_expired: false };
     });
 
-    if (outcome.released || outcome.cleared_expired) await this.ctx.storage.deleteAlarm();
+    await this.scheduleNextAlarm(now);
     if (outcome.released) return { released: true };
     return { released: false, reason: outcome.reason };
   }
 
   async alarm() {
     const now = Date.now();
-    const nextAlarm = this.ctx.storage.transactionSync(() => {
+    this.ctx.storage.transactionSync(() => {
+      this.pruneReplay(now);
       const row = this.row();
-      if (row.expires_ms === null) return null;
-      if (row.expires_ms <= now) {
-        this.clearLease();
-        return null;
-      }
-      return row.expires_ms;
+      if (row.expires_ms !== null && row.expires_ms <= now) this.clearLease();
     });
-    if (nextAlarm !== null) await this.ctx.storage.setAlarm(nextAlarm);
+    await this.scheduleNextAlarm(now);
   }
 }
