@@ -50,6 +50,14 @@ class GeneratorLayout(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_canonical()
         catalog_path = self.repo / "locks/catalog.json"
+        generated_lock_config = (self.repo / "locks/.ores-lock.toml").read_text()
+        self.assertIn('schema_version = "ores.lock.config.v1"', generated_lock_config)
+        self.assertIn('default_profile = "local-install"', generated_lock_config)
+        self.assertIn('profile_id = "service-composed"', generated_lock_config)
+        self.assertIn('secret = true', generated_lock_config)
+        self.assertNotIn("postgres://", generated_lock_config)
+        self.assertNotIn("Bearer ", generated_lock_config)
+        self.assertEqual(generated_lock_config.count("[[profiles]]"), 2)
         catalog = json.loads(catalog_path.read_text())
         catalog["entries"][0]["description"] = "Reviewed custom catalog row"
         catalog_path.write_text(json.dumps(catalog))
@@ -62,6 +70,12 @@ class GeneratorLayout(unittest.TestCase):
         manifest = (self.repo / "locks/.zpkg.toml").read_text()
         for runtime in RUNTIMES:
             self.assertIn('dir = "langs/' + runtime + '"', manifest)
+        for operational_key in ("wait_timeout_ms", "retry_interval_ms", "ttl_ms", "renew_interval_ms"):
+            self.assertNotIn(operational_key, manifest)
+        self.assertEqual((self.repo / "locks/.ores-lock.toml").read_text(), generated_lock_config)
+        readme = (self.repo / "locks/README.md").read_text()
+        self.assertIn(".ores-lock.toml", readme)
+        self.assertIn("service-composed", readme)
         package = json.loads((self.repo / "locks/langs/typescript/package.json").read_text())
         dependency = package["dependencies"]["@oresoftware/locks-and-leases"]
         resolved = (self.repo / "locks/langs/typescript" / dependency.removeprefix("file:")).resolve()
@@ -131,6 +145,7 @@ class GeneratorLayout(unittest.TestCase):
         result = self.generate("--stdout")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("locks/langs/rust/lib.rs\n", result.stdout)
+        self.assertIn("locks/.ores-lock.toml\n", result.stdout)
         self.assertEqual(list(self.repo.iterdir()), [])
 
 

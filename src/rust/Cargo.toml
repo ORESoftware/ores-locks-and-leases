@@ -21,6 +21,7 @@ path = "lib.rs"
 
 [features]
 default = []
+config = ["dep:serde", "dep:toml"]
 # Postgres advisory locks through SeaORM (the fleet's application ORM; direct
 # sqlx / tokio-postgres are forbidden by the migration contract).
 pg = ["dep:sea-orm"]
@@ -30,7 +31,7 @@ maintained = ["pg", "dep:tokio"]
 # The fiducia-cloud lease adapter over the official async Rust client.
 fiducia = ["dep:fiducia-client", "dep:tokio"]
 # Everything, including the legacy Fiducia adapter and generic maintained path.
-full = ["pg", "maintained", "fiducia"]
+full = ["pg", "maintained", "fiducia", "config"]
 
 [dependencies]
 sea-orm = { version = "1", default-features = false, features = [
@@ -43,6 +44,8 @@ sea-orm = { version = "1", default-features = false, features = [
 # producing a package consumers cannot resolve.
 fiducia-client = { git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
 tokio = { version = "1", features = ["macros", "time"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }
 
 [dev-dependencies]
 serde_json = "1"

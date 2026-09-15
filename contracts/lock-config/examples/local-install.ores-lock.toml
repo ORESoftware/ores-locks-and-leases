@@ -1,0 +1,33 @@
+# Single-machine/local-install coordination. Secret-free by design.
+schema_version = "ores.lock.config.v1"
+default_profile = "local-install"
+selected_profile_env = "ORES_LOCK_PROFILE"
+
+[[env]]
+key = "ORES_LOCK_PROFILE"
+kind = "string"
+required = false
+secret = false
+purpose = "Select one declared lock profile at process startup."
+
+[[env]]
+key = "ORES_LOCK_ROOT"
+kind = "path"
+required = false
+secret = false
+purpose = "Local-file lock rendezvous root, for example $HOME/.zpkg/locks."
+
+[[profiles]]
+profile_id = "local-install"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 50
+
+[profiles.providers]
+local_file = true
+fiducia = false
+pg_advisory = false
+
+[profiles.local_file]
+root_env = "ORES_LOCK_ROOT"
+require_existing_root = false

@@ -76,6 +76,9 @@ pub mod managed;
 pub mod plan;
 pub mod renewal;
 
+#[cfg(feature = "config")]
+pub mod config;
+
 #[cfg(feature = "pg")]
 pub mod pg;
 
@@ -88,6 +91,13 @@ pub mod coordinated;
 #[cfg(all(feature = "pg", any(feature = "fiducia", feature = "maintained")))]
 pub mod maintained;
 
+#[cfg(feature = "config")]
+pub use config::{
+    EnvBinding, EnvKind, FiduciaProviderConfig, LOCK_CONFIG_SCHEMA_V1, LocalFileProviderConfig,
+    LockConfigError, LockProfileConfig, MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES,
+    MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS, MAX_WAIT_TIMEOUT_MS,
+    OresLockConfigV1, PostgresLockScope, PostgresProviderConfig, ProviderSelection,
+};
 pub use error::{LockError, LockErrorKind};
 pub use fence::{
     FenceDecision, FenceDecisionKind, FenceValidationError, FenceWatermark, FencedWriteRequest,
@@ -110,6 +120,7 @@ pub use managed::{
     ManagedLeaseBackend, ManagedLeaseTransport, ManagedRenewResult, RedisLease,
 };
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
+
 pub use renewal::{
     MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS, MonotonicClock, RenewalCheckpoint, RenewalDecision,
     RenewalError, RenewalLossReason, RenewalPolicy, RenewalSupervisor,
