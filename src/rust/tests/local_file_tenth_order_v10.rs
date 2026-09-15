@@ -1,4 +1,7 @@
-use ores_locks_and_leases::{LocalFileLock, LocalFileLockErrorKind, LocalFileLockOptions};
+use ores_locks_and_leases::{
+    LocalFileLock, LocalFileLockErrorKind, LocalFileLockInspectionReason,
+    LocalFileLockInspectionState, LocalFileLockOptions, inspect_local_file_lock,
+};
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -51,4 +54,26 @@ fn finite_wait_budget_is_end_to_end() {
     assert_eq!(error.kind, LocalFileLockErrorKind::Timeout);
     assert!(elapsed >= Duration::from_millis(20), "returned too early: {elapsed:?}");
     assert!(elapsed < Duration::from_secs(2), "budget ran unbounded: {elapsed:?}");
+}
+
+#[test]
+fn pending_owner_publication_is_incomplete_not_held() {
+    let path = test_path("pending");
+    fs::create_dir(&path).expect("create rendezvous");
+    fs::write(path.join("owner.pending"), b"syntactically-valid-owner-prefix")
+        .expect("seed pending owner");
+
+    let inspection = inspect_local_file_lock(&path).expect("inspect pending publication");
+    assert_eq!(inspection.state, LocalFileLockInspectionState::Incomplete);
+    assert_eq!(
+        inspection.reason,
+        Some(LocalFileLockInspectionReason::OwnerMarkerMissing)
+    );
+    assert_eq!(
+        LocalFileLockInspectionReason::OwnerMarkerMissing.as_str(),
+        "owner_marker_missing"
+    );
+
+    fs::remove_file(path.join("owner.pending")).expect("cleanup pending owner");
+    fs::remove_dir(path).expect("cleanup rendezvous");
 }
