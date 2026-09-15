@@ -147,3 +147,6 @@ jobs:
 
       - name: Sixth-order process and recovery matrix
         run: node scripts/check-local-file-process-sixth-order.mjs
+
+      - name: Eighth-order process identity, isolation, and recovery matrix
+        run: node scripts/check-local-file-process-eighth-order.mjs
