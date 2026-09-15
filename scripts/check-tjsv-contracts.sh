@@ -13,6 +13,7 @@ validator_package="https://github.com/ORESoftware/typespec-json-schema-validator
 main_declarations='["Ores.LocksAndLeases.AcquireOptions","Ores.LocksAndLeases.AdvisoryKey","Ores.LocksAndLeases.FenceDecision","Ores.LocksAndLeases.FenceDecisionKind","Ores.LocksAndLeases.FencedWriteRequest","Ores.LocksAndLeases.FenceWatermark","Ores.LocksAndLeases.FencingToken","Ores.LocksAndLeases.FencingTokenText","Ores.LocksAndLeases.LeaseGrant","Ores.LocksAndLeases.LeaseMaintenanceOptions","Ores.LocksAndLeases.LockError","Ores.LocksAndLeases.LockErrorKind","Ores.LocksAndLeases.LockKey","Ores.LocksAndLeases.LockLayers","Ores.LocksAndLeases.LockPlan","Ores.LocksAndLeases.LockStep","Ores.LocksAndLeases.PgScope"]'
 renewal_declarations='["Ores.LocksAndLeases.Renewal.FencingToken","Ores.LocksAndLeases.Renewal.LogicalMilliseconds","Ores.LocksAndLeases.Renewal.RenewalDecision","Ores.LocksAndLeases.Renewal.RenewalDecisionKind","Ores.LocksAndLeases.Renewal.RenewalGrantIdentity","Ores.LocksAndLeases.Renewal.RenewalLossReason","Ores.LocksAndLeases.Renewal.RenewalPolicy","Ores.LocksAndLeases.Renewal.RenewalSnapshot","Ores.LocksAndLeases.Renewal.RenewalTtlMilliseconds"]'
 local_declarations='["Ores.LocksAndLeases.LocalFile.LocalFileLockErrorKind","Ores.LocksAndLeases.LocalFile.LocalFileLockFailure","Ores.LocksAndLeases.LocalFile.LocalFileLockIdentity","Ores.LocksAndLeases.LocalFile.LocalFileLockInspection","Ores.LocksAndLeases.LocalFile.LocalFileLockInspectionReason","Ores.LocksAndLeases.LocalFile.LocalFileLockInspectionState","Ores.LocksAndLeases.LocalFile.LocalFileLockOptions","Ores.LocksAndLeases.LocalFile.LocalFileLockOwner","Ores.LocksAndLeases.LocalFile.LocalFileLockPath","Ores.LocksAndLeases.LocalFile.LocalFileLockRecoveryRequest","Ores.LocksAndLeases.LocalFile.LocalFileLockRecoveryResult","Ores.LocksAndLeases.LocalFile.LocalFileLockSnapshot","Ores.LocksAndLeases.LocalFile.ScopedLocalFileLockOutcome","Ores.LocksAndLeases.LocalFile.ScopedLocalFileLockOutcomeKind"]'
+config_declarations='["Ores.LocksAndLeases.Config.EnvBinding","Ores.LocksAndLeases.Config.EnvKey","Ores.LocksAndLeases.Config.EnvKind","Ores.LocksAndLeases.Config.FiduciaProviderConfig","Ores.LocksAndLeases.Config.LocalFileProviderConfig","Ores.LocksAndLeases.Config.LockConfigSchemaVersion","Ores.LocksAndLeases.Config.LockProfileConfig","Ores.LocksAndLeases.Config.LockProfileId","Ores.LocksAndLeases.Config.OresLockConfigV1","Ores.LocksAndLeases.Config.PostgresLockScope","Ores.LocksAndLeases.Config.PostgresProviderConfig","Ores.LocksAndLeases.Config.ProviderSelection"]'
 
 check_bundle() {
   name=$1
@@ -188,6 +189,14 @@ case "${1:-all}" in
       "$local_declarations" \
       contracts/local-file/instances
     ;;
+  config)
+    check_bundle \
+      config \
+      contracts/lock-config/typespec/main.tsp \
+      contracts/lock-config/json-schema/contract.schema.json \
+      "$config_declarations" \
+      contracts/lock-config/fixtures
+    ;;
   all)
     check_bundle \
       main \
@@ -205,9 +214,15 @@ case "${1:-all}" in
       contracts/local-file/json-schema/contract.schema.json \
       "$local_declarations" \
       contracts/local-file/instances
+    check_bundle \
+      config \
+      contracts/lock-config/typespec/main.tsp \
+      contracts/lock-config/json-schema/contract.schema.json \
+      "$config_declarations" \
+      contracts/lock-config/fixtures
     ;;
   *)
-    printf 'usage: %s [main|renewal|local|all]\n' "$0" >&2
+    printf 'usage: %s [main|renewal|local|config|all]\n' "$0" >&2
     exit 64
     ;;
 esac
