@@ -122,6 +122,7 @@ impl LocalFileLock {
     ) -> Result<Option<Self>, LocalFileLockError> {
         let path = path.as_ref();
         let owner = owner.into();
+        validate_local_file_path(path)?;
         validate_owner(path, &owner)?;
 
         if let Some(parent) = path.parent() {
@@ -205,6 +206,7 @@ impl LocalFileLock {
     ) -> Result<Self, LocalFileLockError> {
         let path = path.as_ref().to_path_buf();
         let owner = owner.into();
+        validate_local_file_path(&path)?;
         validate_options(&path, &options)?;
         validate_owner(&path, &owner)?;
 
@@ -324,6 +326,7 @@ impl Drop for LocalFileLock {
 /// to obtain ownership.
 pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
+    validate_local_file_path(path)?;
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata_is_alias(&metadata) => Ok(true),
         Ok(_) => Err(LocalFileLockError::new(
@@ -338,6 +341,31 @@ pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileL
             error,
         )),
     }
+}
+
+pub(crate) fn validate_local_file_path(path: &Path) -> Result<(), LocalFileLockError> {
+    if path.as_os_str().is_empty() {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "local lock path must not be empty",
+        ));
+    }
+    let text = path.to_str().ok_or_else(|| {
+        LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "local lock path must be valid Unicode scalar data",
+        )
+    })?;
+    if text.contains('\0') {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "local lock path must not contain NUL",
+        ));
+    }
+    Ok(())
 }
 
 fn create_lock_directory(path: &Path) -> io::Result<()> {
