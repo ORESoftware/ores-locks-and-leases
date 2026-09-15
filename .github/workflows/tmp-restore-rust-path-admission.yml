@@ -1,0 +1,138 @@
+name: tmp restore Rust path admission
+
+on:
+  push:
+    branches:
+      - den-2037-parent-child-sync-v2-20260915
+    paths:
+      - .github/workflows/tmp-restore-rust-path-admission.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out reconciliation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: den-2037-parent-child-sync-v2-20260915
+          fetch-depth: 0
+      - name: Restore semantic union
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replaceOnce(text, from, to, label) {
+            const first = text.indexOf(from);
+            if (first < 0) throw new Error(`missing guarded replacement: ${label}`);
+            if (text.indexOf(from, first + from.length) >= 0) throw new Error(`non-unique guarded replacement: ${label}`);
+            return text.slice(0, first) + to + text.slice(first + from.length);
+          }
+
+          const localPath = 'src/rust/local_file.rs';
+          let local = fs.readFileSync(localPath, 'utf8');
+          local = replaceOnce(
+            local,
+            '        let owner = owner.into();\n        validate_owner(path, &owner)?;',
+            '        let owner = owner.into();\n        validate_local_file_path(path)?;\n        validate_owner(path, &owner)?;',
+            'try_acquire path admission',
+          );
+          local = replaceOnce(
+            local,
+            '        let owner = owner.into();\n        validate_options(&path, &options)?;',
+            '        let owner = owner.into();\n        validate_local_file_path(&path)?;\n        validate_options(&path, &options)?;',
+            'acquire path admission',
+          );
+          local = replaceOnce(
+            local,
+            'pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {\n    let path = path.as_ref();\n    match fs::symlink_metadata(path) {',
+            'pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {\n    let path = path.as_ref();\n    validate_local_file_path(path)?;\n    match fs::symlink_metadata(path) {',
+            'exists path admission',
+          );
+          local = replaceOnce(
+            local,
+            'fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {',
+            `pub(crate) fn validate_local_file_path(path: &Path) -> Result<(), LocalFileLockError> {
+    if path.as_os_str().is_empty() {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "local lock path must not be empty",
+        ));
+    }
+    let text = path.to_str().ok_or_else(|| {
+        LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "local lock path must be valid Unicode scalar data",
+        )
+    })?;
+    if text.contains('\\0') {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "local lock path must not contain NUL",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {`,
+            'shared path/owner validators',
+          );
+          fs.writeFileSync(localPath, local);
+
+          const recoveryPath = 'src/rust/local_file_recovery.rs';
+          let recovery = fs.readFileSync(recoveryPath, 'utf8');
+          recovery = replaceOnce(
+            recovery,
+            'use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};',
+            'use crate::local_file::{\n    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_path, validate_owner,\n};',
+            'recovery validator imports',
+          );
+          const pathAnchor = '    let path = path.as_ref();\n';
+          const positions = [];
+          for (let i = recovery.indexOf(pathAnchor); i >= 0; i = recovery.indexOf(pathAnchor, i + pathAnchor.length)) positions.push(i);
+          if (positions.length !== 2) throw new Error(`expected two recovery path anchors, found ${positions.length}`);
+          recovery = recovery.replaceAll(pathAnchor, pathAnchor + '    validate_local_file_path(path)?;\n');
+          recovery = replaceOnce(
+            recovery,
+            `    if expected_owner.is_empty() {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "expected owner must not be empty",
+        ));
+    }
+    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {
+        return Err(error(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "expected owner must not exceed 512 Unicode code points",
+        ));
+    }
+`,
+            '    validate_owner(path, expected_owner)?;\n',
+            'recovery shared owner admission',
+          );
+          fs.writeFileSync(recoveryPath, recovery);
+          NODE
+      - name: Format Rust
+        run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
+      - name: Prove focused path admission
+        run: cargo test --manifest-path src/rust/Cargo.toml --locked --no-default-features --test local_file_path_admission_v7
+      - name: Commit verified semantic union
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-restore-rust-path-admission.yml
+          git config user.name ORESoftware
+          git config user.email noreply@github.com
+          git add src/rust/local_file.rs src/rust/local_file_recovery.rs .github/workflows/tmp-restore-rust-path-admission.yml
+          git diff --cached --check
+          git commit -m 'fix(rust): restore portable path admission after reconciliation'
+          git push origin HEAD:den-2037-parent-child-sync-v2-20260915
