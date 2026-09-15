@@ -249,8 +249,8 @@ pub fn recover_local_file_lock(
 }
 
 fn read_entry_names_bounded(path: &Path) -> Result<Vec<OsString>, LocalFileLockError> {
-    let mut directory = fs::read_dir(path)
-        .map_err(|error| io_error(path, "list local lock directory", error))?;
+    let mut directory =
+        fs::read_dir(path).map_err(|error| io_error(path, "list local lock directory", error))?;
     let mut entries = Vec::with_capacity(INSPECTION_MAX_DIRECTORY_ENTRIES);
     for _ in 0..INSPECTION_MAX_DIRECTORY_ENTRIES {
         match directory.next() {
