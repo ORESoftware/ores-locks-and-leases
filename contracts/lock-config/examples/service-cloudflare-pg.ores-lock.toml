@@ -1,0 +1,56 @@
+# Service coordination: Cloudflare Durable Object fenced lease + PostgreSQL
+# transaction-scoped advisory lock. Values remain in environment/secret stores.
+schema_version = "ores.lock.config.v1"
+default_profile = "service-cloudflare-pg"
+selected_profile_env = "ORES_LOCK_PROFILE"
+
+[[env]]
+key = "ORES_LOCK_PROFILE"
+kind = "string"
+required = false
+secret = false
+purpose = "Select one declared lock profile at process startup."
+
+[[env]]
+key = "ORES_LOCKS_CF_URL"
+kind = "url"
+required = true
+secret = false
+purpose = "Bearer-protected Worker endpoint fronting the Cloudflare Durable Object lease authority."
+
+[[env]]
+key = "ORES_LOCKS_CF_TOKEN"
+kind = "string"
+required = true
+secret = true
+purpose = "Credential for the Cloudflare Durable Object lease authority."
+
+[[env]]
+key = "DATABASE_URL"
+kind = "string"
+required = true
+secret = true
+purpose = "PostgreSQL connection string used by the advisory-lock provider."
+
+[[profiles]]
+profile_id = "service-cloudflare-pg"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 250
+ttl_ms = 60000
+renew_interval_ms = 20000
+outer_authority = "cloudflare_durable_object"
+
+[profiles.providers]
+local_file = false
+# Historical v1 field name: true means the managed outer lease layer is on.
+fiducia = true
+pg_advisory = true
+
+[profiles.cloudflare_durable_object]
+endpoint_env = "ORES_LOCKS_CF_URL"
+api_token_env = "ORES_LOCKS_CF_TOKEN"
+
+[profiles.postgres]
+database_url_env = "DATABASE_URL"
+scope = "transaction"
