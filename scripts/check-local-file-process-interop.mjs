@@ -292,9 +292,11 @@ async function proveFifthOrderProcessBoundaryBatch(root) {
   );
   record("same-owner-token-mixed-process-race-has-one-winner");
 
-  // 10. Higher-pressure mixed-runtime race remains exactly one-winner.
+  // 10. Higher-pressure mixed-runtime race remains exactly one-winner. Gleam process startup
+  // serializes on its build directory on some macOS runners, so keep the first winner alive long
+  // enough for every started contender to reach the lock attempt within the same ownership window.
   const mixed32 = Array.from({ length: 32 }, (_, index) => runtimes[index % runtimes.length]);
-  await oneWinnerRace(mixed32, join(root, "mixed-32.lock"), "mixed32", 10_000);
+  await oneWinnerRace(mixed32, join(root, "mixed-32.lock"), "mixed32", 45_000);
   record("mixed-32-process-race-has-one-winner");
 
   // 11. Four unrelated rendezvous can be held concurrently by four runtimes.
