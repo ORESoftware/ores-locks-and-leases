@@ -499,31 +499,6 @@ fn validate_real_directory(
     }
 }
 
-fn validate_regular_file(
-    lock_path: &Path,
-    path: &Path,
-    label: &str,
-) -> Result<(), LocalFileLockError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() && !metadata_is_alias(&metadata) => Ok(()),
-        Ok(_) => Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            format!("{label} is not an unaliased regular file"),
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            format!("{label} is missing"),
-        )),
-        Err(error) => Err(LocalFileLockError::io(
-            lock_path,
-            &format!("inspect {label}"),
-            error,
-        )),
-    }
-}
-
 #[cfg(unix)]
 fn validate_single_link(
     lock_path: &Path,
