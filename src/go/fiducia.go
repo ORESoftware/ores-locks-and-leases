@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // FiduciaLease is a Lease over the fiducia-cloud node HTTP protocol, using
@@ -29,7 +30,11 @@ type FiduciaLease struct {
 	allowClear bool
 }
 
-const fiduciaCancelCleanupTimeout = 5 * time.Second
+const (
+	fiduciaCancelCleanupTimeout = 5 * time.Second
+	maxSafeFiduciaWireInteger   = uint64(9_007_199_254_740_991)
+	maxRequestIDRunes           = 256
+)
 
 // NewFiduciaInternal is the trusted internal hop straight to a fiducia-node.
 func NewFiduciaInternal(baseURL, internalSecret, orgID string) *FiduciaLease {
@@ -140,29 +145,37 @@ func outBool(out map[string]any, name string) bool {
 }
 
 func outUint(out map[string]any, name string) (uint64, bool) {
+	var n uint64
 	switch v := out[name].(type) {
 	case float64:
-		// A float can only be accepted when it is known to be an exact JSON
-		// integer. Network responses use json.Number; this case supports test
-		// doubles and callers constructing an output map directly.
-		if v < 0 || v > 9_007_199_254_740_991 || math.Trunc(v) != v {
+		if v < 0 || v > float64(maxSafeFiduciaWireInteger) || math.Trunc(v) != v {
 			return 0, false
 		}
-		return uint64(v), true
+		n = uint64(v)
 	case json.Number:
-		n, err := strconv.ParseUint(string(v), 10, 64)
+		parsed, err := strconv.ParseUint(string(v), 10, 64)
 		if err != nil {
 			return 0, false
 		}
-		return n, true
+		n = parsed
 	case string:
-		n, err := strconv.ParseUint(v, 10, 64)
+		parsed, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
 			return 0, false
 		}
-		return n, true
+		n = parsed
+	default:
+		return 0, false
 	}
-	return 0, false
+	if n > maxSafeFiduciaWireInteger {
+		return 0, false
+	}
+	return n, true
+}
+
+func validRequestID(requestID string) bool {
+	count := utf8.RuneCountInString(requestID)
+	return count >= 1 && count <= maxRequestIDRunes
 }
 
 func transportErr(key LockKey, err error) *Error {
@@ -254,6 +267,15 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 	if requestID == "" {
 		requestID = GeneratedRequestID()
 	}
+	if !validRequestID(requestID) {
+		return LeaseGrant{}, newError(
+			KindInvalidPlan,
+			key,
+			"",
+			"request_id must contain 1..=256 Unicode code points",
+			nil,
+		)
+	}
 	ttlMs := opts.TTL.Milliseconds()
 	started := time.Now()
 	attempted := false
@@ -281,10 +303,6 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 		attempted = true
 		out, err := f.post(ctx, "/v1/locks/acquire", body)
 		if err != nil {
-			// Cancellation can race the in-flight acquire after the server has
-			// admitted the request but before the response reaches this client.
-			// Reconcile the stable request identity before returning so a raced
-			// promoted grant cannot be abandoned silently.
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
 					return LeaseGrant{}, transportErr(key, cleanupErr)
@@ -293,9 +311,6 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 			}
 			return LeaseGrant{}, transportErr(key, err)
 		}
-		// The caller may cancel after the authority has produced a response but
-		// before this client exposes it. Cancellation has precedence: reconcile
-		// through the stable request id so a grant won in that race is released.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			if cleanupErr := f.cancelQueuedAcquire(key, holder, requestID); cleanupErr != nil {
 				return LeaseGrant{}, transportErr(key, cleanupErr)
@@ -305,7 +320,7 @@ func (f *FiduciaLease) Acquire(ctx context.Context, key LockKey, opts AcquireOpt
 		if outBool(out, "acquired") {
 			token, ok := outUint(out, "fencing_token")
 			if !ok || token == 0 {
-				return LeaseGrant{}, transportErr(key, errors.New("fiducia: acquired without a positive fencing token"))
+				return LeaseGrant{}, transportErr(key, errors.New("fiducia: acquired without a positive safe fencing token"))
 			}
 			grant := LeaseGrant{Key: key, Holder: holder, FencingToken: token, TTLMs: ttlMs}
 			if exp, ok := outUint(out, "lease_expires_ms"); ok {
