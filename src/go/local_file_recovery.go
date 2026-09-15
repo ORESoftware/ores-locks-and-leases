@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -18,10 +19,26 @@ const (
 	LocalFileLockCompromised LocalFileLockInspectionState = "compromised"
 )
 
+// LocalFileLockInspectionReason is a stable machine-readable diagnostic code.
+type LocalFileLockInspectionReason string
+
+const (
+	LocalFileOwnerMarkerMissing      LocalFileLockInspectionReason = "owner_marker_missing"
+	LocalFilePathNotDirectory        LocalFileLockInspectionReason = "path_not_directory"
+	LocalFileDirtyDirectory          LocalFileLockInspectionReason = "dirty_directory"
+	LocalFileOwnerNotRegularFile     LocalFileLockInspectionReason = "owner_not_regular_file"
+	LocalFileOwnerTooLarge           LocalFileLockInspectionReason = "owner_too_large"
+	LocalFileOwnerInvalidUTF8        LocalFileLockInspectionReason = "owner_invalid_utf8"
+	LocalFileOwnerIdentityChanged    LocalFileLockInspectionReason = "owner_identity_changed"
+	LocalFilePermissionsWidened      LocalFileLockInspectionReason = "permissions_widened"
+	LocalFileOwnerContractViolation  LocalFileLockInspectionReason = "owner_contract_violation"
+)
+
 // LocalFileLockInspection is diagnostic evidence only; it never claims ownership.
 type LocalFileLockInspection struct {
 	State   LocalFileLockInspectionState
 	Owner   string
+	Reason  LocalFileLockInspectionReason
 	Message string
 }
 
@@ -38,10 +55,10 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "inspect local lock path failed", err)
 	}
 	if !info.IsDir() || localFileInfoIsAlias(info) {
-		return compromisedInspection("lock path is not an unaliased directory"), nil
+		return compromisedInspection(LocalFilePathNotDirectory, "lock path is not an unaliased directory"), nil
 	}
 	if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
-		return compromisedInspection(err.Error()), nil
+		return compromisedInspection(LocalFilePermissionsWidened, err.Error()), nil
 	}
 
 	// Two names are enough to distinguish empty, exactly-owner, and dirty.
@@ -62,7 +79,7 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		return incompleteInspection("lock directory has no owner marker; acquisition or release may have crashed mid-transition"), nil
 	}
 	if len(entries) != 1 || entries[0] != localFileOwnerName {
-		return compromisedInspection("lock directory must contain exactly one owner marker"), nil
+		return compromisedInspection(LocalFileDirtyDirectory, "lock directory must contain exactly one owner marker"), nil
 	}
 
 	ownerPath := filepath.Join(path, localFileOwnerName)
@@ -73,18 +90,18 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 			return incompleteInspection("owner token disappeared during inspection"), nil
 		}
 		if errors.As(err, &localErr) && localErr.Kind == LocalFileCompromised {
-			return compromisedInspection(localErr.Message), nil
+			return compromisedInspection(reasonFromLocalOwnerError(localErr.Message), localErr.Message), nil
 		}
 		return LocalFileLockInspection{}, err
 	}
 	if len(owner) == 0 {
-		return compromisedInspection("owner token is empty"), nil
+		return compromisedInspection(LocalFileOwnerContractViolation, "owner token is empty"), nil
 	}
 	if !utf8.Valid(owner) {
-		return compromisedInspection("owner token is not valid UTF-8"), nil
+		return compromisedInspection(LocalFileOwnerInvalidUTF8, "owner token is not valid UTF-8"), nil
 	}
 	if utf8.RuneCount(owner) > localFileOwnerMaxCodepoints {
-		return compromisedInspection("owner token exceeds the portable 512-code-point contract bound"), nil
+		return compromisedInspection(LocalFileOwnerContractViolation, "owner token exceeds the portable 512-code-point contract bound"), nil
 	}
 	return LocalFileLockInspection{State: LocalFileLockHeld, Owner: string(owner)}, nil
 }
@@ -207,9 +224,30 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 }
 
 func incompleteInspection(message string) LocalFileLockInspection {
-	return LocalFileLockInspection{State: LocalFileLockIncomplete, Message: message}
+	return LocalFileLockInspection{
+		State:   LocalFileLockIncomplete,
+		Reason:  LocalFileOwnerMarkerMissing,
+		Message: message,
+	}
 }
 
-func compromisedInspection(message string) LocalFileLockInspection {
-	return LocalFileLockInspection{State: LocalFileLockCompromised, Message: message}
+func compromisedInspection(reason LocalFileLockInspectionReason, message string) LocalFileLockInspection {
+	return LocalFileLockInspection{State: LocalFileLockCompromised, Reason: reason, Message: message}
+}
+
+func reasonFromLocalOwnerError(message string) LocalFileLockInspectionReason {
+	switch {
+	case strings.Contains(message, "multiple filesystem links"), strings.Contains(message, "identity changed"):
+		return LocalFileOwnerIdentityChanged
+	case strings.Contains(message, "not an unaliased regular file"):
+		return LocalFileOwnerNotRegularFile
+	case strings.Contains(message, "2048-byte"):
+		return LocalFileOwnerTooLarge
+	case strings.Contains(message, "not valid UTF-8"):
+		return LocalFileOwnerInvalidUTF8
+	case strings.Contains(message, "permissions widened"):
+		return LocalFilePermissionsWidened
+	default:
+		return LocalFileOwnerContractViolation
+	}
 }
