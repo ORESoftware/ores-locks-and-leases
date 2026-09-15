@@ -1,7 +1,7 @@
 //! Explicit inspection and operator-driven recovery for portable local locks.
 
 use crate::local_file::{
-    validate_local_file_path, LocalFileLockError, LocalFileLockErrorKind,
+    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_owner, validate_local_file_path,
 };
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -156,20 +156,7 @@ pub fn recover_local_file_lock(
             "explicit confirmed_inactive=true is required for recovery",
         ));
     }
-    if expected_owner.is_empty() {
-        return Err(error(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "expected owner must not be empty",
-        ));
-    }
-    if expected_owner.chars().count() > OWNER_MAX_CODEPOINTS {
-        return Err(error(
-            LocalFileLockErrorKind::InvalidInput,
-            path,
-            "expected owner must not exceed 512 Unicode code points",
-        ));
-    }
+    validate_local_file_owner(path, expected_owner)?;
 
     let inspection = inspect_local_file_lock(path)?;
     match inspection.state {
