@@ -113,6 +113,7 @@ jobs:
           cargo test --locked --no-default-features --test local_file_retry_budget_v6
           cargo test --locked --no-default-features --test local_file_parent_lifecycle_v6
           cargo test --locked --no-default-features --test local_file_hardlink_v6
+          cargo test --locked --no-default-features --test local_file_path_admission_v7
 
       - name: Go portable local lock tests
         working-directory: src/go
