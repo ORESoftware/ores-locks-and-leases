@@ -34,6 +34,8 @@ pub type Config {
     allow_cleartext_internal: Bool,
     /// Holder ids when `AcquireOptions.holder` is `None`.
     generate_holder: fn() -> String,
+    /// Stable logical request ids when `AcquireOptions.request_id` is `None`.
+    generate_request_id: fn() -> String,
   )
 }
 
@@ -45,6 +47,7 @@ pub fn internal(base_url: String, secret: String, org_id: String) -> Config {
     api_key: None,
     allow_cleartext_internal: False,
     generate_holder: generated_holder,
+    generate_request_id: generated_request_id,
   )
 }
 
@@ -56,6 +59,7 @@ pub fn bearer(base_url: String, api_key: String) -> Config {
     api_key: Some(api_key),
     allow_cleartext_internal: False,
     generate_holder: generated_holder,
+    generate_request_id: generated_request_id,
   )
 }
 
@@ -75,12 +79,21 @@ pub fn lease(config: Config) -> core.Lease {
   )
 }
 
-/// An unguessable holder identity.
-pub fn generated_holder() -> String {
-  "ores-locks-"
+fn generated_identity(prefix: String) -> String {
+  prefix
   <> int.to_string(int.random(1_000_000_000_000))
   <> "-"
   <> int.to_string(int.random(1_000_000_000_000))
+}
+
+/// An unguessable holder identity.
+pub fn generated_holder() -> String {
+  generated_identity("ores-locks-")
+}
+
+/// Stable id generated once for one logical acquisition.
+pub fn generated_request_id() -> String {
+  generated_identity("ores-lock-request-")
 }
 
 /// Why a credential must not be sent to `base_url`, if it must not.
@@ -202,7 +215,6 @@ fn now_ms() -> Int {
 fn erlang_monotonic_native() -> Int
 
 fn erlang_monotonic_ms() -> Int {
-  // monotonic_time/0 is in native units (nanoseconds on modern BEAM).
   erlang_monotonic_native() / 1_000_000
 }
 
@@ -213,7 +225,15 @@ pub fn acquire(
   wait: Bool,
 ) -> Result(core.LeaseGrant, core.LockError) {
   let holder = core.holder_or(opts, config.generate_holder)
-  poll_acquire(config, key, opts, wait, holder, now_ms())
+  let request_id = core.request_id_or(opts, config.generate_request_id)
+  case core.valid_request_id(request_id) {
+    False ->
+      Error(core.invalid_plan(
+        key,
+        "request_id must contain 1..=256 characters",
+      ))
+    True -> poll_acquire(config, key, opts, wait, holder, request_id, now_ms())
+  }
 }
 
 fn poll_acquire(
@@ -222,6 +242,7 @@ fn poll_acquire(
   opts: core.AcquireOptions,
   wait: Bool,
   holder: String,
+  request_id: String,
   started_ms: Int,
 ) -> Result(core.LeaseGrant, core.LockError) {
   let body =
@@ -229,6 +250,7 @@ fn poll_acquire(
       #("key", json.string(core.key_to_string(key))),
       #("holder", json.string(holder)),
       #("ttl_ms", json.int(opts.ttl_ms)),
+      #("request_id", json.string(request_id)),
     ])
   use output <- result.try(
     post(config, "/v1/locks/acquire", body)
@@ -257,7 +279,15 @@ fn poll_acquire(
             True -> Error(core.timeout(key, core.FiduciaAcquire, waited))
             False -> {
               process.sleep(opts.retry_interval_ms)
-              poll_acquire(config, key, opts, wait, holder, started_ms)
+              poll_acquire(
+                config,
+                key,
+                opts,
+                wait,
+                holder,
+                request_id,
+                started_ms,
+              )
             }
           }
         }
