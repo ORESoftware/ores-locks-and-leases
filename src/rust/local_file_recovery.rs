@@ -1,6 +1,8 @@
 //! Explicit inspection and operator-driven recovery for portable local locks.
 
-use crate::local_file::{LocalFileLockError, LocalFileLockErrorKind};
+use crate::local_file::{
+    validate_local_file_path, LocalFileLockError, LocalFileLockErrorKind,
+};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
@@ -41,6 +43,7 @@ pub fn inspect_local_file_lock(
     path: impl AsRef<Path>,
 ) -> Result<LocalFileLockInspection, LocalFileLockError> {
     let path = path.as_ref();
+    validate_local_file_path(path)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -145,6 +148,7 @@ pub fn recover_local_file_lock(
     confirmed_inactive: bool,
 ) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
+    validate_local_file_path(path)?;
     if !confirmed_inactive {
         return Err(error(
             LocalFileLockErrorKind::InvalidInput,
