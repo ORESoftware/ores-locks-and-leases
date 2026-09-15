@@ -34,6 +34,14 @@ pub enum EnvKind {
     Path,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OuterLeaseAuthority {
+    Fiducia,
+    CloudflareDurableObject,
+    Redis,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvBinding {
@@ -48,6 +56,8 @@ pub struct EnvBinding {
 #[serde(deny_unknown_fields)]
 pub struct ProviderSelection {
     pub local_file: bool,
+    /// Historical v1 name for the managed outer lease layer. The concrete
+    /// backend is selected by `LockProfileConfig::outer_authority`.
     pub fiducia: bool,
     pub pg_advisory: bool,
 }
@@ -64,6 +74,21 @@ pub struct LocalFileProviderConfig {
 pub struct FiduciaProviderConfig {
     pub endpoint_env: String,
     pub auth_token_env: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudflareDurableObjectProviderConfig {
+    pub endpoint_env: String,
+    pub api_token_env: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisProviderConfig {
+    pub endpoint_env: String,
+    pub auth_token_env: String,
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -99,8 +124,11 @@ pub struct LockProfileConfig {
     pub ttl_ms: Option<u64>,
     pub renew_interval_ms: Option<u64>,
     pub providers: ProviderSelection,
+    pub outer_authority: Option<OuterLeaseAuthority>,
     pub local_file: Option<LocalFileProviderConfig>,
     pub fiducia: Option<FiduciaProviderConfig>,
+    pub cloudflare_durable_object: Option<CloudflareDurableObjectProviderConfig>,
+    pub redis: Option<RedisProviderConfig>,
     pub postgres: Option<PostgresProviderConfig>,
 }
 
@@ -108,9 +136,19 @@ impl LockProfileConfig {
     #[must_use]
     pub const fn layers(&self) -> LockLayers {
         LockLayers {
+            // v1 wire/config compatibility: `fiducia=true` means the managed
+            // outer lease layer is enabled, even when its concrete backend is
+            // Cloudflare Durable Objects or Redis.
             fiducia: self.providers.fiducia,
             pg_advisory: self.providers.pg_advisory,
         }
+    }
+
+    #[must_use]
+    pub fn outer_authority(&self) -> Option<OuterLeaseAuthority> {
+        self.providers
+            .fiducia
+            .then_some(self.outer_authority.unwrap_or(OuterLeaseAuthority::Fiducia))
     }
 
     #[must_use]
@@ -135,7 +173,7 @@ impl LockProfileConfig {
             LockConfigError::new(
                 "ttl_missing",
                 "profiles.ttl_ms",
-                "enabled Fiducia provider requires ttl_ms",
+                "enabled managed outer lease requires ttl_ms",
             )
         })?;
         Ok(Some((
@@ -396,77 +434,7 @@ fn validate_profile(
         (false, None) => {}
     }
 
-    match (profile.providers.fiducia, profile.fiducia.as_ref()) {
-        (true, Some(fiducia)) => {
-            let endpoint =
-                lookup_binding(env, &fiducia.endpoint_env, "profiles.fiducia.endpoint_env")?;
-            require_binding(
-                endpoint,
-                EnvKind::Url,
-                false,
-                "profiles.fiducia.endpoint_env",
-                "Fiducia endpoint must be a non-secret URL environment binding",
-            )?;
-            let auth = lookup_binding(
-                env,
-                &fiducia.auth_token_env,
-                "profiles.fiducia.auth_token_env",
-            )?;
-            require_binding(
-                auth,
-                EnvKind::String,
-                true,
-                "profiles.fiducia.auth_token_env",
-                "Fiducia auth token must be a secret string environment binding",
-            )?;
-            let ttl = profile.ttl_ms.ok_or_else(|| {
-                LockConfigError::new(
-                    "ttl_missing",
-                    "profiles.ttl_ms",
-                    "enabled Fiducia provider requires ttl_ms",
-                )
-            })?;
-            if ttl == 0 || ttl > MAX_TTL_MS {
-                return Err(LockConfigError::new(
-                    "ttl",
-                    "profiles.ttl_ms",
-                    "ttl_ms is outside the portable range",
-                ));
-            }
-            if let Some(renew) = profile.renew_interval_ms {
-                if renew == 0 || renew > MAX_RENEW_INTERVAL_MS || renew > ttl / 2 {
-                    return Err(LockConfigError::new(
-                        "renew_interval",
-                        "profiles.renew_interval_ms",
-                        "renew_interval_ms must be positive, bounded, and no greater than ttl_ms / 2",
-                    ));
-                }
-            }
-        }
-        (true, None) => {
-            return Err(LockConfigError::new(
-                "fiducia_missing",
-                "profiles.fiducia",
-                "enabled Fiducia provider requires its config table",
-            ));
-        }
-        (false, Some(_)) => {
-            return Err(LockConfigError::new(
-                "fiducia_dormant",
-                "profiles.fiducia",
-                "disabled Fiducia provider must not carry dormant config",
-            ));
-        }
-        (false, None) => {
-            if profile.ttl_ms.is_some() || profile.renew_interval_ms.is_some() {
-                return Err(LockConfigError::new(
-                    "fiducia_tuning_dormant",
-                    "profiles.ttl_ms",
-                    "Fiducia-only timing must be absent when Fiducia is disabled",
-                ));
-            }
-        }
-    }
+    validate_outer_authority(profile, env)?;
 
     match (profile.providers.pg_advisory, profile.postgres.as_ref()) {
         (true, Some(postgres)) => {
@@ -500,6 +468,191 @@ fn validate_profile(
         (false, None) => {}
     }
 
+    Ok(())
+}
+
+fn validate_outer_authority(
+    profile: &LockProfileConfig,
+    env: &BTreeMap<&str, &EnvBinding>,
+) -> Result<(), LockConfigError> {
+    if !profile.providers.fiducia {
+        if profile.outer_authority.is_some() {
+            return Err(LockConfigError::new(
+                "outer_authority_dormant",
+                "profiles.outer_authority",
+                "outer_authority must be absent when the managed outer lease layer is disabled",
+            ));
+        }
+        if profile.fiducia.is_some()
+            || profile.cloudflare_durable_object.is_some()
+            || profile.redis.is_some()
+        {
+            return Err(LockConfigError::new(
+                "outer_authority_config_dormant",
+                "profiles",
+                "disabled managed outer lease must not carry authority config",
+            ));
+        }
+        if profile.ttl_ms.is_some() || profile.renew_interval_ms.is_some() {
+            return Err(LockConfigError::new(
+                "outer_tuning_dormant",
+                "profiles.ttl_ms",
+                "managed-lease timing must be absent when the outer lease layer is disabled",
+            ));
+        }
+        return Ok(());
+    }
+
+    let ttl = profile.ttl_ms.ok_or_else(|| {
+        LockConfigError::new(
+            "ttl_missing",
+            "profiles.ttl_ms",
+            "enabled managed outer lease requires ttl_ms",
+        )
+    })?;
+    if ttl == 0 || ttl > MAX_TTL_MS {
+        return Err(LockConfigError::new(
+            "ttl",
+            "profiles.ttl_ms",
+            "ttl_ms is outside the portable range",
+        ));
+    }
+    if let Some(renew) = profile.renew_interval_ms {
+        if renew == 0 || renew > MAX_RENEW_INTERVAL_MS || renew > ttl / 2 {
+            return Err(LockConfigError::new(
+                "renew_interval",
+                "profiles.renew_interval_ms",
+                "renew_interval_ms must be positive, bounded, and no greater than ttl_ms / 2",
+            ));
+        }
+    }
+
+    match profile.outer_authority.unwrap_or(OuterLeaseAuthority::Fiducia) {
+        OuterLeaseAuthority::Fiducia => {
+            if profile.cloudflare_durable_object.is_some() || profile.redis.is_some() {
+                return Err(LockConfigError::new(
+                    "outer_authority_conflict",
+                    "profiles.outer_authority",
+                    "Fiducia authority must not carry Cloudflare or Redis config",
+                ));
+            }
+            let fiducia = profile.fiducia.as_ref().ok_or_else(|| {
+                LockConfigError::new(
+                    "fiducia_missing",
+                    "profiles.fiducia",
+                    "Fiducia authority requires its config table",
+                )
+            })?;
+            validate_endpoint_and_secret(
+                env,
+                &fiducia.endpoint_env,
+                &fiducia.auth_token_env,
+                "profiles.fiducia.endpoint_env",
+                "profiles.fiducia.auth_token_env",
+                "Fiducia",
+            )?;
+        }
+        OuterLeaseAuthority::CloudflareDurableObject => {
+            if profile.fiducia.is_some() || profile.redis.is_some() {
+                return Err(LockConfigError::new(
+                    "outer_authority_conflict",
+                    "profiles.outer_authority",
+                    "Cloudflare authority must not carry Fiducia or Redis config",
+                ));
+            }
+            let cloudflare = profile
+                .cloudflare_durable_object
+                .as_ref()
+                .ok_or_else(|| {
+                    LockConfigError::new(
+                        "cloudflare_missing",
+                        "profiles.cloudflare_durable_object",
+                        "Cloudflare Durable Object authority requires its config table",
+                    )
+                })?;
+            validate_endpoint_and_secret(
+                env,
+                &cloudflare.endpoint_env,
+                &cloudflare.api_token_env,
+                "profiles.cloudflare_durable_object.endpoint_env",
+                "profiles.cloudflare_durable_object.api_token_env",
+                "Cloudflare Durable Object",
+            )?;
+        }
+        OuterLeaseAuthority::Redis => {
+            if profile.fiducia.is_some() || profile.cloudflare_durable_object.is_some() {
+                return Err(LockConfigError::new(
+                    "outer_authority_conflict",
+                    "profiles.outer_authority",
+                    "Redis authority must not carry Fiducia or Cloudflare config",
+                ));
+            }
+            let redis = profile.redis.as_ref().ok_or_else(|| {
+                LockConfigError::new(
+                    "redis_missing",
+                    "profiles.redis",
+                    "Redis authority requires its config table",
+                )
+            })?;
+            validate_endpoint_and_secret(
+                env,
+                &redis.endpoint_env,
+                &redis.auth_token_env,
+                "profiles.redis.endpoint_env",
+                "profiles.redis.auth_token_env",
+                "Redis",
+            )?;
+            if redis.namespace.as_deref().is_some_and(str::is_empty) {
+                return Err(LockConfigError::new(
+                    "redis_namespace",
+                    "profiles.redis.namespace",
+                    "Redis namespace must be absent or non-empty",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_endpoint_and_secret(
+    env: &BTreeMap<&str, &EnvBinding>,
+    endpoint_env: &str,
+    secret_env: &str,
+    endpoint_path: &'static str,
+    secret_path: &'static str,
+    authority_name: &'static str,
+) -> Result<(), LockConfigError> {
+    let endpoint = lookup_binding(env, endpoint_env, endpoint_path)?;
+    require_binding(
+        endpoint,
+        EnvKind::Url,
+        false,
+        endpoint_path,
+        match authority_name {
+            "Fiducia" => "Fiducia endpoint must be a non-secret URL environment binding",
+            "Cloudflare Durable Object" => {
+                "Cloudflare Durable Object endpoint must be a non-secret URL environment binding"
+            }
+            "Redis" => "Redis endpoint must be a non-secret URL environment binding",
+            _ => "authority endpoint must be a non-secret URL environment binding",
+        },
+    )?;
+    let secret = lookup_binding(env, secret_env, secret_path)?;
+    require_binding(
+        secret,
+        EnvKind::String,
+        true,
+        secret_path,
+        match authority_name {
+            "Fiducia" => "Fiducia auth token must be a secret string environment binding",
+            "Cloudflare Durable Object" => {
+                "Cloudflare Durable Object API token must be a secret string environment binding"
+            }
+            "Redis" => "Redis auth token must be a secret string environment binding",
+            _ => "authority credential must be a secret string environment binding",
+        },
+    )?;
     Ok(())
 }
 
@@ -562,11 +715,12 @@ mod tests {
     const ROOT_CONFIG: &str = include_str!("../../.ores-lock.toml");
 
     #[test]
-    fn root_config_parses_and_projects_both_profiles() {
+    fn root_config_parses_and_projects_profiles() {
         let config = OresLockConfigV1::from_toml_str(ROOT_CONFIG).expect("root lock config");
 
         let local = config.profile("local-install").expect("local profile");
         assert_eq!(local.layers(), LockLayers::NONE);
+        assert_eq!(local.outer_authority(), None);
         assert!(local.local_file_options().is_some());
         assert!(
             local
@@ -576,18 +730,29 @@ mod tests {
         );
         assert_eq!(local.pg_scope(), None);
 
-        let service = config.profile("service-composed").expect("service profile");
-        assert_eq!(service.layers(), LockLayers::BOTH);
-        assert!(service.local_file_options().is_none());
-        assert_eq!(service.pg_scope(), Some(PgScope::Transaction));
-        let (options, wait) = service
+        let fiducia = config.profile("service-composed").expect("legacy service profile");
+        assert_eq!(fiducia.layers(), LockLayers::BOTH);
+        assert_eq!(fiducia.outer_authority(), Some(OuterLeaseAuthority::Fiducia));
+        assert!(fiducia.local_file_options().is_none());
+        assert_eq!(fiducia.pg_scope(), Some(PgScope::Transaction));
+
+        let cloudflare = config
+            .profile("service-cloudflare-pg")
+            .expect("cloudflare service profile");
+        assert_eq!(cloudflare.layers(), LockLayers::BOTH);
+        assert_eq!(
+            cloudflare.outer_authority(),
+            Some(OuterLeaseAuthority::CloudflareDurableObject)
+        );
+        assert_eq!(cloudflare.pg_scope(), Some(PgScope::Transaction));
+        let (options, wait) = cloudflare
             .lease_acquire_options()
-            .expect("service projection")
+            .expect("cloudflare projection")
             .expect("lease options");
         assert!(wait);
-        assert_eq!(options.ttl, Duration::from_millis(30_000));
+        assert_eq!(options.ttl, Duration::from_millis(60_000));
         assert_eq!(options.wait_timeout, Duration::from_millis(30_000));
-        assert_eq!(options.retry_interval, Duration::from_millis(50));
+        assert_eq!(options.retry_interval, Duration::from_millis(250));
     }
 
     #[test]
@@ -599,10 +764,10 @@ mod tests {
         );
         assert_eq!(
             config
-                .select_profile(Some("service-composed"))
+                .select_profile(Some("service-cloudflare-pg"))
                 .expect("selected")
                 .profile_id,
-            "service-composed"
+            "service-cloudflare-pg"
         );
         assert_eq!(
             config.select_profile(Some("unknown")).unwrap_err().code,
@@ -613,8 +778,8 @@ mod tests {
     #[test]
     fn rejects_secret_policy_and_renewal_drift() {
         let public_secret = ROOT_CONFIG.replace(
-            "key = \"FIDUCIA_AUTH_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = true",
-            "key = \"FIDUCIA_AUTH_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = false",
+            "key = \"ORES_LOCKS_CF_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = true",
+            "key = \"ORES_LOCKS_CF_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = false",
         );
         assert_eq!(
             OresLockConfigV1::from_toml_str(&public_secret)
@@ -623,8 +788,10 @@ mod tests {
             "env_reference_policy"
         );
 
-        let bad_renewal =
-            ROOT_CONFIG.replace("renew_interval_ms = 10000", "renew_interval_ms = 20000");
+        let bad_renewal = ROOT_CONFIG.replace(
+            "ttl_ms = 60000\nrenew_interval_ms = 20000\nouter_authority = \"cloudflare_durable_object\"",
+            "ttl_ms = 60000\nrenew_interval_ms = 40000\nouter_authority = \"cloudflare_durable_object\"",
+        );
         assert_eq!(
             OresLockConfigV1::from_toml_str(&bad_renewal)
                 .unwrap_err()
@@ -648,6 +815,19 @@ mod tests {
         assert_eq!(
             OresLockConfigV1::from_toml_str(&dormant).unwrap_err().code,
             "local_file_dormant"
+        );
+    }
+
+    #[test]
+    fn legacy_v1_outer_layer_defaults_to_fiducia() {
+        let legacy = ROOT_CONFIG.replace("outer_authority = \"fiducia\"\n", "");
+        let config = OresLockConfigV1::from_toml_str(&legacy).expect("legacy config");
+        assert_eq!(
+            config
+                .profile("service-composed")
+                .expect("legacy service")
+                .outer_authority(),
+            Some(OuterLeaseAuthority::Fiducia)
         );
     }
 }
