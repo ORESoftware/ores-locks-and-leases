@@ -14,7 +14,10 @@ pub type OwnerAdmission {
 }
 
 pub fn validate(owner: String) -> OwnerAdmission {
-  case string.is_empty(owner), unicode_codepoint_count(owner) > owner_max_codepoints {
+  case
+    string.is_empty(owner),
+    unicode_codepoint_count(owner) > owner_max_codepoints
+  {
     True, _ -> OwnerEmpty
     _, True -> OwnerOversized
     False, False -> OwnerValid
