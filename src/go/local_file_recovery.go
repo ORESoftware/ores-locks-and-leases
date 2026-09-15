@@ -23,15 +23,15 @@ const (
 type LocalFileLockInspectionReason string
 
 const (
-	LocalFileOwnerMarkerMissing      LocalFileLockInspectionReason = "owner_marker_missing"
-	LocalFilePathNotDirectory        LocalFileLockInspectionReason = "path_not_directory"
-	LocalFileDirtyDirectory          LocalFileLockInspectionReason = "dirty_directory"
-	LocalFileOwnerNotRegularFile     LocalFileLockInspectionReason = "owner_not_regular_file"
-	LocalFileOwnerTooLarge           LocalFileLockInspectionReason = "owner_too_large"
-	LocalFileOwnerInvalidUTF8        LocalFileLockInspectionReason = "owner_invalid_utf8"
-	LocalFileOwnerIdentityChanged    LocalFileLockInspectionReason = "owner_identity_changed"
-	LocalFilePermissionsWidened      LocalFileLockInspectionReason = "permissions_widened"
-	LocalFileOwnerContractViolation  LocalFileLockInspectionReason = "owner_contract_violation"
+	LocalFileOwnerMarkerMissing     LocalFileLockInspectionReason = "owner_marker_missing"
+	LocalFilePathNotDirectory       LocalFileLockInspectionReason = "path_not_directory"
+	LocalFileDirtyDirectory         LocalFileLockInspectionReason = "dirty_directory"
+	LocalFileOwnerNotRegularFile    LocalFileLockInspectionReason = "owner_not_regular_file"
+	LocalFileOwnerTooLarge          LocalFileLockInspectionReason = "owner_too_large"
+	LocalFileOwnerInvalidUTF8       LocalFileLockInspectionReason = "owner_invalid_utf8"
+	LocalFileOwnerIdentityChanged   LocalFileLockInspectionReason = "owner_identity_changed"
+	LocalFilePermissionsWidened     LocalFileLockInspectionReason = "permissions_widened"
+	LocalFileOwnerContractViolation LocalFileLockInspectionReason = "owner_contract_violation"
 )
 
 // LocalFileLockInspection is diagnostic evidence only; it never claims ownership.
@@ -61,8 +61,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		return compromisedInspection(LocalFilePermissionsWidened, err.Error()), nil
 	}
 
-	// Two names are enough to distinguish empty, exactly-owner, and dirty.
-	// Never enumerate an arbitrarily large attacker-expanded directory.
+	// Two names are enough to distinguish empty, pending publication, exactly
+	// one published owner, and dirty state. Never enumerate an arbitrarily large
+	// attacker-expanded directory.
 	dir, err := os.Open(path)
 	if err != nil {
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "open local lock directory failed", err)
@@ -78,8 +79,11 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	if len(entries) == 0 {
 		return incompleteInspection("lock directory has no owner marker; acquisition or release may have crashed mid-transition"), nil
 	}
+	if len(entries) == 1 && entries[0] == localFileOwnerPendingName {
+		return incompleteInspection("owner publication is incomplete; pending owner marker is not ownership authority"), nil
+	}
 	if len(entries) != 1 || entries[0] != localFileOwnerName {
-		return compromisedInspection(LocalFileDirtyDirectory, "lock directory must contain exactly one owner marker"), nil
+		return compromisedInspection(LocalFileDirtyDirectory, "lock directory must contain exactly one published owner marker"), nil
 	}
 
 	ownerPath := filepath.Join(path, localFileOwnerName)
