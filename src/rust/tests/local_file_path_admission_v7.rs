@@ -2,9 +2,10 @@ use ores_locks_and_leases::{
     inspect_local_file_lock, local_file_lock_exists, recover_local_file_lock, LocalFileLock,
     LocalFileLockErrorKind,
 };
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
-fn assert_invalid<T>(result: Result<T, ores_locks_and_leases::LocalFileLockError>) {
+fn assert_invalid<T: Debug>(result: Result<T, ores_locks_and_leases::LocalFileLockError>) {
     let error = result.expect_err("portable-invalid path must be rejected");
     assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
 }
