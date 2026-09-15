@@ -91,3 +91,30 @@ test("inspection remains state-valid during repeated live acquire/release transi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("try acquisition never turns clean-release disappearing contention into IO", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ores-local-lock-eexist-enoent-"));
+  const path = join(root, "install.lock");
+
+  try {
+    for (let iteration = 0; iteration < 200; iteration += 1) {
+      const first = await try_acquire_local_file_lock(path, `holder-${iteration}`);
+      assert.ok(first, `iteration ${iteration} failed to establish holder`);
+
+      const [contender] = await Promise.all([
+        try_acquire_local_file_lock(path, `contender-${iteration}`),
+        first.release(),
+      ]);
+
+      const next = contender ?? await try_acquire_local_file_lock(path, `reacquire-${iteration}`);
+      assert.ok(next, `iteration ${iteration} did not linearize to contention or acquisition`);
+      await next.release();
+    }
+
+    const finalInspection = await inspect_local_file_lock(path);
+    validateInspection(finalInspection);
+    assert.equal(finalInspection.state, "absent");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
