@@ -13,6 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
+const OWNER_PENDING_FILE: &str = "owner.pending";
 const OWNER_MAX_CODEPOINTS: usize = 512;
 const OWNER_MAX_UTF8_BYTES: usize = 2048;
 #[cfg(windows)]
@@ -22,11 +23,11 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 pub enum LocalFileLockInspectionState {
     Absent,
     Held,
-    /// The rendezvous directory exists but contains no owner marker.
+    /// The rendezvous directory exists but has no published owner marker.
     ///
-    /// This is the observable crash window either after atomic `mkdir` and
-    /// before owner publication, or after owner removal and before `rmdir`.
-    /// It is never treated as stale authority and is never auto-recovered.
+    /// This covers the observable crash windows after atomic `mkdir`, while a
+    /// fully written `owner.pending` awaits atomic rename, and after owner
+    /// removal before `rmdir`. It is never stale authority or auto-recovered.
     Incomplete,
     Compromised,
 }
@@ -104,10 +105,15 @@ pub fn inspect_local_file_lock(
             "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
         ));
     }
+    if entries.len() == 1 && entries[0].file_name() == OWNER_PENDING_FILE {
+        return Ok(incomplete(
+            "owner publication is incomplete; pending owner marker is not ownership authority",
+        ));
+    }
     if entries.len() != 1 || entries[0].file_name() != OWNER_FILE {
         return Ok(compromised(
             LocalFileLockInspectionReason::DirtyDirectory,
-            "lock directory must contain exactly one owner marker",
+            "lock directory must contain exactly one published owner marker",
         ));
     }
 
@@ -254,8 +260,6 @@ pub fn recover_local_file_lock(
         ));
     }
 
-    // Re-inspect immediately before destructive action so recovery never relies
-    // on an earlier snapshot after the operator confirmation step.
     let final_inspection = inspect_local_file_lock(path)?;
     if final_inspection.state != LocalFileLockInspectionState::Held
         || final_inspection.owner.as_deref() != Some(expected_owner)
