@@ -140,12 +140,18 @@ pub fn local_file_lock_zero_retry_is_valid_without_waiting_test() {
   clean(root)
 }
 
-pub fn local_file_lock_owner_marker_is_private_on_posix_test() {
+pub fn local_file_lock_directory_and_owner_are_private_on_posix_test() {
   let root = "./.tmp-local-file-locks/private-owner"
   clean(root)
   let assert Ok(Some(lock)) =
     local_file.try_acquire(root, "install.lock", "owner-a")
-  let owner_path = local_file.local_file_lock_path(lock) <> "/owner"
+  let lock_path = local_file.local_file_lock_path(lock)
+  case owner_private_mode_status(lock_path) {
+    0 -> Nil
+    3 -> Nil
+    other -> other |> should.equal(0)
+  }
+  let owner_path = lock_path <> "/owner"
   case owner_private_mode_status(owner_path) {
     0 -> Nil
     3 -> Nil
