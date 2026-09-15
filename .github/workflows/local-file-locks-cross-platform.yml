@@ -150,3 +150,6 @@ jobs:
 
       - name: Eighth-order process identity, isolation, and recovery matrix
         run: node scripts/check-local-file-process-eighth-order.mjs
+
+      - name: Ninth-order path alias, transition, and recovery isolation matrix
+        run: node scripts/check-local-file-process-ninth-order.mjs
