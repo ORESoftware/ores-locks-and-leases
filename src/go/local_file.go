@@ -336,7 +336,7 @@ func validateLocalPOSIXPrivateMode(lockPath string, info os.FileInfo, label stri
 }
 
 func localFileInfoIsAlias(info os.FileInfo) bool {
-	return info.Mode()&os.ModeSymlink != 0
+	return info.Mode()&os.ModeSymlink != 0 || localFileInfoIsPlatformAlias(info)
 }
 
 func localFileError(kind LocalFileLockErrorKind, path, message string, cause error) *LocalFileLockError {

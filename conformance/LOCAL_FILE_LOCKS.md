@@ -26,4 +26,19 @@ Path alias checking intentionally protects the lock rendezvous, its immediate pa
 
 `LocalFileLockPath`'s authored `maxLength: 4096` is a **wire/serialization admission bound**, not a promise that every operating system accepts a path of that length. Native path limits remain platform- and filesystem-specific and may be lower; an OS path rejection is an `io` failure. Runtimes must not truncate, normalize, or rewrite a path merely to fit the schema bound.
 
+## Reentrancy and owner identity
+
+Owner equality is release authentication only; it never creates recursive/reentrant ownership. Reacquiring one held rendezvous with the same owner token is ordinary contention. Owner comparison is exact runtime string/UTF-8 identity and is never NFC/NFD normalized, case-folded, trimmed, or otherwise rewritten. Normalization-equivalent but byte-distinct owner values therefore do not authenticate one another.
+
+## Scoped callbacks and fatal control flow
+
+Scoped helpers guarantee release after ordinary callback success/failure according to each runtime's structured error model. Fatal control flow is intentionally runtime-specific rather than pretending every language has one common exception model:
+
+- **Rust:** a panic is not normalized into `ScopedLocalFileLockError`; normal stack unwinding drops the held `LocalFileLock`, whose `Drop` path performs best-effort release. Abort builds/process aborts cannot run cleanup.
+- **Go:** a panic is not normalized into a scoped work error; `defer` performs best-effort release while the original panic keeps precedence.
+- **TypeScript/Node.js:** synchronous throws and rejected promises from the callback are captured as the scoped `work` failure, release is attempted exactly once, and the work failure is preserved. Process termination/abort cannot be guaranteed to run cleanup.
+- **Gleam/BEAM:** the structured helper contract covers `Result`-returned work failures. Arbitrary BEAM process exits/exceptions are outside the portable structured contract; callers requiring stronger cleanup guarantees must supervise the process and reacquire/recover explicitly rather than assuming an unwind hook.
+
+These guarantees are deliberately **best effort**, not durability or distributed fencing. They do not weaken the rule against heuristic stale stealing after a process dies mid-transition.
+
 The corpus is intentionally about portable semantics, not zed-pkg's stronger native Rust locking path. `zed-lock` remains preferable when a descriptor/handle-backed operating-system lock is available because process exit releases ownership automatically.

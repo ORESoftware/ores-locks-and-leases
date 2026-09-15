@@ -286,3 +286,50 @@ func TestLocalFileLockOwnerIdentityDoesNotNormalizeUnicode(t *testing.T) {
 		t.Fatalf("normalization-equivalent but byte-distinct owner must fail release: %v", err)
 	}
 }
+
+func TestLocalFileLockCreatesNestedParentAndOnlyRemovesRendezvous(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "nested", "private")
+	path := filepath.Join(parent, "install.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired {
+		t.Fatalf("acquire with missing parents: acquired=%v err=%v", acquired, err)
+	}
+	if info, err := os.Stat(parent); err != nil || !info.IsDir() {
+		t.Fatalf("expected parent directory to exist: info=%v err=%v", info, err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(parent); err != nil || !info.IsDir() {
+		t.Fatalf("release must preserve created parent directories: info=%v err=%v", info, err)
+	}
+}
+
+func TestLocalFileLockRepeatedAcquireInspectReleaseTransitions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transition-stress.lock")
+	for i := 0; i < 200; i++ {
+		owner := fmt.Sprintf("owner-%d", i)
+		lock, acquired, err := TryAcquireLocalFileLock(path, owner)
+		if err != nil || !acquired {
+			t.Fatalf("iteration %d acquire: acquired=%v err=%v", i, acquired, err)
+		}
+		inspection, err := InspectLocalFileLock(path)
+		if err != nil {
+			t.Fatalf("iteration %d inspect held: %v", i, err)
+		}
+		if inspection.State != LocalFileLockHeld || inspection.Owner != owner {
+			t.Fatalf("iteration %d unexpected held inspection: %#v", i, inspection)
+		}
+		if err := lock.Release(); err != nil {
+			t.Fatalf("iteration %d release: %v", i, err)
+		}
+		inspection, err = InspectLocalFileLock(path)
+		if err != nil {
+			t.Fatalf("iteration %d inspect absent: %v", i, err)
+		}
+		if inspection.State != LocalFileLockAbsent {
+			t.Fatalf("iteration %d expected absent, got %#v", i, inspection)
+		}
+	}
+}
