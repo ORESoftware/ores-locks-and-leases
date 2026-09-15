@@ -460,6 +460,8 @@ func (n *fakeNode) handle(w http.ResponseWriter, r *http.Request) {
 		} else {
 			out = map[string]any{"acquired": false}
 		}
+	case "/v1/locks/cancel":
+		out = map[string]any{"cancelled": true, "acquired": false}
 	case "/v1/locks/renew":
 		out = map[string]any{"renewed": body["holder"] == n.holder, "lease_expires_ms": 234567}
 	case "/v1/locks/release":

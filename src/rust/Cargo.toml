@@ -8,6 +8,11 @@ description = "Composed distributed locking for the ORESoftware fleet: a fenced 
 repository = "https://github.com/ORESoftware/ores-locks-and-leases"
 keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing"]
 categories = ["concurrency", "database"]
+# The Fiducia adapter intentionally consumes a Git-only client today. Cargo
+# rewrites Git dependencies to registry dependencies when publishing, so this
+# crate is distributed through Git/zed-pkg until that upstream release chain is
+# deliberately promoted to crates.io.
+publish = false
 
 # The Rust slice of a polyglot zed-package. Go, TypeScript and Gleam slices
 # sit beside it under `src/`, held to the same `conformance/cases/*.json`.
@@ -16,6 +21,7 @@ path = "lib.rs"
 
 [features]
 default = []
+config = ["dep:serde", "dep:toml"]
 # Postgres advisory locks through SeaORM (the fleet's application ORM; direct
 # sqlx / tokio-postgres are forbidden by the migration contract).
 pg = ["dep:sea-orm"]
@@ -25,15 +31,21 @@ maintained = ["pg", "dep:tokio"]
 # The fiducia-cloud lease adapter over the official async Rust client.
 fiducia = ["dep:fiducia-client", "dep:tokio"]
 # Everything, including the legacy Fiducia adapter and generic maintained path.
-full = ["pg", "maintained", "fiducia"]
+full = ["pg", "maintained", "fiducia", "config"]
 
 [dependencies]
 sea-orm = { version = "1", default-features = false, features = [
   "sqlx-postgres",
   "runtime-tokio-rustls",
 ], optional = true }
+# Git revision is the source authority. Do not add a crates.io version until
+# fiducia-client and its generated fiducia-interfaces dependency are actually
+# published; a fake registry fallback makes `cargo package` look viable while
+# producing a package consumers cannot resolve.
 fiducia-client = { git = "https://github.com/fiducia-cloud/fiducia-clients.git", rev = "277c6670dd4543b0602087e8f0357475c408e77e", features = ["async"], optional = true }
 tokio = { version = "1", features = ["macros", "time"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }
 
 [dev-dependencies]
 serde_json = "1"

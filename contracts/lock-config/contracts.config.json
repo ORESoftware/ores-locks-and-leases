@@ -1,0 +1,14 @@
+{
+  "$comment": ".ores-lock.toml TypeSpec and JSON Schema are independently authored peer authorities. Generated Schema B is comparison evidence only.",
+  "typespec": "contracts/lock-config/typespec/main.tsp",
+  "jsonSchema": "contracts/lock-config/json-schema/contract.schema.json",
+  "out": "generated/lock-config",
+  "target": "target/ores-contracts-lock-config",
+  "artifacts": [
+    "rust/types.rs",
+    "typescript/types.d.ts",
+    "typescript/validate.mjs",
+    "dart/models.dart"
+  ],
+  "tspCompile": true
+}

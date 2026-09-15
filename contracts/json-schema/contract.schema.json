@@ -250,6 +250,12 @@
         "holder": {
           "type": "string",
           "description": "Caller identity for the fiducia layer; also the release key. Absent: an unguessable generated id."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Stable logical acquisition identity reused across every retry/poll and cancellation for one acquire attempt. It is distinct from holder identity. Reusing the same request id with different acquisition semantics must fail closed. Absent: the runtime generates an unguessable id once per logical acquisition."
         }
       },
       "required": [

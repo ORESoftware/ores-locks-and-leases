@@ -161,6 +161,11 @@ model AcquireOptions {
 
   @doc("Caller identity for the fiducia layer; also the release key. Absent: an unguessable generated id.")
   holder?: string;
+
+  @doc("Stable logical acquisition identity reused across every retry/poll and cancellation for one acquire attempt. It is distinct from holder identity. Reusing the same request id with different acquisition semantics must fail closed. Absent: the runtime generates an unguessable id once per logical acquisition.")
+  @minLength(1)
+  @maxLength(256)
+  requestId?: string;
 }
 
 @doc("Renewal cadence for a maintained Fiducia + PostgreSQL transaction. Runtimes reject non-positive values and values greater than half the acquisition TTL before acquiring either layer. The acquired grant and every renewal must preserve the exact acquisition TTL; drift is lost_lease because the fixed cadence cannot safely assume the old duration.")

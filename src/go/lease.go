@@ -24,6 +24,9 @@ type AcquireOptions struct {
 	// Holder is the caller identity for the fiducia layer (also the release
 	// key). Empty lets the adapter generate an unguessable id.
 	Holder string
+	// RequestID is the stable logical acquisition identity reused across every
+	// Fiducia acquire poll and explicit cancellation. Empty generates one.
+	RequestID string
 }
 
 // DefaultAcquireOptions mirrors the official fiducia clients: 60s lease,

@@ -10,6 +10,9 @@ keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing", "fiducia", 
 vcs = "git"
 url = "https://github.com/ORESoftware/ores-locks-and-leases"
 
+# Package coordinates, immutable dependencies, and build/install/publish/test
+# mechanics belong here. Runtime lock/lease provider and timing policy belongs
+# in .ores-lock.toml and is intentionally not duplicated in this manifest.
 # The contract types are authored twice (TypeSpec + JSON Schema) and checked
 # for parity by ores-contracts; the fiducia wire protocol is the one the
 # fiducia-clients speak. Neither is a runtime dependency of the slices.
@@ -19,7 +22,7 @@ url = "https://github.com/ORESoftware/ores-locks-and-leases"
 [publish]
 include_readme = true
 tag_format = "v{version}"
-smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/fence-decision.json\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/postgres/fencing.sql\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/redis/fenced-write.lua\""
+smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/.ores-lock.toml\" && test -f \"$ZED_PKG_TEST_TARGET/contracts/lock-config/contracts.config.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/fence-decision.json\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/postgres/fencing.sql\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/redis/fenced-write.lua\""
 exclude = [
   ".env",
   ".env.*",
