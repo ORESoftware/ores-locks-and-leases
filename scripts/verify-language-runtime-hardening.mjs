@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 
 const VERIFICATION_SCHEMA =
   "ores.typespec-json-schema-validator.language-boundary-verification/v1";
-const MANIFEST_PATH = "contracts/language-boundaries.json";
 const REVISION_PATTERN = /^[0-9a-f]{40}$/u;
 
 const expectedRevision = process.env.EXPECTED_SHA;
@@ -49,7 +48,8 @@ async function loadEvidence(bundle, manifest) {
 }
 
 async function verifyBundle(bundle) {
-  const manifest = await loadJson(MANIFEST_PATH);
+  const boundaryRoot = `target/contract-runtime-boundary/language-boundary/${bundle}`;
+  const manifest = await loadJson(`${boundaryRoot}/manifest.json`);
   const report = await loadJson(`target/tjsv/${bundle}/report.json`);
   const contractIr = await loadJson(`target/tjsv/${bundle}/contract-ir.json`);
   const evidenceByPath = await loadEvidence(bundle, manifest);
