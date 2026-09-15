@@ -1,8 +1,8 @@
 #![cfg(feature = "config")]
 
 use ores_locks_and_leases::{
-    EnvBinding, EnvKind, LocalFileProviderConfig, LockProfileConfig, OresLockConfigV1,
-    ProviderSelection, LOCK_CONFIG_SCHEMA_V1, MAX_RETRY_INTERVAL_MS, MAX_WAIT_TIMEOUT_MS,
+    EnvBinding, EnvKind, LOCK_CONFIG_SCHEMA_V1, LocalFileProviderConfig, LockProfileConfig,
+    MAX_RETRY_INTERVAL_MS, MAX_WAIT_TIMEOUT_MS, OresLockConfigV1, ProviderSelection,
 };
 
 fn local_config() -> OresLockConfigV1 {
@@ -57,7 +57,9 @@ fn set_profile_id(config: &mut OresLockConfigV1, profile_id: String) {
 fn accepts_env_key_at_128_byte_boundary() {
     let mut config = local_config();
     set_env_key(&mut config, format!("A{}", "B".repeat(127)));
-    config.validate().expect("128-byte env key must be admitted");
+    config
+        .validate()
+        .expect("128-byte env key must be admitted");
 }
 
 #[test]
