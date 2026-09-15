@@ -1,0 +1,48 @@
+name: tmp probe tenth-order base sync
+
+on:
+  push:
+    branches:
+      - den-2037-tenth-order-10-20260915
+    paths:
+      - .github/workflows/tmp-probe-tenth-order-base-sync.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact tenth-order head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: den-2037-tenth-order-10-20260915
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Probe semantic merge against reconciled base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin den-2037-interop-fifth-order-20260914
+          set +e
+          git merge --no-commit --no-ff origin/den-2037-interop-fifth-order-20260914
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo 'MERGE_CLEAN=true'
+            git diff --cached --stat
+            git merge --abort || true
+            exit 0
+          fi
+          echo 'MERGE_CLEAN=false'
+          echo '--- conflicted files ---'
+          git diff --name-only --diff-filter=U
+          echo '--- conflict hunks ---'
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            echo "===== $f ====="
+            grep -n -C 18 -E '^(<<<<<<<|=======|>>>>>>>)' "$f" || true
+          done < <(git diff --name-only --diff-filter=U)
+          git merge --abort || true
+          exit 1
