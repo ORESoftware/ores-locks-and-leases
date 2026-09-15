@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -75,10 +76,11 @@ func GeneratedLocalFileLockOwner() (string, error) {
 // is the admission authority; the owner file is diagnostics plus an owner-safe
 // release token and is never a stale PID authority.
 type LocalFileLock struct {
-	path     string
-	owner    string
-	mu       sync.Mutex
-	released bool
+	path       string
+	owner      string
+	mu         sync.Mutex
+	released   bool
+	releaseErr error
 }
 
 func (l *LocalFileLock) Path() string  { return l.path }
@@ -104,21 +106,37 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 		}
 	}
 
-	if err := os.Mkdir(path, 0o700); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			info, inspectErr := os.Lstat(path)
-			if inspectErr != nil {
-				return nil, false, localFileError(LocalFileIO, path, "inspect contended local lock path failed", inspectErr)
-			}
-			if info.IsDir() && !localFileInfoIsAlias(info) {
-				if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
-					return nil, false, err
+	created := false
+	for transitionAttempt := 0; transitionAttempt < 2; transitionAttempt++ {
+		mkdirErr := os.Mkdir(path, 0o700)
+		if mkdirErr == nil {
+			created = true
+			break
+		}
+		if !errors.Is(mkdirErr, os.ErrExist) {
+			return nil, false, localFileError(LocalFileIO, path, "atomically create local lock directory failed", mkdirErr)
+		}
+
+		info, inspectErr := os.Lstat(path)
+		if inspectErr != nil {
+			if errors.Is(inspectErr, os.ErrNotExist) {
+				if transitionAttempt == 0 {
+					continue
 				}
 				return nil, false, nil
 			}
-			return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not an unaliased directory", err)
+			return nil, false, localFileError(LocalFileIO, path, "inspect contended local lock path failed", inspectErr)
 		}
-		return nil, false, localFileError(LocalFileIO, path, "atomically create local lock directory failed", err)
+		if info.IsDir() && !localFileInfoIsAlias(info) {
+			if err := validateLocalPOSIXPrivateMode(path, info, "lock directory", 0o022); err != nil {
+				return nil, false, err
+			}
+			return nil, false, nil
+		}
+		return nil, false, localFileError(LocalFileCompromised, path, "lock path already exists but is not an unaliased directory", mkdirErr)
+	}
+	if !created {
+		return nil, false, nil
 	}
 
 	ownerPath := filepath.Join(path, localFileOwnerName)
@@ -131,13 +149,23 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 		}
 		return nil, false, localFileError(kind, path, "create local lock owner token failed", openErr)
 	}
-	_, writeErr := ownerFile.WriteString(owner)
+	n, writeErr := ownerFile.WriteString(owner)
+	if writeErr == nil && n != len(owner) {
+		writeErr = io.ErrShortWrite
+	}
+	syncErr := error(nil)
+	if writeErr == nil {
+		syncErr = ownerFile.Sync()
+	}
 	closeErr := ownerFile.Close()
-	if writeErr != nil || closeErr != nil {
+	if writeErr != nil || syncErr != nil || closeErr != nil {
 		_ = os.Remove(ownerPath)
 		_ = os.Remove(path)
 		if writeErr != nil {
 			return nil, false, localFileError(LocalFileIO, path, "write local lock owner token failed", writeErr)
+		}
+		if syncErr != nil {
+			return nil, false, localFileError(LocalFileIO, path, "sync local lock owner token failed", syncErr)
 		}
 		return nil, false, localFileError(LocalFileIO, path, "close local lock owner token failed", closeErr)
 	}
@@ -145,9 +173,10 @@ func TryAcquireLocalFileLock(path, owner string) (lock *LocalFileLock, acquired 
 	return &LocalFileLock{path: path, owner: owner}, true, nil
 }
 
-// AcquireLocalFileLock acquires with optional finite waiting. This portable
-// backend retries mkdir; zed-pkg's native Rust lock should keep one
-// kernel-backed blocking request instead.
+// AcquireLocalFileLock acquires with optional finite waiting. The wait budget
+// is end-to-end: time spent in filesystem attempts counts toward WaitTimeout.
+// This portable backend retries mkdir; zed-pkg's native Rust lock should keep
+// one kernel-backed blocking request instead.
 func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*LocalFileLock, error) {
 	if err := validateLocalPath(path); err != nil {
 		return nil, err
@@ -192,12 +221,17 @@ func AcquireLocalFileLock(path, owner string, options LocalFileLockOptions) (*Lo
 }
 
 // Release verifies the owner token before removing the now-empty lock
-// directory. It is idempotent after a successful release.
+// directory. It is idempotent after a successful release. If owner removal
+// succeeds but directory removal fails, the original destructive-transition
+// error is retained and returned by every later Release call.
 func (l *LocalFileLock) Release() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.released {
 		return nil
+	}
+	if l.releaseErr != nil {
+		return l.releaseErr
 	}
 	if err := validateLocalRealDirectory(l.path, l.path, "lock directory"); err != nil {
 		return err
@@ -229,7 +263,9 @@ func (l *LocalFileLock) Release() error {
 				kind = LocalFileCompromised
 			}
 		}
-		return localFileError(kind, l.path, "remove local lock directory failed", err)
+		wrapped := localFileError(kind, l.path, "remove local lock directory failed", err)
+		l.releaseErr = wrapped
+		return wrapped
 	}
 	l.released = true
 	return nil
