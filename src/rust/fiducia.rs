@@ -9,10 +9,11 @@
 use std::time::{Duration, Instant};
 
 use fiducia_client::AsyncFiduciaClient;
+use serde_json::json;
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant, duration_ms};
+use crate::lease::{AcquireOptions, Lease, LeaseGrant, duration_ms, valid_request_id};
 use crate::plan::LockStep;
 
 /// A fiducia-cloud lease authority.
@@ -49,10 +50,7 @@ fn transport(key: &LockKey, err: fiducia_client::Error) -> LockError {
     LockError::new(LockErrorKind::Transport, key, format!("{err:?}"))
 }
 
-/// An unguessable-enough holder identity. Holder names participate in queue
-/// identity and cancellation authority, so a bare pid/counter is not enough;
-/// callers with a real identity should set `AcquireOptions::holder`.
-fn generated_holder() -> String {
+fn generated_identity(prefix: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let now = std::time::SystemTime::now()
@@ -61,8 +59,21 @@ fn generated_holder() -> String {
         .unwrap_or(0);
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let digest = crate::key::fnv1a64(&format!("{now}:{pid}:{sequence}"));
-    format!("ores-locks-{pid:08x}-{digest:016x}")
+    let digest = crate::key::fnv1a64(&format!("{now}:{pid}:{sequence}:{prefix}"));
+    format!("{prefix}-{pid:08x}-{digest:016x}")
+}
+
+/// An unguessable-enough holder identity. Holder names participate in queue
+/// identity and cancellation authority, so a bare pid/counter is not enough;
+/// callers with a real identity should set `AcquireOptions::holder`.
+fn generated_holder() -> String {
+    generated_identity("ores-locks")
+}
+
+/// Stable identity for one logical acquisition. It is generated once before
+/// polling and is deliberately independent from the holder identity.
+fn generated_request_id() -> String {
+    generated_identity("ores-lock-request")
 }
 
 impl Lease for FiduciaLease {
@@ -73,20 +84,51 @@ impl Lease for FiduciaLease {
         wait: bool,
     ) -> Result<LeaseGrant, LockError> {
         let holder = opts.holder.clone().unwrap_or_else(generated_holder);
+        let request_id = opts.request_id.clone().unwrap_or_else(generated_request_id);
+        if !valid_request_id(&request_id) {
+            return Err(LockError::invalid_plan(
+                key,
+                "request_id must contain 1..=256 characters",
+            ));
+        }
         let ttl_ms = opts.ttl_ms();
         let started = Instant::now();
         loop {
-            let granted = self
+            let response = self
                 .client
-                .acquire(key.as_str(), &holder, ttl_ms)
+                .request(
+                    "POST",
+                    "/v1/locks/acquire",
+                    Some(json!({
+                        "key": key.as_str(),
+                        "holder": holder,
+                        "ttl_ms": ttl_ms,
+                        "request_id": request_id,
+                    })),
+                )
                 .await
                 .map_err(|err| transport(key, err))?;
-            if let Some(fencing_token) = granted {
+            let output = &response["result"]["output"];
+            if output["acquired"].as_bool().unwrap_or(false) {
+                let fencing_token = output["fencing_token"].as_u64().ok_or_else(|| {
+                    LockError::new(
+                        LockErrorKind::Transport,
+                        key,
+                        "fiducia: acquired without a positive integer fencing token",
+                    )
+                })?;
+                if fencing_token == 0 {
+                    return Err(LockError::new(
+                        LockErrorKind::Transport,
+                        key,
+                        "fiducia: acquired with zero fencing token",
+                    ));
+                }
                 return Ok(LeaseGrant {
                     key: key.clone(),
                     holder,
                     fencing_token,
-                    lease_expires_ms: None,
+                    lease_expires_ms: output["lease_expires_ms"].as_u64(),
                     ttl_ms,
                 });
             }
