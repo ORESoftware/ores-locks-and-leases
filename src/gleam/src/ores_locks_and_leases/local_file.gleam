@@ -116,8 +116,8 @@ fn create_lock_directory(
   path: String,
   owner: String,
 ) -> Result(Option(LocalFileLock), LocalFileLockError) {
-  case simplifile.create_directory(path) {
-    Error(simplifile.Eexist) ->
+  case make_private_directory_status(path) {
+    1 ->
       case path_kind(path) {
         1 -> Ok(None)
         4 -> Error(io_error(path, "inspect contended local lock path failed"))
@@ -128,13 +128,12 @@ fn create_lock_directory(
             "lock path already exists but is not an unaliased directory",
           ))
       }
-    Error(error) ->
+    0 -> write_owner_or_unwind(path, owner)
+    _ ->
       Error(io_error(
         path,
-        "atomically create local lock directory failed: "
-          <> simplifile.describe_error(error),
+        "atomically create private local lock directory failed",
       ))
-    Ok(Nil) -> write_owner_or_unwind(path, owner)
   }
 }
 
@@ -401,6 +400,9 @@ fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "path_kind")
 fn path_kind(path: String) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "make_private_directory_status")
+fn make_private_directory_status(path: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "write_new_file_status")
 fn write_new_file_status(path: String, contents: String) -> Int
