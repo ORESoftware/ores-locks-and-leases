@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestTenthOrderPartialReleaseRetainsOriginalError(t *testing.T) {
+func TestLocalFileLockTenthOrderPartialReleaseRetainsOriginalError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.lock")
 	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
 	if err != nil || !acquired || lock == nil {
@@ -31,7 +31,7 @@ func TestTenthOrderPartialReleaseRetainsOriginalError(t *testing.T) {
 	}
 }
 
-func TestTenthOrderFiniteWaitBudgetIsEndToEnd(t *testing.T) {
+func TestLocalFileLockTenthOrderFiniteWaitBudgetIsEndToEnd(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "timeout.lock")
 	holder, acquired, err := TryAcquireLocalFileLock(path, "holder")
 	if err != nil || !acquired || holder == nil {
