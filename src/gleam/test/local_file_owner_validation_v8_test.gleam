@@ -1,3 +1,4 @@
+import gleam/option.{Some}
 import gleam/string
 import gleeunit/should
 import ores_locks_and_leases/local_file
