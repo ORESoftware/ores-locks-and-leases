@@ -28,6 +28,7 @@ class FakeSql {
       expires_ms: null,
       next_token: "0",
       request_id: null,
+      request_ttl_ms: null,
     };
   }
 
@@ -36,7 +37,7 @@ class FakeSql {
     if (sql.startsWith("CREATE TABLE IF NOT EXISTS lease_state")) return rows();
     if (sql === "PRAGMA table_info(lease_state)") {
       const columns = ["id", "holder", "token", "expires_ms", "next_token"];
-      if (!this.legacy) columns.push("request_id");
+      if (!this.legacy) columns.push("request_id", "request_ttl_ms");
       return rows(columns.map((name) => ({ name })));
     }
     if (sql === "ALTER TABLE lease_state ADD COLUMN request_id TEXT") {
@@ -44,8 +45,13 @@ class FakeSql {
       this.state.request_id = null;
       return rows();
     }
+    if (sql === "ALTER TABLE lease_state ADD COLUMN request_ttl_ms INTEGER") {
+      this.legacy = false;
+      this.state.request_ttl_ms = null;
+      return rows();
+    }
     if (sql.startsWith("INSERT OR IGNORE INTO lease_state")) return rows();
-    if (sql.startsWith("SELECT holder, token, expires_ms, next_token, request_id FROM lease_state")) {
+    if (sql.startsWith("SELECT holder, token, expires_ms, next_token, request_id, request_ttl_ms FROM lease_state")) {
       return rows([{ ...this.state }]);
     }
     if (sql.startsWith("UPDATE lease_state SET holder = NULL")) {
@@ -53,19 +59,25 @@ class FakeSql {
       this.state.token = null;
       this.state.expires_ms = null;
       this.state.request_id = null;
+      this.state.request_ttl_ms = null;
       return rows();
     }
-    if (sql === "UPDATE lease_state SET request_id = ? WHERE id = 1") {
-      [this.state.request_id] = args;
+    if (sql === "UPDATE lease_state SET request_id = ?, request_ttl_ms = ? WHERE id = 1") {
+      [this.state.request_id, this.state.request_ttl_ms] = args;
       return rows();
     }
-    if (sql.startsWith("UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ?, request_id = ?")) {
+    if (sql === "UPDATE lease_state SET request_ttl_ms = ? WHERE id = 1") {
+      [this.state.request_ttl_ms] = args;
+      return rows();
+    }
+    if (sql.startsWith("UPDATE lease_state SET holder = ?, token = ?, expires_ms = ?, next_token = ?, request_id = ?, request_ttl_ms = ?")) {
       [
         this.state.holder,
         this.state.token,
         this.state.expires_ms,
         this.state.next_token,
         this.state.request_id,
+        this.state.request_ttl_ms,
       ] = args;
       return rows();
     }
@@ -103,7 +115,7 @@ function authority(options) {
   return { authority: new LockLeaseAuthority({ storage }), storage };
 }
 
-test("Durable Object authority replays without extending and renews only by token", async (t) => {
+test("Durable Object authority replays only the identical logical acquire and never extends it", async (t) => {
   const originalNow = Date.now;
   let now = 1_000;
   Date.now = () => now;
@@ -121,14 +133,29 @@ test("Durable Object authority replays without extending and renews only by toke
     renewed: false,
     replayed: false,
   });
+  assert.equal(storage.sql.state.request_ttl_ms, 1_000);
 
   now = 1_500;
-  const replay = await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 50_000 });
+  const replay = await leases.acquire({ holder: "worker-a", request_id: "attempt-1", ttl_ms: 1_000 });
   assert.equal(replay.acquired, true);
   assert.equal(replay.replayed, true);
   assert.equal(replay.fencing_token, "1");
   assert.equal(replay.lease_expires_ms, 2_000);
+  assert.equal(replay.ttl_ms, 1_000);
   assert.equal(storage.sql.state.expires_ms, 2_000, "replay cannot extend authority");
+
+  const driftedReplay = await leases.acquire({
+    holder: "worker-a",
+    request_id: "attempt-1",
+    ttl_ms: 50_000,
+  });
+  assert.deepEqual(driftedReplay, {
+    acquired: false,
+    reason: "request_replay_mismatch",
+    lease_expires_ms: 2_000,
+  });
+  assert.equal(storage.sql.state.expires_ms, 2_000, "mismatched replay cannot extend authority");
+  assert.equal(storage.sql.state.request_ttl_ms, 1_000, "mismatched replay cannot rewrite request semantics");
 
   const differentAttempt = await leases.acquire({
     holder: "worker-a",
@@ -149,6 +176,8 @@ test("Durable Object authority replays without extending and renews only by toke
   now = 2_500;
   await leases.alarm();
   assert.equal(storage.sql.state.holder, null);
+  assert.equal(storage.sql.state.request_id, null);
+  assert.equal(storage.sql.state.request_ttl_ms, null);
   assert.equal(storage.sql.state.next_token, "1");
 
   now = 3_000;
