@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
@@ -132,7 +132,7 @@ impl LocalFileLock {
             }
         }
 
-        match fs::create_dir(path) {
+        match create_lock_directory(path) {
             Ok(()) => {
                 let owner_path = path.join(OWNER_FILE);
                 let mut owner_options = OpenOptions::new();
@@ -337,6 +337,19 @@ pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileL
             "inspect local lock path",
             error,
         )),
+    }
+}
+
+fn create_lock_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
     }
 }
 
@@ -581,17 +594,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn owner_marker_is_private_on_posix() {
+    fn lock_directory_and_owner_marker_are_private_on_posix() {
         use std::os::unix::fs::PermissionsExt;
-        let path = test_path("private-owner");
+        let path = test_path("private-lock");
         let mut lock = LocalFileLock::try_acquire(&path, "owner-a")
             .expect("acquire")
             .expect("holder");
-        let mode = fs::metadata(path.join(OWNER_FILE))
+        let directory_mode = fs::metadata(&path)
+            .expect("lock directory metadata")
+            .permissions()
+            .mode();
+        assert_eq!(directory_mode & 0o077, 0, "lock directory must be private");
+        let owner_mode = fs::metadata(path.join(OWNER_FILE))
             .expect("owner metadata")
             .permissions()
             .mode();
-        assert_eq!(mode & 0o077, 0, "owner marker must be private");
+        assert_eq!(owner_mode & 0o077, 0, "owner marker must be private");
         lock.release().expect("release private owner lock");
     }
 
