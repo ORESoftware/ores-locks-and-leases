@@ -151,26 +151,44 @@ export async function try_acquire_local_file_lock(
     await mkdir(parent, { recursive: true, mode: 0o700 });
     await validate_real_directory(path, parent, "lock parent");
     await validate_posix_trusted_parent(path, parent);
-    await mkdir(path, { mode: 0o700 });
-    await validate_posix_private_lock_directory(path, path);
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
-    if (error_code(error) === "EEXIST") {
+    throw io_error(path, "prepare local lock parent", error);
+  }
+
+  let created = false;
+  for (let transitionAttempt = 0; transitionAttempt < 2; transitionAttempt += 1) {
+    try {
+      await mkdir(path, { mode: 0o700 });
+      await validate_posix_private_lock_directory(path, path);
+      created = true;
+      break;
+    } catch (error) {
+      if (error instanceof LocalFileLockError) throw error;
+      if (error_code(error) !== "EEXIST") {
+        throw io_error(path, "atomically create local lock directory", error);
+      }
+
       try {
         const metadata = await lstat(path);
         if (metadata.isDirectory() && !metadata.isSymbolicLink()) return null;
+        throw new LocalFileLockError(
+          "compromised",
+          path,
+          "lock path already exists but is not an unaliased directory",
+          error,
+        );
       } catch (inspectError) {
+        if (inspectError instanceof LocalFileLockError) throw inspectError;
+        if (error_code(inspectError) === "ENOENT") {
+          if (transitionAttempt === 0) continue;
+          return null;
+        }
         throw io_error(path, "inspect contended local lock path", inspectError);
       }
-      throw new LocalFileLockError(
-        "compromised",
-        path,
-        "lock path already exists but is not an unaliased directory",
-        error,
-      );
     }
-    throw io_error(path, "atomically create local lock directory", error);
   }
+  if (!created) return null;
 
   const owner_path = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   try {
