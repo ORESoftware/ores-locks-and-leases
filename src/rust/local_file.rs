@@ -1,9 +1,9 @@
 //! Portable single-host filesystem locks.
 //!
 //! This module is intentionally separate from the distributed lease/Postgres
-//! plan.  Atomic directory creation is the ownership admission primitive; the
+//! plan. Atomic directory creation is the ownership admission primitive; the
 //! `owner` file is diagnostics plus an owner-safe release token, never a stale
-//! PID authority.  zed-pkg's Rust hot path should prefer its stronger native
+//! PID authority. zed-pkg's Rust hot path should prefer its stronger native
 //! descriptor/handle lock (`zed-lock`) when available.
 
 use std::error::Error;
@@ -20,6 +20,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
+const OWNER_PENDING_FILE: &str = "owner.pending";
 const OWNER_MAX_CODEPOINTS: usize = 512;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
@@ -103,7 +104,7 @@ impl Default for LocalFileLockOptions {
 
 /// A held portable filesystem lock.
 ///
-/// The lock is released on drop on a best-effort basis.  Call [`Self::release`]
+/// The lock is released on drop on a best-effort basis. Call [`Self::release`]
 /// when release failure must be observed.
 #[derive(Debug)]
 pub struct LocalFileLock {
@@ -145,30 +146,30 @@ impl LocalFileLock {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     match fs::symlink_metadata(path) {
                         Ok(metadata) if metadata.is_dir() && !metadata_is_alias(&metadata) => {
-                            return Ok(None)
+                            return Ok(None);
                         }
                         Ok(_) => {
                             return Err(LocalFileLockError::new(
                                 LocalFileLockErrorKind::Compromised,
                                 path,
                                 "lock path already exists but is not an unaliased directory",
-                            ))
+                            ));
                         }
                         Err(inspect_error)
                             if inspect_error.kind() == io::ErrorKind::NotFound
                                 && transition_attempt == 0 =>
                         {
-                            continue
+                            continue;
                         }
                         Err(inspect_error) if inspect_error.kind() == io::ErrorKind::NotFound => {
-                            return Ok(None)
+                            return Ok(None);
                         }
                         Err(inspect_error) => {
                             return Err(LocalFileLockError::io(
                                 path,
                                 "inspect contended local lock path",
                                 inspect_error,
-                            ))
+                            ));
                         }
                     }
                 }
@@ -177,7 +178,7 @@ impl LocalFileLock {
                         path,
                         "atomically create local lock directory",
                         error,
-                    ))
+                    ));
                 }
             }
         }
@@ -186,12 +187,12 @@ impl LocalFileLock {
         }
 
         let owner_path = path.join(OWNER_FILE);
+        let pending_path = path.join(OWNER_PENDING_FILE);
         let mut owner_options = OpenOptions::new();
         owner_options.write(true).create_new(true);
         #[cfg(unix)]
         owner_options.mode(0o600);
-        let owner_file = owner_options.open(&owner_path);
-        let mut owner_file = match owner_file {
+        let mut owner_file = match owner_options.open(&pending_path) {
             Ok(file) => file,
             Err(error) => {
                 let _ = fs::remove_dir(path);
@@ -203,34 +204,65 @@ impl LocalFileLock {
                 return Err(LocalFileLockError::new(
                     kind,
                     path,
-                    format!("create local lock owner token failed: {error}"),
+                    format!("create pending local lock owner token failed: {error}"),
                 ));
             }
         };
         if let Err(error) = owner_file.write_all(owner.as_bytes()) {
             drop(owner_file);
-            let _ = fs::remove_file(&owner_path);
+            let _ = fs::remove_file(&pending_path);
             let _ = fs::remove_dir(path);
             return Err(LocalFileLockError::io(
                 path,
-                "write local lock owner token",
+                "write pending local lock owner token",
                 error,
             ));
         }
-        // Rust's std::fs::File does not expose a fallible explicit close. Use
-        // sync_data as the observable publication barrier before the handle is
-        // dropped; failure means acquisition never becomes a returned holder.
+        // std::fs::File does not expose a fallible explicit close. sync_data is
+        // the observable publication barrier; only a fully synced pending file
+        // is renamed into the canonical owner name that readers trust.
         if let Err(error) = owner_file.sync_data() {
             drop(owner_file);
-            let _ = fs::remove_file(&owner_path);
+            let _ = fs::remove_file(&pending_path);
             let _ = fs::remove_dir(path);
             return Err(LocalFileLockError::io(
                 path,
-                "sync local lock owner token",
+                "sync pending local lock owner token",
                 error,
             ));
         }
         drop(owner_file);
+
+        match fs::symlink_metadata(&owner_path) {
+            Ok(_) => {
+                let _ = fs::remove_file(&pending_path);
+                let _ = fs::remove_dir(path);
+                return Err(LocalFileLockError::new(
+                    LocalFileLockErrorKind::Compromised,
+                    path,
+                    "published owner target already exists before atomic publication",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                let _ = fs::remove_file(&pending_path);
+                let _ = fs::remove_dir(path);
+                return Err(LocalFileLockError::io(
+                    path,
+                    "inspect owner publication target",
+                    error,
+                ));
+            }
+        }
+        if let Err(error) = fs::rename(&pending_path, &owner_path) {
+            let _ = fs::remove_file(&pending_path);
+            let _ = fs::remove_dir(path);
+            return Err(LocalFileLockError::io(
+                path,
+                "atomically publish local lock owner token",
+                error,
+            ));
+        }
 
         Ok(Some(Self {
             path: path.to_path_buf(),
@@ -337,8 +369,6 @@ impl LocalFileLock {
             ));
         }
 
-        // Re-check immediately before destructive removal so a hard-link alias
-        // introduced after the first metadata check cannot be silently ignored.
         validate_regular_file(&self.path, &owner_path, "owner token")?;
         fs::remove_file(&owner_path).map_err(|error| {
             LocalFileLockError::io(&self.path, "remove local lock owner token", error)
@@ -372,7 +402,7 @@ impl Drop for LocalFileLock {
 
 /// Return whether a portable local lock directory currently exists.
 ///
-/// This is diagnostics only.  A caller must still use `try_acquire`/`acquire`
+/// This is diagnostics only. A caller must still use `try_acquire`/`acquire`
 /// to obtain ownership.
 pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
