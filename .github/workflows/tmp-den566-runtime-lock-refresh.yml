@@ -1,0 +1,43 @@
+name: tmp-den566-runtime-lock-refresh
+on:
+  push:
+    branches: [den-566-runtime-replay-hardening-v3]
+    paths:
+      - '.github/workflows/tmp-den566-runtime-lock-refresh.yml'
+      - 'src/rust/Cargo.toml'
+permissions:
+  contents: write
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out trusted branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: den-566-runtime-replay-hardening-v3
+          persist-credentials: true
+      - name: Assert trusted branch
+        run: test "$(git branch --show-current)" = "den-566-runtime-replay-hardening-v3"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+      - name: Generate exact Rust lock graph
+        working-directory: src/rust
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          test -z "$(git diff --name-only -- . ':!Cargo.lock')"
+      - name: Commit only Rust Cargo.lock
+        run: |
+          set -euo pipefail
+          git add src/rust/Cargo.lock
+          if git diff --cached --quiet; then
+            echo 'Cargo.lock already current'
+            exit 0
+          fi
+          test "$(git diff --cached --name-only)" = "src/rust/Cargo.lock"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'DEN-566 refresh Rust Cargo.lock for request identity'
+          git push origin HEAD:den-566-runtime-replay-hardening-v3
