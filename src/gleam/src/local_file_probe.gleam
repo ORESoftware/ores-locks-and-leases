@@ -1,8 +1,7 @@
+import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/option.{None, Some}
-import gleam/result.{Error, Ok}
-import gleam/erlang/process
 import ores_locks_and_leases/local_file
 
 pub fn main() {
@@ -28,14 +27,18 @@ fn run(
     "crash" -> Nil
     _ -> usage()
   }
+
   let hold_ms = case int.parse(hold_text) {
     Ok(value) if value >= 0 -> value
-    _ -> usage()
+    _ -> {
+      usage()
+      0
+    }
   }
 
   case local_file.try_acquire(lock_root, lock_name, owner) {
-    Error(error) -> {
-      io.debug(error)
+    Error(_) -> {
+      io.println("LOCK_ERROR")
       halt(20)
     }
     Ok(None) -> {
@@ -53,13 +56,14 @@ fn run(
         }
         _ -> panic as "validated probe mode became unreachable"
       }
+
       case local_file.release(lock) {
         Ok(Nil) -> {
           io.println("RELEASED")
           Nil
         }
-        Error(error) -> {
-          io.debug(error)
+        Error(_) -> {
+          io.println("RELEASE_ERROR")
           halt(21)
         }
       }
@@ -68,7 +72,9 @@ fn run(
 }
 
 fn usage() {
-  io.println("usage: local_file_probe <hold|try|crash> <lock_root> <lock_name> <owner> [hold_ms]")
+  io.println(
+    "usage: local_file_probe <hold|try|crash> <lock_root> <lock_name> <owner> [hold_ms]",
+  )
   halt(2)
 }
 

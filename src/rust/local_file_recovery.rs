@@ -5,6 +5,8 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
@@ -75,6 +77,11 @@ pub fn inspect_local_file_lock(
     if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
         return Ok(compromised("owner token is not an unaliased regular file"));
     }
+    if metadata_has_multiple_links(&owner_metadata) {
+        return Ok(compromised(
+            "owner token has multiple filesystem links; refusing aliased ownership state",
+        ));
+    }
     if owner_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
         return Ok(compromised(
             "owner token exceeds the portable 2048-byte UTF-8 storage bound",
@@ -83,6 +90,18 @@ pub fn inspect_local_file_lock(
 
     let mut owner_file = File::open(&owner_path)
         .map_err(|error| io_error(path, "open local lock owner token", error))?;
+    let opened_metadata = owner_file
+        .metadata()
+        .map_err(|error| io_error(path, "reinspect opened local lock owner token", error))?;
+    if !opened_metadata.is_file()
+        || metadata_is_alias(&opened_metadata)
+        || metadata_has_multiple_links(&opened_metadata)
+    {
+        return Ok(compromised(
+            "opened owner token is aliased or multiply linked",
+        ));
+    }
+
     let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
     owner_file
         .by_ref()
@@ -259,6 +278,18 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     {
+        false
+    }
+}
+
+fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        return metadata.nlink() != 1;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
         false
     }
 }

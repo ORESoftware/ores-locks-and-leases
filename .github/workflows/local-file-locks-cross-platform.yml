@@ -112,6 +112,7 @@ jobs:
           cargo test --locked --no-default-features --test local_file_semantic_v5
           cargo test --locked --no-default-features --test local_file_retry_budget_v6
           cargo test --locked --no-default-features --test local_file_parent_lifecycle_v6
+          cargo test --locked --no-default-features --test local_file_hardlink_v6
 
       - name: Go portable local lock tests
         working-directory: src/go
@@ -142,3 +143,6 @@ jobs:
 
       - name: Cross-runtime process interoperability and crash matrix
         run: node scripts/check-local-file-process-interop.mjs
+
+      - name: Sixth-order process and recovery matrix
+        run: node scripts/check-local-file-process-sixth-order.mjs
