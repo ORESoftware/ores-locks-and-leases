@@ -6,6 +6,7 @@
     path_kind/1,
     directory_shape/1,
     write_new_file_status/2,
+    make_private_directory_status/1,
     make_symlink_status/2,
     make_hardlink_status/2,
     unicode_codepoint_count/1,
@@ -51,6 +52,29 @@ directory_shape(Path) ->
             end;
         {ok, _} -> 1;
         {error, _} -> 2
+    end.
+
+%% Atomically claim the rendezvous with make_dir, then tighten the newly owned
+%% directory to 0700 before publishing any owner identity. Erlang's file API
+%% does not expose a per-call mkdir mode, so POSIX mode tightening is the first
+%% operation after the atomic claim. If chmod fails, roll the still-empty
+%% provisional directory back and fail closed.
+%% 0 success, 1 already exists, 2 other IO/mode failure.
+make_private_directory_status(Path) ->
+    case file:make_dir(Path) of
+        {error, eexist} -> 1;
+        {error, _} -> 2;
+        ok ->
+            case os:type() of
+                {unix, _} ->
+                    case file:change_mode(Path, 8#700) of
+                        ok -> 0;
+                        {error, _} ->
+                            _ = file:del_dir(Path),
+                            2
+                    end;
+                _ -> 0
+            end
     end.
 
 %% Create the owner marker without overwriting an attacker- or race-created
