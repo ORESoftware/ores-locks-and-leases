@@ -16,6 +16,13 @@ import type { LockKey } from "./key.js";
  */
 export type FencingToken = bigint;
 
+export const MAX_REQUEST_ID_CHARS = 256;
+
+/** Peer-authoritative request-id shape: non-empty and at most 256 Unicode code points. */
+export function validRequestId(value: string): boolean {
+  return Array.from(value).length >= 1 && Array.from(value).length <= MAX_REQUEST_ID_CHARS;
+}
+
 /** DOM-independent abort listener shape for queued acquisition. */
 export type AcquireAbortListener = () => void;
 
@@ -141,7 +148,6 @@ export async function settled<T>(promise: Promise<T>): Promise<Outcome<T>> {
 
 /** Release the lease and combine its outcome with the inner one. */
 export async function settle<T>(key: LockKey, lease: Lease, grant: LeaseGrant, inner: Outcome<T>): Promise<T> {
-  // Invoke inside the promise boundary: structural adapters may throw synchronously.
   const released = await settled(Promise.resolve().then(() => lease.release(grant)));
   if (!released.ok) {
     const cleanup = tagStep(
