@@ -147,9 +147,14 @@ export async function try_acquire_local_file_lock(
   validate_local_file_lock_path(path);
   validate_local_file_lock_owner(path, owner);
   const parent = dirname(path);
-  await mkdir(parent, { recursive: true, mode: 0o700 });
-  await validate_real_directory(path, parent, "lock parent");
-  await validate_posix_trusted_parent(path, parent);
+  try {
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    await validate_real_directory(path, parent, "lock parent");
+    await validate_posix_trusted_parent(path, parent);
+  } catch (error) {
+    if (error instanceof LocalFileLockError) throw error;
+    throw io_error(path, "prepare local lock parent", error);
+  }
 
   let created = false;
   for (let transitionAttempt = 0; transitionAttempt < 2; transitionAttempt += 1) {
