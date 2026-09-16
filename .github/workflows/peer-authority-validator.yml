@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   security-events: write
 
 concurrency:
@@ -26,35 +26,6 @@ env:
   EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
-  repair-rustfmt:
-    if: github.event_name == 'pull_request' && github.head_ref == 'reconcile/den-3828-shared-interfaces-current-main-20260915'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out writable feature branch
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.head_ref }}
-          persist-credentials: true
-          fetch-depth: 2
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
-        with:
-          toolchain: '1.85.1'
-          components: rustfmt
-      - name: Format Rust and remove this one-shot repair job
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo fmt --manifest-path src/rust/Cargo.toml --all
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git checkout origin/main -- .github/workflows/peer-authority-validator.yml
-          git diff --check
-          git config user.name 'ORESoftware automation'
-          git config user.email 'alex@oresoftware.com'
-          git add src/rust .github/workflows/peer-authority-validator.yml
-          git commit -m 'style: apply pinned rustfmt to current lock runtime'
-          git push origin HEAD:${{ github.head_ref }}
-
   parity:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
