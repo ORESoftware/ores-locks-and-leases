@@ -37,8 +37,8 @@ fn run(
   }
 
   case local_file.try_acquire(lock_root, lock_name, owner) {
-    Error(_) -> {
-      io.println("LOCK_ERROR")
+    Error(error) -> {
+      io.println("ERROR:" <> error_kind_label(error.kind))
       halt(20)
     }
     Ok(None) -> {
@@ -62,12 +62,22 @@ fn run(
           io.println("RELEASED")
           Nil
         }
-        Error(_) -> {
-          io.println("RELEASE_ERROR")
+        Error(error) -> {
+          io.println("RELEASE_ERROR:" <> error_kind_label(error.kind))
           halt(21)
         }
       }
     }
+  }
+}
+
+fn error_kind_label(kind: local_file.LocalFileLockErrorKind) -> String {
+  case kind {
+    local_file.Contention -> "contention"
+    local_file.Timeout -> "timeout"
+    local_file.Compromised -> "compromised"
+    local_file.Io -> "io"
+    local_file.InvalidInput -> "invalid_input"
   }
 }
 
