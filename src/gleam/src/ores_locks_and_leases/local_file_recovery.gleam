@@ -30,7 +30,9 @@ pub type LocalFileLockInspectionReason {
   OwnerContractViolation
 }
 
-pub fn inspection_reason_string(reason: LocalFileLockInspectionReason) -> String {
+pub fn inspection_reason_string(
+  reason: LocalFileLockInspectionReason,
+) -> String {
   case reason {
     OwnerMarkerMissing -> "owner_marker_missing"
     PathNotDirectory -> "path_not_directory"
