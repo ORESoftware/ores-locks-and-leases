@@ -143,6 +143,10 @@ jobs:
           fi
           (cd src/gleam && gleam build)
 
+      - name: Windows reserved/device/ADS path admission matrix
+        if: runner.os == 'Windows'
+        run: node scripts/check-local-file-windows-path-policy.mjs
+
       - name: Cross-runtime process interoperability and crash matrix
         run: node scripts/check-local-file-process-interop.mjs
 
