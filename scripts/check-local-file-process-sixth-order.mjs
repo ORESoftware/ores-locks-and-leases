@@ -280,8 +280,15 @@ async function proveSixthOrder(root) {
   record("all-runtimes-crash-recover-and-same-runtime-reacquire");
 
   // 20. Nested caller-owned parent with Unicode/spaces survives the four-runtime handoff.
+  // Windows rejects trailing-space path components by contract; POSIX keeps the
+  // stronger surrounding-whitespace spelling while Windows still exercises
+  // Unicode and embedded spaces through an otherwise portable component.
   {
-    const parent = join(root, " caller parent λ ", "nested 子 directory");
+    const parent = join(
+      root,
+      isWindows ? "caller parent λ" : " caller parent λ ",
+      "nested 子 directory",
+    );
     await mkdir(parent, { recursive: true });
     const lockPath = join(parent, "handoff.lock");
     for (const runtime of runtimes) {

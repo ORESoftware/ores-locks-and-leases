@@ -19,6 +19,7 @@ pub fn hard_linked_owner_fails_closed_when_runtime_exposes_link_count_test() {
         local_file_recovery.Compromised,
         _,
         _,
+        _,
       )) = local_file_recovery.inspect(root, "install.lock")
       let assert Error(release_error) = local_file.release(lock)
       release_error.kind |> should.equal(local_file.Compromised)

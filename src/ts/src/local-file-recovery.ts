@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import {
   LOCAL_FILE_LOCK_OWNER_FILE,
+  LOCAL_FILE_LOCK_OWNER_PENDING_FILE,
   LocalFileLockError,
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
   MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
@@ -68,8 +69,16 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
       "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
     );
   }
+  if (entries.length === 1 && entries[0] === LOCAL_FILE_LOCK_OWNER_PENDING_FILE) {
+    return incomplete(
+      "owner publication is incomplete; pending owner marker is not ownership authority",
+    );
+  }
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
-    return compromised("dirty_directory", "lock directory must contain exactly one owner marker");
+    return compromised(
+      "dirty_directory",
+      "lock directory must contain exactly one published owner marker",
+    );
   }
 
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
@@ -194,15 +203,6 @@ async function lstat_inspection_lock_path(path: string) {
   throw io_error(path, "inspect local lock path", lastError);
 }
 
-/**
- * Read the bounded directory shape while tolerating only the two OS-level
- * disappearance signals produced by a concurrent clean release.
- *
- * POSIX typically reports ENOENT when rmdir wins between lstat and opendir.
- * Windows can transiently report EPERM while the directory is deletion-pending.
- * For Windows EPERM we perform a tiny bounded retry: disappearance linearizes
- * as `absent`; a persistent EPERM on an extant path remains a genuine IO error.
- */
 async function read_inspection_entry_names(path: string): Promise<string[] | null> {
   const maxAttempts = process.platform === "win32" ? 4 : 1;
   let lastError: unknown;
@@ -238,13 +238,6 @@ async function read_inspection_entry_names(path: string): Promise<string[] | nul
   throw lastError;
 }
 
-/**
- * Read the owner marker for diagnostics while preserving fail-closed release
- * behavior. Windows may report EPERM when a clean concurrent release has
- * already put the owner/directory into deletion-pending state. Inspection may
- * linearize that bounded race as absent/incomplete, but persistent EPERM on an
- * extant lock remains an IO error and is never converted to healthy state.
- */
 async function read_inspection_owner(
   path: string,
   ownerPath: string,
