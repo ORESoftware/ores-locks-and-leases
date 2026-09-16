@@ -34,6 +34,8 @@ declare module "node:fs/promises" {
       length: number,
       position: number,
     ): Promise<{ bytesRead: number; buffer: Uint8Array }>;
+    writeFile(data: string | Uint8Array, options?: { encoding?: string }): Promise<void>;
+    sync(): Promise<void>;
     stat(): Promise<LocalFileStats>;
     close(): Promise<void>;
   }
@@ -43,13 +45,15 @@ declare module "node:fs/promises" {
     options?: { recursive?: boolean; mode?: number },
   ): Promise<string | undefined>;
 
-  export function open(path: string, flags: string): Promise<LocalFileHandle>;
+  export function open(path: string, flags: string, mode?: number): Promise<LocalFileHandle>;
 
   export function opendir(path: string): Promise<LocalDirectory>;
 
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
 
   export function readdir(path: string): Promise<string[]>;
+
+  export function rename(oldPath: string, newPath: string): Promise<void>;
 
   export function rmdir(path: string): Promise<void>;
 
