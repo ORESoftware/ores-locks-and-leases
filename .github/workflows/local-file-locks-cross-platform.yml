@@ -9,6 +9,8 @@ on:
       - "docs/local-file-*.md"
       - "docs/scoped-local-file-locks.md"
       - "scripts/check-local-file-*.mjs"
+      - "scripts/gleam-startup-shim.mjs"
+      - "scripts/run-with-gleam-startup-serialization.mjs"
       - "src/rust/local_file*.rs"
       - "src/rust/lib.rs"
       - "src/rust/tests/local_file*.rs"
@@ -35,6 +37,8 @@ on:
       - "docs/local-file-*.md"
       - "docs/scoped-local-file-locks.md"
       - "scripts/check-local-file-*.mjs"
+      - "scripts/gleam-startup-shim.mjs"
+      - "scripts/run-with-gleam-startup-serialization.mjs"
       - "src/rust/local_file*.rs"
       - "src/rust/lib.rs"
       - "src/rust/tests/local_file*.rs"
@@ -148,16 +152,16 @@ jobs:
         run: node scripts/check-local-file-windows-path-policy.mjs
 
       - name: Cross-runtime process interoperability and crash matrix
-        run: node scripts/check-local-file-process-interop.mjs
+        run: node scripts/run-with-gleam-startup-serialization.mjs scripts/check-local-file-process-interop.mjs
 
       - name: Sixth-order process and recovery matrix
-        run: node scripts/check-local-file-process-sixth-order.mjs
+        run: node scripts/run-with-gleam-startup-serialization.mjs scripts/check-local-file-process-sixth-order.mjs
 
       - name: Eighth-order process identity, isolation, and recovery matrix
-        run: node scripts/check-local-file-process-eighth-order.mjs
+        run: node scripts/run-with-gleam-startup-serialization.mjs scripts/check-local-file-process-eighth-order.mjs
 
       - name: Ninth-order path alias, transition, and recovery isolation matrix
-        run: node scripts/check-local-file-process-ninth-order.mjs
+        run: node scripts/run-with-gleam-startup-serialization.mjs scripts/check-local-file-process-ninth-order.mjs
 
       - name: Eleventh-order publication fault-state and observer matrix
         run: node scripts/check-local-file-process-eleventh-order.mjs

@@ -17,6 +17,11 @@ const rustProbe = resolve(repoRoot, `src/rust/target/debug/examples/local_file_p
 const goProbe = resolve(repoRoot, `tmp/local-file-go-probe${exe}`);
 const nodeProbe = resolve(repoRoot, "src/ts/test/local-file-process-probe.mjs");
 const gleamRoot = resolve(repoRoot, "src/gleam");
+const gleamEbinRoot = resolve(gleamRoot, "build/dev/erlang");
+const gleamEbinPaths = (await readdir(gleamEbinRoot))
+  .sort()
+  .map((name) => resolve(gleamEbinRoot, name, "ebin"));
+const gleamCodePathArgs = gleamEbinPaths.flatMap((path) => ["-pa", path]);
 const runtimes = ["rust", "go", "node", "gleam"];
 const report = [];
 
@@ -36,12 +41,17 @@ function commandFor(runtime, mode, lockPath, owner, holdMs = 0) {
   }
   if (runtime === "gleam") {
     return {
-      command: "gleam",
+      command: "erl",
       args: [
-        "run",
-        "-m",
+        "-noshell",
+        ...gleamCodePathArgs,
+        "-s",
         "local_file_probe",
-        "--",
+        "main",
+        "-s",
+        "init",
+        "stop",
+        "-extra",
         mode,
         dirname(lockPath),
         basename(lockPath),
