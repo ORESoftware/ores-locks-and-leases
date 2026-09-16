@@ -62,7 +62,7 @@
 //!
 //! ```text
 //! local-only: mkdir(lock) -> write owner -> work -> verify owner -> rmdir(lock)
-//! distributed: lease.acquire -> pg.begin -> pg_advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
+//! distributed: lease.acquire -> pg.begin -> pg.advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
 //! ```
 
 pub mod error;
@@ -76,9 +76,6 @@ pub mod managed;
 pub mod plan;
 pub mod renewal;
 
-#[cfg(feature = "config")]
-pub mod config;
-
 #[cfg(feature = "pg")]
 pub mod pg;
 
@@ -91,14 +88,6 @@ pub mod coordinated;
 #[cfg(all(feature = "pg", any(feature = "fiducia", feature = "maintained")))]
 pub mod maintained;
 
-#[cfg(feature = "config")]
-pub use config::{
-    CloudflareDurableObjectProviderConfig, EnvBinding, EnvKind, FiduciaProviderConfig,
-    LOCK_CONFIG_SCHEMA_V1, LocalFileProviderConfig, LockConfigError, LockProfileConfig,
-    MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES, MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS,
-    MAX_WAIT_TIMEOUT_MS, OresLockConfigV1, OuterLeaseAuthority, PostgresLockScope,
-    PostgresProviderConfig, ProviderSelection, RedisProviderConfig,
-};
 pub use error::{LockError, LockErrorKind};
 pub use fence::{
     FenceDecision, FenceDecisionKind, FenceValidationError, FenceWatermark, FencedWriteRequest,
@@ -112,8 +101,8 @@ pub use local_file::{
     local_file_lock_exists,
 };
 pub use local_file_recovery::{
-    LocalFileLockInspection, LocalFileLockInspectionState, inspect_local_file_lock,
-    recover_local_file_lock,
+    LocalFileLockInspection, LocalFileLockInspectionReason, LocalFileLockInspectionState,
+    inspect_local_file_lock, recover_local_file_lock,
 };
 pub use local_file_scoped::{ScopedLocalFileLockError, with_local_file_lock};
 pub use managed::{
@@ -121,7 +110,6 @@ pub use managed::{
     ManagedLeaseBackend, ManagedLeaseTransport, ManagedRenewResult, RedisLease,
 };
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
-
 pub use renewal::{
     MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS, MonotonicClock, RenewalCheckpoint, RenewalDecision,
     RenewalError, RenewalLossReason, RenewalPolicy, RenewalSupervisor,

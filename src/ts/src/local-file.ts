@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { lstat, mkdir, open, opendir, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises";
 
 export const LOCAL_FILE_LOCK_OWNER_FILE = "owner";
+export const LOCAL_FILE_LOCK_OWNER_PENDING_FILE = "owner.pending";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
-export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES =
-  MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS * 4;
-/** Node timers clamp larger delays; never submit an oversized delay. */
+export const MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES = MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS * 4;
 export const MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS = 2_147_483_647;
 
 export type LocalFileLockErrorKind =
@@ -29,11 +28,9 @@ export class LocalFileLockError extends Error {
 }
 
 export interface LocalFileLockOptions {
-  /** When false, acquisition is one immediate attempt. */
   wait?: boolean;
-  /** Finite wait budget. Defaults to 30 seconds. */
+  /** End-to-end finite wait budget, including filesystem-call latency. */
   wait_timeout_ms?: number;
-  /** Delay between portable mkdir attempts. Defaults to 50 ms. */
   retry_interval_ms?: number;
 }
 
@@ -43,19 +40,13 @@ export const DEFAULT_LOCAL_FILE_LOCK_OPTIONS: Readonly<Required<LocalFileLockOpt
   retry_interval_ms: 50,
 });
 
-/** Generate a fresh owner identity from the Node.js OS-backed CSPRNG. */
 export function generated_local_file_lock_owner(): string {
   return `ores-locks-${randomUUID()}`;
 }
 
 type LocalFileLockReleaseState = "held" | "released" | "partial";
+const LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN = Symbol("ores-local-file-lock-held-constructor");
 
-/**
- * Held portable single-host filesystem lock.
- *
- * Atomic directory creation is the admission authority. The owner file is an
- * owner-safe release token and diagnostics; it is never a stale PID authority.
- */
 export class LocalFileLock {
   readonly path: string;
   readonly owner: string;
@@ -63,7 +54,14 @@ export class LocalFileLock {
   #release_promise: Promise<void> | undefined;
   #partial_release_error: unknown | undefined;
 
-  constructor(path: string, owner: string) {
+  constructor(path: string, owner: string, token: typeof LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN) {
+    if (token !== LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN) {
+      throw new LocalFileLockError(
+        "invalid_input",
+        path,
+        "LocalFileLock instances must be created by the acquisition API",
+      );
+    }
     this.path = path;
     this.owner = owner;
   }
@@ -100,14 +98,13 @@ export class LocalFileLock {
       throw new LocalFileLockError(
         "compromised",
         this.path,
-        "lock directory must contain exactly one owner marker before release",
+        "lock directory must contain exactly one published owner marker before release",
       );
     }
 
-    const owner_path = join(this.path, LOCAL_FILE_LOCK_OWNER_FILE);
-    await validate_regular_file(this.path, owner_path, "owner token");
-
-    const observed = await read_bounded_local_file_lock_owner(this.path, owner_path);
+    const ownerPath = join(this.path, LOCAL_FILE_LOCK_OWNER_FILE);
+    await validate_regular_file(this.path, ownerPath, "owner token");
+    const observed = await read_bounded_local_file_lock_owner(this.path, ownerPath);
     if (observed !== this.owner) {
       throw new LocalFileLockError(
         "compromised",
@@ -118,7 +115,7 @@ export class LocalFileLock {
 
     let ownerRemoved = false;
     try {
-      await unlink(owner_path);
+      await unlink(ownerPath);
       ownerRemoved = true;
       await rmdir(this.path);
     } catch (error) {
@@ -139,11 +136,7 @@ export class LocalFileLock {
   }
 }
 
-/** One immediate atomic attempt. `null` means ordinary contention. */
-export async function try_acquire_local_file_lock(
-  path: string,
-  owner: string,
-): Promise<LocalFileLock | null> {
+export async function try_acquire_local_file_lock(path: string, owner: string): Promise<LocalFileLock | null> {
   validate_local_file_lock_path(path);
   validate_local_file_lock_owner(path, owner);
   const parent = dirname(path);
@@ -168,7 +161,6 @@ export async function try_acquire_local_file_lock(
       if (error_code(error) !== "EEXIST") {
         throw io_error(path, "atomically create local lock directory", error);
       }
-
       try {
         const metadata = await lstat(path);
         if (metadata.isDirectory() && !metadata.isSymbolicLink()) return null;
@@ -190,12 +182,44 @@ export async function try_acquire_local_file_lock(
   }
   if (!created) return null;
 
-  const owner_path = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
+  const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
+  const pendingPath = join(path, LOCAL_FILE_LOCK_OWNER_PENDING_FILE);
+  let pendingHandle;
   try {
-    await writeFile(owner_path, owner, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    pendingHandle = await open(pendingPath, "wx", 0o600);
+    await pendingHandle.writeFile(owner, { encoding: "utf8" });
+    await pendingHandle.sync();
+    await pendingHandle.close();
+    pendingHandle = undefined;
+
+    try {
+      await lstat(ownerPath);
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        "published owner target already exists before atomic publication",
+      );
+    } catch (targetError) {
+      if (targetError instanceof LocalFileLockError) throw targetError;
+      if (error_code(targetError) !== "ENOENT") {
+        throw io_error(path, "inspect owner publication target", targetError);
+      }
+    }
+    await rename(pendingPath, ownerPath);
   } catch (error) {
+    try {
+      await pendingHandle?.close();
+    } catch {
+      // Preserve the original publication failure.
+    }
     let rollbackError: unknown;
     try {
+      await unlink(pendingPath).catch((cleanupError) => {
+        if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
+      });
+      await unlink(ownerPath).catch((cleanupError) => {
+        if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
+      });
       await rmdir(path);
     } catch (cleanupError) {
       rollbackError = cleanupError;
@@ -204,27 +228,28 @@ export async function try_acquire_local_file_lock(
       throw new LocalFileLockError(
         "compromised",
         path,
-        `owner-token write failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
+        `owner publication failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
         rollbackError,
       );
     }
+    if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "EEXIST") {
       throw new LocalFileLockError(
         "compromised",
         path,
-        "owner token already exists after winning lock directory creation",
+        "owner publication marker already exists after winning lock directory creation",
         error,
       );
     }
-    throw io_error(path, "write local lock owner token", error);
+    throw io_error(path, "publish local lock owner token", error);
   }
 
   try {
-    await validate_regular_file(path, owner_path, "owner token");
+    await validate_regular_file(path, ownerPath, "owner token");
   } catch (error) {
     let rollbackError: unknown;
     try {
-      await unlink(owner_path);
+      await unlink(ownerPath);
       await rmdir(path);
     } catch (cleanupError) {
       rollbackError = cleanupError;
@@ -240,10 +265,9 @@ export async function try_acquire_local_file_lock(
     throw error;
   }
 
-  return new LocalFileLock(path, owner);
+  return new LocalFileLock(path, owner, LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN);
 }
 
-/** Acquire with optional finite waiting. */
 export async function acquire_local_file_lock(
   path: string,
   owner: string,
@@ -253,18 +277,14 @@ export async function acquire_local_file_lock(
   validate_local_file_lock_owner(path, owner);
   const resolved = { ...DEFAULT_LOCAL_FILE_LOCK_OPTIONS, ...options };
   validate_options(path, resolved);
-  // `performance.now()` is monotonic in supported Node runtimes and avoids
-  // wall-clock jumps changing a finite lock-wait budget.
   const started = performance.now();
 
   for (;;) {
     const lock = await try_acquire_local_file_lock(path, owner);
     if (lock !== null) return lock;
-
     if (!resolved.wait) {
       throw new LocalFileLockError("contention", path, "lock is already held by another owner");
     }
-
     const elapsed = performance.now() - started;
     if (elapsed >= resolved.wait_timeout_ms) {
       throw new LocalFileLockError(
@@ -273,7 +293,6 @@ export async function acquire_local_file_lock(
         `timed out after ${resolved.wait_timeout_ms} ms waiting for local lock`,
       );
     }
-
     await sleep(local_file_lock_sleep_delay_ms(
       resolved.retry_interval_ms,
       resolved.wait_timeout_ms - elapsed,
@@ -281,13 +300,6 @@ export async function acquire_local_file_lock(
   }
 }
 
-/**
- * Compatibility diagnostic. Returns true only for a structurally healthy
- * held lock, false when absent, and fails closed for provisional/compromised
- * state. Prefer `inspect_local_file_lock` when callers need tri-state detail.
- *
- * @deprecated Prefer `inspect_local_file_lock` for diagnostics.
- */
 export async function local_file_lock_exists(path: string): Promise<boolean> {
   validate_local_file_lock_path(path);
   let metadata;
@@ -298,37 +310,26 @@ export async function local_file_lock_exists(path: string): Promise<boolean> {
     throw io_error(path, "inspect local lock path", error);
   }
   if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
-    throw new LocalFileLockError(
-      "compromised",
-      path,
-      "lock path exists but is not an unaliased directory",
-    );
+    throw new LocalFileLockError("compromised", path, "lock path exists but is not an unaliased directory");
   }
   validate_posix_private_mode(path, metadata.mode, "lock directory");
-
   const entries = await read_local_file_lock_entry_names_bounded(path);
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
     throw new LocalFileLockError(
       "compromised",
       path,
-      "lock directory must contain exactly one owner marker",
+      "lock directory must contain exactly one published owner marker",
     );
   }
-
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   await validate_regular_file(path, ownerPath, "owner token");
   const owner = await read_bounded_local_file_lock_owner(path, ownerPath);
   if (owner.length === 0 || Array.from(owner).length > MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS) {
-    throw new LocalFileLockError(
-      "compromised",
-      path,
-      "owner token violates the portable owner contract",
-    );
+    throw new LocalFileLockError("compromised", path, "owner token violates the portable owner contract");
   }
   return true;
 }
 
-/** Read no more than two names: enough to prove the one-owner-marker invariant. */
 export async function read_local_file_lock_entry_names_bounded(path: string): Promise<string[]> {
   let directory;
   try {
@@ -346,19 +347,12 @@ export async function read_local_file_lock_entry_names_bounded(path: string): Pr
   }
 }
 
-export async function read_bounded_local_file_lock_owner(
-  lockPath: string,
-  ownerPath: string,
-): Promise<string> {
+export async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {
   let handle;
   try {
     const pathMetadata = await lstat(ownerPath);
     if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
-      throw new LocalFileLockError(
-        "compromised",
-        lockPath,
-        "owner token is not an unaliased regular file",
-      );
+      throw new LocalFileLockError("compromised", lockPath, "owner token is not an unaliased regular file");
     }
     if (pathMetadata.nlink !== 1) {
       throw new LocalFileLockError(
@@ -401,8 +395,18 @@ export async function read_bounded_local_file_lock_owner(
     }
 
     const buffer = new Uint8Array(MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, 0);
-    if (bytesRead > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
+    let totalBytesRead = 0;
+    while (totalBytesRead < buffer.byteLength) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        totalBytesRead,
+        buffer.byteLength - totalBytesRead,
+        totalBytesRead,
+      );
+      if (bytesRead === 0) break;
+      totalBytesRead += bytesRead;
+    }
+    if (totalBytesRead > MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES) {
       throw new LocalFileLockError(
         "compromised",
         lockPath,
@@ -410,14 +414,9 @@ export async function read_bounded_local_file_lock_owner(
       );
     }
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead));
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, totalBytesRead));
     } catch (error) {
-      throw new LocalFileLockError(
-        "compromised",
-        lockPath,
-        "owner token is not valid UTF-8",
-        error,
-      );
+      throw new LocalFileLockError("compromised", lockPath, "owner token is not valid UTF-8", error);
     }
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
@@ -430,13 +429,8 @@ export async function read_bounded_local_file_lock_owner(
   }
 }
 
-/** Pure scheduling policy used to keep huge valid int64-like waits safe in Node. */
 export function local_file_lock_sleep_delay_ms(retryIntervalMs: number, remainingMs: number): number {
-  return Math.max(0, Math.min(
-    retryIntervalMs,
-    remainingMs,
-    MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS,
-  ));
+  return Math.max(0, Math.min(retryIntervalMs, remainingMs, MAX_LOCAL_FILE_LOCK_TIMER_DELAY_MS));
 }
 
 export function validate_local_file_lock_path(path: string): void {
@@ -453,7 +447,41 @@ export function validate_local_file_lock_path(path: string): void {
       "local lock path must contain only valid Unicode scalar values",
     );
   }
+  if (process.platform === "win32" && !windows_local_file_lock_path_admitted(path)) {
+    throw new LocalFileLockError(
+      "invalid_input",
+      path,
+      "Windows local lock paths must avoid device namespaces, reserved device names, trailing dot/space components, and alternate-data-stream syntax",
+    );
+  }
 }
+
+function windows_local_file_lock_path_admitted(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  const lower = normalized.toLowerCase();
+  if (lower.startsWith("//?/") || lower.startsWith("//./") || lower.startsWith("/??/")) return false;
+
+  let first = true;
+  for (const component of normalized.split("/")) {
+    if (component.length === 0) continue;
+    if (component === "." || component === "..") continue;
+    if (first && /^[A-Za-z]:$/.test(component)) {
+      first = false;
+      continue;
+    }
+    first = false;
+    if (component.endsWith(".") || component.endsWith(" ") || component.includes(":")) return false;
+    const base = component.split(".", 1)[0]!.trim().toUpperCase();
+    if (WINDOWS_RESERVED_DEVICE_BASES.has(base)) return false;
+  }
+  return true;
+}
+
+const WINDOWS_RESERVED_DEVICE_BASES = new Set([
+  "CON", "PRN", "AUX", "NUL",
+  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+]);
 
 export function validate_local_file_lock_owner(path: string, owner: string): void {
   if (owner.length === 0) {
@@ -513,21 +541,17 @@ function validate_options(path: string, options: Required<LocalFileLockOptions>)
   }
 }
 
-async function validate_real_directory(lock_path: string, path: string, label: string): Promise<void> {
+async function validate_real_directory(lockPath: string, path: string, label: string): Promise<void> {
   try {
     const metadata = await lstat(path);
     if (metadata.isDirectory() && !metadata.isSymbolicLink()) return;
-    throw new LocalFileLockError(
-      "compromised",
-      lock_path,
-      `${label} is not an unaliased directory`,
-    );
+    throw new LocalFileLockError("compromised", lockPath, `${label} is not an unaliased directory`);
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "ENOENT") {
-      throw new LocalFileLockError("compromised", lock_path, `${label} is missing`, error);
+      throw new LocalFileLockError("compromised", lockPath, `${label} is missing`, error);
     }
-    throw io_error(lock_path, `inspect ${label}`, error);
+    throw io_error(lockPath, `inspect ${label}`, error);
   }
 }
 
@@ -570,27 +594,23 @@ function validate_posix_private_mode(lockPath: string, mode: number, label: stri
   }
 }
 
-async function validate_regular_file(lock_path: string, path: string, label: string): Promise<void> {
+async function validate_regular_file(lockPath: string, path: string, label: string): Promise<void> {
   try {
     const metadata = await lstat(path);
     if (metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1) {
-      validate_posix_private_mode(lock_path, metadata.mode, label);
+      validate_posix_private_mode(lockPath, metadata.mode, label);
       return;
     }
     const detail = metadata.isFile() && metadata.nlink !== 1
       ? `${label} has multiple filesystem links`
       : `${label} is not an unaliased regular file`;
-    throw new LocalFileLockError(
-      "compromised",
-      lock_path,
-      detail,
-    );
+    throw new LocalFileLockError("compromised", lockPath, detail);
   } catch (error) {
     if (error instanceof LocalFileLockError) throw error;
     if (error_code(error) === "ENOENT") {
-      throw new LocalFileLockError("compromised", lock_path, `${label} is missing`, error);
+      throw new LocalFileLockError("compromised", lockPath, `${label} is missing`, error);
     }
-    throw io_error(lock_path, `inspect ${label}`, error);
+    throw io_error(lockPath, `inspect ${label}`, error);
   }
 }
 
