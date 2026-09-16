@@ -21,7 +21,7 @@ jobs:
           persist-credentials: true
           show-progress: false
 
-      - name: Replay only the tenth-order commit range
+      - name: Apply the exact 24-file tenth-order delta with three-way semantics
         shell: bash
         env:
           BASE: e95730ee8705130e141cb2d7002f950658e08613
@@ -33,32 +33,25 @@ jobs:
           git fetch --no-tags origin refs/heads/den-2037-tenth-order-10-20260915:refs/remotes/origin/tenth-order-old
           git cat-file -e "$BASE^{commit}"
           git cat-file -e "$HEAD^{commit}"
-          mapfile -t commits < <(git rev-list --reverse --no-merges --ancestry-path "$BASE..$HEAD")
-          test "${#commits[@]}" -gt 0
-          echo "Replaying ${#commits[@]} tenth-order commits"
-          for commit in "${commits[@]}"; do
-            echo "cherry-pick $commit $(git show -s --format=%s "$commit")"
-            if ! git cherry-pick "$commit"; then
-              echo '::error::Semantic replay has conflicts; preserving diagnostics and aborting without push.'
-              git status --short
-              git diff --name-only --diff-filter=U
-              git diff --cc || true
-              git cherry-pick --abort || true
-              exit 1
-            fi
-          done
+          git diff --binary "$BASE" "$HEAD" > "$RUNNER_TEMP/tenth-order.patch"
+          if ! git apply --3way --index "$RUNNER_TEMP/tenth-order.patch"; then
+            echo '::error::Exact tenth-order delta has genuine overlapping hunks; preserving diagnostics without pushing.'
+            git status --short
+            git diff --name-only --diff-filter=U
+            git diff --cc || true
+            exit 1
+          fi
 
-          changed=$(git diff --name-only 82cb1a2c4ca535bdf23148b1b71d8494b91e0831..HEAD | grep -v '^.github/workflows/replay-tenth-order.yml$' | sort)
-          count=$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')
-          echo "Replayed file count: $count"
-          printf '%s\n' "$changed"
-          test "$count" -eq 24
+          mapfile -t changed < <(git diff --cached --name-only | sort)
+          echo "Replayed file count: ${#changed[@]}"
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 24
 
-      - name: Remove replay workflow and push replayed commits
+      - name: Commit replay, remove one-shot workflow, and push
         shell: bash
         run: |
           set -euo pipefail
-          rm .github/workflows/replay-tenth-order.yml
-          git add -A
-          git commit -m 'ci: remove one-shot tenth-order replay workflow'
+          git rm .github/workflows/replay-tenth-order.yml
+          git commit -m 'DEN-2037: replay tenth-order local-lock hardening on current main'
+          test "$(git diff --name-only 82cb1a2c4ca535bdf23148b1b71d8494b91e0831..HEAD | wc -l | tr -d ' ')" -eq 24
           git push origin HEAD:reconcile/den-2037-tenth-order-current-main-20260916
