@@ -19,292 +19,167 @@ jobs:
         with:
           ref: den-2037-tenth-order-10-20260915
           fetch-depth: 0
-      - name: Merge reconciled base and resolve the bounded Rust conflict set
+      - name: Merge reconciled base and resolve bounded Rust conflicts
         shell: bash
         run: |
           set -euo pipefail
           git config user.name ORESoftware
           git config user.email noreply@github.com
           git fetch origin den-2037-interop-fifth-order-20260914
-
           set +e
           git merge --no-commit --no-ff origin/den-2037-interop-fifth-order-20260914
           merge_rc=$?
           set -e
-
           if [ "$merge_rc" -ne 0 ]; then
             actual="$(git diff --name-only --diff-filter=U | sort)"
             expected="$(printf '%s\n' src/rust/local_file.rs src/rust/local_file_recovery.rs | sort)"
             if [ "$actual" != "$expected" ]; then
-              echo 'Unexpected conflict set; refusing automatic reconciliation.' >&2
-              printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual" >&2
+              printf 'Unexpected conflict set.\nExpected:\n%s\nActual:\n%s\n' "$expected" "$actual" >&2
               exit 1
             fi
             git checkout --ours -- src/rust/local_file.rs src/rust/local_file_recovery.rs
           fi
-
           node <<'NODE'
           const fs = require('node:fs');
-
-          function replaceOnce(text, from, to, label) {
-            const first = text.indexOf(from);
-            if (first < 0) throw new Error(`missing guarded replacement: ${label}`);
-            if (text.indexOf(from, first + from.length) >= 0) throw new Error(`non-unique guarded replacement: ${label}`);
-            return text.slice(0, first) + to + text.slice(first + from.length);
+          const lines = (...xs) => xs.join('\n') + '\n';
+          function once(text, from, to, label) {
+            const at = text.indexOf(from);
+            if (at < 0) throw new Error(`missing ${label}`);
+            if (text.indexOf(from, at + from.length) >= 0) throw new Error(`non-unique ${label}`);
+            return text.slice(0, at) + to + text.slice(at + from.length);
           }
-
-          const localPath = 'src/rust/local_file.rs';
-          let local = fs.readFileSync(localPath, 'utf8');
-          local = replaceOnce(local, 'use std::fs::{self, OpenOptions};', 'use std::fs::{self, File, OpenOptions};', 'Rust File import');
-          local = replaceOnce(local, 'use std::io::{self, Write};', 'use std::io::{self, Read, Write};', 'Rust Read import');
-          local = replaceOnce(local, 'const OWNER_MAX_CODEPOINTS: usize = 512;\n', 'const OWNER_MAX_CODEPOINTS: usize = 512;\nconst OWNER_MAX_UTF8_BYTES: usize = 2048;\n', 'Rust owner byte bound');
-          local = replaceOnce(
-            local,
-            '        if !created {\n            return Ok(None);\n        }\n\n        let owner_path = path.join(OWNER_FILE);',
-            '        if !created {\n            return Ok(None);\n        }\n        validate_private_lock_directory(path)?;\n\n        let owner_path = path.join(OWNER_FILE);',
-            'private directory validation after transition admission',
+          let p = 'src/rust/local_file.rs';
+          let s = fs.readFileSync(p, 'utf8');
+          s = once(s, 'use std::fs::{self, OpenOptions};', 'use std::fs::{self, File, OpenOptions};', 'File import');
+          s = once(s, 'use std::io::{self, Write};', 'use std::io::{self, Read, Write};', 'Read import');
+          s = once(s, 'const OWNER_MAX_CODEPOINTS: usize = 512;\n', 'const OWNER_MAX_CODEPOINTS: usize = 512;\nconst OWNER_MAX_UTF8_BYTES: usize = 2048;\n', 'byte bound');
+          s = once(s, lines('        if !created {','            return Ok(None);','        }','', '        let owner_path = path.join(OWNER_FILE);'), lines('        if !created {','            return Ok(None);','        }','        validate_private_lock_directory(path)?;','', '        let owner_path = path.join(OWNER_FILE);'), 'post-create privacy');
+          s = once(s, lines('        validate_real_directory(&self.path, &self.path, "lock directory")?;','        let owner_path = self.path.join(OWNER_FILE);'), lines('        validate_real_directory(&self.path, &self.path, "lock directory")?;','        validate_private_lock_directory(&self.path)?;','        let owner_path = self.path.join(OWNER_FILE);'), 'release privacy');
+          const startNeedle = lines('        validate_regular_file(&self.path, &owner_path, "owner token")?;','        let observed = match fs::read(&owner_path) {');
+          const endNeedle = '        if observed != self.owner.as_bytes() {';
+          const start = s.indexOf(startNeedle);
+          if (start < 0) throw new Error('missing release read start');
+          const end = s.indexOf(endNeedle, start);
+          if (end < 0) throw new Error('missing release read end');
+          s = s.slice(0, start) + lines('        let observed = read_bounded_owner(&self.path, &owner_path)?;') + '        if observed != self.owner {' + s.slice(end + endNeedle.length);
+          const helpers = lines(
+            'fn validate_private_lock_directory(path: &Path) -> Result<(), LocalFileLockError> {',
+            '    #[cfg(unix)]',
+            '    {',
+            '        let metadata = fs::symlink_metadata(path).map_err(|error| {',
+            '            LocalFileLockError::io(path, "inspect lock directory permissions", error)',
+            '        })?;',
+            '        if metadata.permissions().mode() & 0o077 != 0 {',
+            '            return Err(LocalFileLockError::new(',
+            '                LocalFileLockErrorKind::Compromised,',
+            '                path,',
+            '                "lock directory permissions widened beyond the private POSIX contract",',
+            '            ));',
+            '        }',
+            '    }',
+            '    Ok(())',
+            '}',
+            '',
+            'fn read_bounded_owner(lock_path: &Path, owner_path: &Path) -> Result<String, LocalFileLockError> {',
+            '    let path_metadata = match fs::symlink_metadata(owner_path) {',
+            '        Ok(metadata) => metadata,',
+            '        Err(error) if error.kind() == io::ErrorKind::NotFound => {',
+            '            return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, "owner token is missing; refusing to trust altered lock state"));',
+            '        }',
+            '        Err(error) => return Err(LocalFileLockError::io(lock_path, "inspect local lock owner token", error)),',
+            '    };',
+            '    if !path_metadata.is_file() || metadata_is_alias(&path_metadata) || metadata_has_multiple_links(&path_metadata) {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, "owner token is not a single-link unaliased regular file"));',
+            '    }',
+            '    if path_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound")));',
+            '    }',
+            '    let mut owner_file = File::open(owner_path).map_err(|error| LocalFileLockError::io(lock_path, "open local lock owner token", error))?;',
+            '    let opened_metadata = owner_file.metadata().map_err(|error| LocalFileLockError::io(lock_path, "inspect opened owner token", error))?;',
+            '    if !opened_metadata.is_file() || metadata_is_alias(&opened_metadata) || metadata_has_multiple_links(&opened_metadata) {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, "opened owner token is not a single-link unaliased regular file"));',
+            '    }',
+            '    if !same_file_identity(&path_metadata, &opened_metadata) {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, "owner token identity changed while opening; refusing raced path-to-handle state"));',
+            '    }',
+            '    if opened_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound")));',
+            '    }',
+            '    let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);',
+            '    owner_file.by_ref().take((OWNER_MAX_UTF8_BYTES + 1) as u64).read_to_end(&mut owner_bytes).map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;',
+            '    if owner_bytes.len() > OWNER_MAX_UTF8_BYTES {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound")));',
+            '    }',
+            '    let owner = String::from_utf8(owner_bytes).map_err(|_| LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, "owner token is not valid UTF-8"))?;',
+            '    if owner.is_empty() || owner.chars().count() > OWNER_MAX_CODEPOINTS {',
+            '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, "owner token violates the portable owner contract"));',
+            '    }',
+            '    Ok(owner)',
+            '}',
+            '',
+            '#[cfg(unix)]',
+            'fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {',
+            '    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()',
+            '}',
+            '',
+            '#[cfg(not(unix))]',
+            'fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {',
+            '    true',
+            '}',
+            ''
           );
-          local = replaceOnce(
-            local,
-            '        validate_real_directory(&self.path, &self.path, "lock directory")?;\n        let owner_path = self.path.join(OWNER_FILE);',
-            '        validate_real_directory(&self.path, &self.path, "lock directory")?;\n        validate_private_lock_directory(&self.path)?;\n        let owner_path = self.path.join(OWNER_FILE);',
-            'private directory validation before release',
+          if (s.includes('fn validate_private_lock_directory(') || s.includes('fn same_file_identity(')) throw new Error('unexpected existing local helper');
+          s = once(s, 'fn validate_real_directory(\n', helpers + 'fn validate_real_directory(\n', 'local helper insertion');
+          fs.writeFileSync(p, s);
+
+          p = 'src/rust/local_file_recovery.rs';
+          s = fs.readFileSync(p, 'utf8');
+          s = once(s, 'use std::fs::{self, File};', 'use std::ffi::OsString;\nuse std::fs::{self, File};', 'OsString import');
+          s = once(s, 'const OWNER_MAX_UTF8_BYTES: usize = 2048;\n', 'const OWNER_MAX_UTF8_BYTES: usize = 2048;\nconst INSPECTION_MAX_DIRECTORY_ENTRIES: usize = 2;\n', 'directory bound');
+          const oldRead = lines('    let entries = fs::read_dir(path)','        .map_err(|error| io_error(path, "list local lock directory", error))?','        .collect::<Result<Vec<_>, _>>()','        .map_err(|error| io_error(path, "read local lock directory entry", error))?;');
+          s = once(s, oldRead, lines('    let entries = read_entry_names_bounded(path)?;'), 'bounded enumeration');
+          s = once(s, 'entries[0].file_name() == OWNER_PENDING_FILE', 'entries[0] == OWNER_PENDING_FILE', 'pending comparison');
+          s = once(s, 'entries[0].file_name() != OWNER_FILE', 'entries[0] != OWNER_FILE', 'owner comparison');
+          const multi = lines('    if metadata_has_multiple_links(&opened_metadata) {','        return Ok(compromised(','            LocalFileLockInspectionReason::OwnerIdentityChanged,','            "opened owner token became multiply linked while inspecting",','        ));','    }');
+          const identity = lines('    if !same_file_identity(&owner_metadata, &opened_metadata) {','        return Ok(compromised(','            LocalFileLockInspectionReason::OwnerIdentityChanged,','            "owner token identity changed while opening; refusing raced path-to-handle state",','        ));','    }');
+          s = once(s, multi, multi + identity, 'path-to-handle identity');
+          const bounded = lines(
+            'fn read_entry_names_bounded(path: &Path) -> Result<Vec<OsString>, LocalFileLockError> {',
+            '    let mut directory = fs::read_dir(path).map_err(|error| io_error(path, "list local lock directory", error))?;',
+            '    let mut entries = Vec::with_capacity(INSPECTION_MAX_DIRECTORY_ENTRIES);',
+            '    for _ in 0..INSPECTION_MAX_DIRECTORY_ENTRIES {',
+            '        match directory.next() {',
+            '            None => break,',
+            '            Some(Ok(entry)) => entries.push(entry.file_name()),',
+            '            Some(Err(error)) => return Err(io_error(path, "read local lock directory entry", error)),',
+            '        }',
+            '    }',
+            '    Ok(entries)',
+            '}',
+            ''
           );
-
-          const releaseStart = '        validate_regular_file(&self.path, &owner_path, "owner token")?;\n        let observed = match fs::read(&owner_path) {';
-          const releaseEnd = '        if observed != self.owner.as_bytes() {';
-          const start = local.indexOf(releaseStart);
-          if (start < 0) throw new Error('missing guarded replacement: release owner read start');
-          if (local.indexOf(releaseStart, start + releaseStart.length) >= 0) throw new Error('non-unique guarded replacement: release owner read start');
-          const end = local.indexOf(releaseEnd, start);
-          if (end < 0) throw new Error('missing guarded replacement: release owner read end');
-          local = local.slice(0, start)
-            + '        let observed = read_bounded_owner(&self.path, &owner_path)?;\n'
-            + '        if observed != self.owner {'
-            + local.slice(end + releaseEnd.length);
-
-          const helperAnchor = 'fn validate_real_directory(\n';
-          const helperIndex = local.indexOf(helperAnchor);
-          if (helperIndex < 0) throw new Error('missing helper insertion anchor');
-          const helpers = `fn validate_private_lock_directory(path: &Path) -> Result<(), LocalFileLockError> {
-    #[cfg(unix)]
-    {
-        let metadata = fs::symlink_metadata(path).map_err(|error| {
-            LocalFileLockError::io(path, "inspect lock directory permissions", error)
-        })?;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(LocalFileLockError::new(
-                LocalFileLockErrorKind::Compromised,
-                path,
-                "lock directory permissions widened beyond the private POSIX contract",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn read_bounded_owner(lock_path: &Path, owner_path: &Path) -> Result<String, LocalFileLockError> {
-    let path_metadata = match fs::symlink_metadata(owner_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(LocalFileLockError::new(
-                LocalFileLockErrorKind::Compromised,
-                lock_path,
-                "owner token is missing; refusing to trust altered lock state",
-            ));
-        }
-        Err(error) => {
-            return Err(LocalFileLockError::io(
-                lock_path,
-                "inspect local lock owner token",
-                error,
-            ));
-        }
-    };
-    if !path_metadata.is_file() || metadata_is_alias(&path_metadata) {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "owner token is not an unaliased regular file",
-        ));
-    }
-    if metadata_has_multiple_links(&path_metadata) {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "owner token has multiple hard links; refusing aliased ownership state",
-        ));
-    }
-    if path_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound"),
-        ));
-    }
-
-    let mut owner_file = File::open(owner_path)
-        .map_err(|error| LocalFileLockError::io(lock_path, "open local lock owner token", error))?;
-    let opened_metadata = owner_file
-        .metadata()
-        .map_err(|error| LocalFileLockError::io(lock_path, "inspect opened owner token", error))?;
-    if !opened_metadata.is_file() || metadata_is_alias(&opened_metadata) {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "opened owner token is not an unaliased regular file",
-        ));
-    }
-    if metadata_has_multiple_links(&opened_metadata) {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "opened owner token has multiple hard links; refusing aliased ownership state",
-        ));
-    }
-    if !same_file_identity(&path_metadata, &opened_metadata) {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "owner token identity changed while opening; refusing raced path-to-handle state",
-        ));
-    }
-    if opened_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound"),
-        ));
-    }
-
-    let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
-    owner_file
-        .by_ref()
-        .take((OWNER_MAX_UTF8_BYTES + 1) as u64)
-        .read_to_end(&mut owner_bytes)
-        .map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;
-    if owner_bytes.len() > OWNER_MAX_UTF8_BYTES {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound"),
-        ));
-    }
-    let owner = String::from_utf8(owner_bytes).map_err(|_| {
-        LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "owner token is not valid UTF-8",
-        )
-    })?;
-    if owner.is_empty() || owner.chars().count() > OWNER_MAX_CODEPOINTS {
-        return Err(LocalFileLockError::new(
-            LocalFileLockErrorKind::Compromised,
-            lock_path,
-            "owner token violates the portable owner contract",
-        ));
-    }
-    Ok(owner)
-}
-
-#[cfg(unix)]
-fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
-    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {
-    true
-}
-
-`;
-          if (local.includes('fn validate_private_lock_directory(') || local.includes('fn same_file_identity(')) {
-            throw new Error('semantic-union helper already exists unexpectedly');
-          }
-          local = local.slice(0, helperIndex) + helpers + local.slice(helperIndex);
-          fs.writeFileSync(localPath, local);
-
-          const recoveryPath = 'src/rust/local_file_recovery.rs';
-          let recovery = fs.readFileSync(recoveryPath, 'utf8');
-          recovery = replaceOnce(recovery, 'use std::fs::{self, File};', 'use std::ffi::OsString;\nuse std::fs::{self, File};', 'recovery OsString import');
-          recovery = replaceOnce(recovery, 'const OWNER_MAX_UTF8_BYTES: usize = 2048;\n', 'const OWNER_MAX_UTF8_BYTES: usize = 2048;\nconst INSPECTION_MAX_DIRECTORY_ENTRIES: usize = 2;\n', 'bounded recovery directory constant');
-          const oldReadDir = `    let entries = fs::read_dir(path)
-        .map_err(|error| io_error(path, "list local lock directory", error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| io_error(path, "read local lock directory entry", error))?;`;
-          recovery = replaceOnce(recovery, oldReadDir, '    let entries = read_entry_names_bounded(path)?;', 'bounded recovery directory enumeration');
-          recovery = replaceOnce(recovery, 'entries[0].file_name() == OWNER_PENDING_FILE', 'entries[0] == OWNER_PENDING_FILE', 'pending marker comparison');
-          recovery = replaceOnce(recovery, 'entries[0].file_name() != OWNER_FILE', 'entries[0] != OWNER_FILE', 'owner marker comparison');
-
-          const identityAnchor = `    if metadata_has_multiple_links(&opened_metadata) {
-        return Ok(compromised(
-            LocalFileLockInspectionReason::OwnerIdentityChanged,
-            "opened owner token became multiply linked while inspecting",
-        ));
-    }
-`;
-          recovery = replaceOnce(
-            recovery,
-            identityAnchor,
-            identityAnchor + `    if !same_file_identity(&owner_metadata, &opened_metadata) {
-        return Ok(compromised(
-            LocalFileLockInspectionReason::OwnerIdentityChanged,
-            "owner token identity changed while opening; refusing raced path-to-handle state",
-        ));
-    }
-`,
-            'recovery path-to-handle identity check',
+          s = once(s, 'fn incomplete(message: &str) -> LocalFileLockInspection {\n', bounded + 'fn incomplete(message: &str) -> LocalFileLockInspection {\n', 'bounded helper');
+          const same = lines(
+            '#[cfg(unix)]',
+            'fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {',
+            '    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()',
+            '}',
+            '',
+            '#[cfg(not(unix))]',
+            'fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {',
+            '    true',
+            '}',
+            ''
           );
-
-          const incompleteAnchor = 'fn incomplete(message: &str) -> LocalFileLockInspection {\n';
-          const boundedHelper = `fn read_entry_names_bounded(path: &Path) -> Result<Vec<OsString>, LocalFileLockError> {
-    let mut directory =
-        fs::read_dir(path).map_err(|error| io_error(path, "list local lock directory", error))?;
-    let mut entries = Vec::with_capacity(INSPECTION_MAX_DIRECTORY_ENTRIES);
-    for _ in 0..INSPECTION_MAX_DIRECTORY_ENTRIES {
-        match directory.next() {
-            None => break,
-            Some(Ok(entry)) => entries.push(entry.file_name()),
-            Some(Err(error)) => {
-                return Err(io_error(path, "read local lock directory entry", error));
-            }
-        }
-    }
-    Ok(entries)
-}
-
-`;
-          recovery = replaceOnce(recovery, incompleteAnchor, boundedHelper + incompleteAnchor, 'bounded recovery helper');
-
-          const metadataAnchor = 'fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {\n';
-          const metadataIndex = recovery.indexOf(metadataAnchor);
-          if (metadataIndex < 0) throw new Error('missing recovery metadata helper anchor');
-          const identityHelpers = `#[cfg(unix)]
-fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
-    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {
-    true
-}
-
-`;
-          if (recovery.includes('fn same_file_identity(')) throw new Error('recovery same-file identity helper already exists unexpectedly');
-          recovery = recovery.slice(0, metadataIndex) + identityHelpers + recovery.slice(metadataIndex);
-          fs.writeFileSync(recoveryPath, recovery);
+          if (s.includes('fn same_file_identity(')) throw new Error('unexpected existing recovery identity helper');
+          s = once(s, 'fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {\n', same + 'fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {\n', 'recovery identity helper');
+          fs.writeFileSync(p, s);
           NODE
-
           cargo fmt --manifest-path src/rust/Cargo.toml --all
           cargo test --manifest-path src/rust/Cargo.toml --locked --no-default-features
-
           rm .github/workflows/tmp-probe-tenth-order-base-sync.yml
           git add -A
-          if git diff --name-only --diff-filter=U | grep -q .; then
-            echo 'Unresolved conflicts remain; refusing commit.' >&2
-            git diff --name-only --diff-filter=U >&2
-            exit 1
-          fi
+          test -z "$(git diff --name-only --diff-filter=U)"
           git diff --cached --check
           git status --short
           git commit -m 'sync(DEN-2037): merge reconciled base into tenth-order hardening'
