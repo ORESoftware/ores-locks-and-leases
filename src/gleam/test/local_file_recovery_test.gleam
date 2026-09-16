@@ -17,6 +17,7 @@ pub fn inspect_absent_and_held_local_lock_test() {
     local_file_recovery.Absent,
     None,
     None,
+    None,
   )) = local_file_recovery.inspect(root, "install.lock")
 
   let assert Ok(Some(_lock)) =
@@ -24,6 +25,7 @@ pub fn inspect_absent_and_held_local_lock_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Held,
     Some("owner-a"),
+    None,
     None,
   )) = local_file_recovery.inspect(root, "install.lock")
   local_file_recovery.recover(root, "install.lock", "owner-a", True)
@@ -39,12 +41,36 @@ pub fn inspect_empty_directory_is_incomplete_crash_state_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Incomplete,
     None,
+    Some(local_file_recovery.OwnerMarkerMissing),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
+  local_file_recovery.inspection_reason_string(
+    local_file_recovery.OwnerMarkerMissing,
+  )
+  |> should.equal("owner_marker_missing")
   let assert Error(error) =
     local_file_recovery.recover(root, "install.lock", "owner-a", True)
   error.kind |> should.equal(local_file.Compromised)
   simplifile.exists(path, True) |> should.equal(Ok(True))
+  clean(root)
+}
+
+pub fn inspect_pending_owner_publication_is_incomplete_test() {
+  let root = "./.tmp-local-file-recovery/pending"
+  clean(root)
+  let path = root <> "/install.lock"
+  let assert Ok(Nil) = simplifile.create_directory_all(path)
+  let assert Ok(Nil) =
+    simplifile.write(
+      to: path <> "/owner.pending",
+      contents: "syntactically-valid-owner-prefix",
+    )
+  let assert Ok(local_file_recovery.LocalFileLockInspection(
+    local_file_recovery.Incomplete,
+    None,
+    Some(local_file_recovery.OwnerMarkerMissing),
+    _,
+  )) = local_file_recovery.inspect(root, "install.lock")
   clean(root)
 }
 
@@ -58,6 +84,7 @@ pub fn owner_removed_before_rmdir_is_incomplete_crash_state_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Incomplete,
     None,
+    Some(local_file_recovery.OwnerMarkerMissing),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
   let assert Error(error) =
@@ -79,8 +106,13 @@ pub fn inspect_dirty_directory_is_compromised_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Compromised,
     _,
+    Some(local_file_recovery.DirtyDirectory),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
+  local_file_recovery.inspection_reason_string(
+    local_file_recovery.DirtyDirectory,
+  )
+  |> should.equal("dirty_directory")
   clean(root)
 }
 
@@ -95,6 +127,7 @@ pub fn inspect_oversized_persisted_owner_is_compromised_test() {
   let assert Ok(local_file_recovery.LocalFileLockInspection(
     local_file_recovery.Compromised,
     _,
+    Some(local_file_recovery.OwnerContractViolation),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
   clean(root)
@@ -107,10 +140,11 @@ pub fn owner_hard_link_is_compromised_for_inspection_and_release_test() {
     local_file.try_acquire(root, "install.lock", "owner-a")
   let path = local_file.local_file_lock_path(lock)
   let alias = root <> "/owner-alias"
-  case make_hard_link_status(path <> "/owner", alias) {
+  case make_hardlink_status(path <> "/owner", alias) {
     0 -> {
       let assert Ok(local_file_recovery.LocalFileLockInspection(
         local_file_recovery.Compromised,
+        _,
         _,
         _,
       )) = local_file_recovery.inspect(root, "install.lock")
@@ -143,6 +177,7 @@ pub fn recovery_requires_confirmation_and_exact_owner_test() {
   |> should.equal(
     Ok(local_file_recovery.LocalFileLockInspection(
       local_file_recovery.Absent,
+      None,
       None,
       None,
     )),
@@ -182,5 +217,5 @@ pub fn recovery_absent_noop_and_dirty_fails_closed_test() {
   clean(root)
 }
 
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "make_hard_link_status")
-fn make_hard_link_status(target: String, link: String) -> Int
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "make_hardlink_status")
+fn make_hardlink_status(target: String, link: String) -> Int

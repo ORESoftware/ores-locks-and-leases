@@ -244,6 +244,6 @@ test("dirty lock directories fail closed after bounded two-entry inspection", as
     }
     const inspection = await inspect_local_file_lock(path);
     assert.equal(inspection.state, "compromised");
-    assert.match(inspection.message ?? "", /exactly one owner marker/);
+    assert.match(inspection.message ?? "", /exactly one (?:published )?owner marker/);
   });
 });
