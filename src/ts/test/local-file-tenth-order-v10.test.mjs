@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -38,32 +38,67 @@ test("acquisition still returns an authenticated LocalFileLock capability", asyn
   });
 });
 
-test("destructive partial release preserves the original failure for later callers", async () => {
+test("dirty preflight failure is non-destructive and leaves the handle held", async () => {
   await withRoot(async (root) => {
-    const path = join(root, "partial.lock");
+    const path = join(root, "preflight.lock");
     const lock = await try_acquire_local_file_lock(path, "owner-a");
     assert.ok(lock);
-    await writeFile(join(path, "unexpected"), "dirty");
+    const unexpected = join(path, "unexpected");
+    await writeFile(unexpected, "dirty");
 
-    let first;
-    try {
-      await lock.release();
-      assert.fail("partial release must fail");
-    } catch (error) {
-      first = error;
-    }
-    assert.equal(lock.release_state, "partial");
+    await assert.rejects(
+      lock.release(),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    assert.equal(lock.release_state, "held");
 
-    let second;
-    try {
-      await lock.release();
-      assert.fail("repeated partial release must return retained failure");
-    } catch (error) {
-      second = error;
-    }
-    assert.equal(second, first, "partial handle must retain the original structured error object");
+    await rm(unexpected);
+    await lock.release();
+    assert.equal(lock.release_state, "released");
   });
 });
+
+test(
+  "destructive partial release preserves the original failure for later callers",
+  { skip: process.platform === "win32" },
+  async () => {
+    await withRoot(async (root) => {
+      const path = join(root, "partial.lock");
+      const lock = await try_acquire_local_file_lock(path, "owner-a");
+      assert.ok(lock);
+
+      // Owner removal happens inside the private 0700 lock directory, while
+      // removing that directory itself requires write permission on `root`.
+      // Tightening the parent therefore deterministically exercises the
+      // destructive owner-unlinked / rmdir-failed state on POSIX.
+      await chmod(root, 0o500);
+      let first;
+      try {
+        try {
+          await lock.release();
+          assert.fail("partial release must fail");
+        } catch (error) {
+          first = error;
+        }
+      } finally {
+        await chmod(root, 0o700);
+      }
+
+      assert.ok(first instanceof LocalFileLockError);
+      assert.equal(lock.release_state, "partial");
+      assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+
+      let second;
+      try {
+        await lock.release();
+        assert.fail("repeated partial release must return retained failure");
+      } catch (error) {
+        second = error;
+      }
+      assert.equal(second, first, "partial handle must retain the original structured error object");
+    });
+  },
+);
 
 test("finite wait budget is end-to-end and includes acquisition attempts", async () => {
   await withRoot(async (root) => {
