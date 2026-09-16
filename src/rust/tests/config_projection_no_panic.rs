@@ -1,3 +1,5 @@
+#![cfg(feature = "config")]
+
 use ores_locks_and_leases::config::{FiduciaProviderConfig, LockProfileConfig, ProviderSelection};
 
 #[test]
