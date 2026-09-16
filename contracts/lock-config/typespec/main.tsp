@@ -72,7 +72,7 @@ model CloudflareDurableObjectProviderConfig {
 model RedisProviderConfig {
   endpoint_env: EnvKey;
   auth_token_env: EnvKey;
-  namespace?: string;
+  `namespace`?: string;
 }
 
 enum PostgresLockScope {
