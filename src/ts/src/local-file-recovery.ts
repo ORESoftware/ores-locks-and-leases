@@ -1,6 +1,8 @@
 import { lstat, rename, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
+import { maybe_inject_local_file_test_fault } from "./local-file-test-faults.js";
+
 import {
   LOCAL_FILE_LOCK_OWNER_FILE,
   LOCAL_FILE_LOCK_OWNER_PENDING_FILE,
@@ -68,12 +70,17 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   if (entries === null) return { state: "absent" };
   if (entries.length === 0) {
     return incomplete(
-      "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+      "lock directory has no owner marker; acquisition, release, or recovery may have crashed mid-transition",
     );
   }
   if (entries.length === 1 && entries[0] === LOCAL_FILE_LOCK_OWNER_PENDING_FILE) {
     return incomplete(
       "owner publication is incomplete; pending owner marker is not ownership authority",
+    );
+  }
+  if (entries.length === 1 && entries[0] === LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE) {
+    return incomplete(
+      "owner recovery is in progress; recovery claim is not reusable ownership authority",
     );
   }
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
@@ -165,6 +172,7 @@ export async function recover_local_file_lock(
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   const recoveringPath = join(path, LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE);
   try {
+    maybe_inject_local_file_test_fault("recovery_claim_failure", "EIO");
     // This rename is the destructive recovery linearization point. In
     // particular, Windows may allow more than one concurrent unlink() caller
     // to report success while deletion is pending. Moving the authenticated
@@ -174,6 +182,16 @@ export async function recover_local_file_lock(
     await rename(ownerPath, recoveringPath);
   } catch (error) {
     const code = error_code(error);
+    if (code === "ENOENT") {
+      const after = await inspect_local_file_lock(path);
+      if (after.state === "absent" || after.state === "incomplete") return false;
+      throw new LocalFileLockError(
+        "compromised",
+        path,
+        "local lock changed while claiming recovery",
+        error,
+      );
+    }
     throw new LocalFileLockError(
       code === "EEXIST" || code === "ENOTEMPTY" ? "compromised" : "io",
       path,

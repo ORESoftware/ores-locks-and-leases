@@ -9,6 +9,8 @@ import simplifile
 
 const owner_file = "owner"
 
+const owner_recovering_file = "owner.recovering"
+
 pub type LocalFileLockInspectionState {
   Absent
   Held
@@ -89,7 +91,7 @@ fn inspect_directory(
     2 -> Error(io_error(path, "list local lock directory failed"))
     3 ->
       Ok(incomplete(
-        "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+        "lock directory has no published owner authority; acquisition, release, or recovery may be mid-transition",
       ))
     1 ->
       Ok(compromised(
@@ -228,7 +230,7 @@ fn recover_after_recheck(
   case inspect_path(path) {
     Ok(LocalFileLockInspection(Held, Some(owner), _, _))
       if owner == expected_owner
-    -> remove_recovered(path)
+    -> claim_and_remove_recovered(path)
     Error(error) -> Error(error)
     _ ->
       Error(local_file.LocalFileLockError(
@@ -239,15 +241,33 @@ fn recover_after_recheck(
   }
 }
 
-fn remove_recovered(
+fn claim_and_remove_recovered(
   path: String,
 ) -> Result(Bool, local_file.LocalFileLockError) {
   let owner_path = path <> "/" <> owner_file
-  case simplifile.delete_file(at: owner_path) {
+  let recovering_path = path <> "/" <> owner_recovering_file
+  case claim_recovery_status(owner_path, recovering_path) {
+    0 -> remove_recovered_claim(path, recovering_path)
+    1 -> Ok(False)
+    2 ->
+      Error(local_file.LocalFileLockError(
+        local_file.Compromised,
+        path,
+        "recovery claim already exists; another recovery may own the destructive transition",
+      ))
+    _ -> Error(io_error(path, "claim local lock recovery failed"))
+  }
+}
+
+fn remove_recovered_claim(
+  path: String,
+  recovering_path: String,
+) -> Result(Bool, local_file.LocalFileLockError) {
+  case simplifile.delete_file(at: recovering_path) {
     Error(error) ->
       Error(io_error(
         path,
-        "remove recovered owner token failed: "
+        "remove recovered owner claim failed: "
           <> simplifile.describe_error(error),
       ))
     Ok(Nil) ->
@@ -257,7 +277,7 @@ fn remove_recovered(
           Error(local_file.LocalFileLockError(
             local_file.Compromised,
             path,
-            "remove recovered lock directory failed; refusing recursive deletion",
+            "remove recovered lock directory failed after recovery claim; refusing recursive deletion",
           ))
       }
   }
@@ -331,8 +351,11 @@ fn io_error(path: String, message: String) -> local_file.LocalFileLockError {
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "path_kind")
 fn path_kind(path: String) -> Int
 
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "directory_shape")
+@external(erlang, "ores_locks_and_leases_local_file_recovery_ffi", "directory_shape")
 fn directory_shape(path: String) -> Int
+
+@external(erlang, "ores_locks_and_leases_local_file_recovery_ffi", "claim_recovery_status")
+fn claim_recovery_status(owner_path: String, recovering_path: String) -> Int
 
 @external(erlang, "ores_locks_and_leases_local_file_ffi", "delete_empty_directory")
 fn delete_empty_directory(path: String) -> Result(Nil, Dynamic)

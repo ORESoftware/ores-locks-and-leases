@@ -162,3 +162,9 @@ jobs:
 
       - name: Ninth-order path alias, transition, and recovery isolation matrix
         run: node scripts/run-with-gleam-startup-serialization.mjs scripts/check-local-file-process-ninth-order.mjs
+
+      - name: Eleventh-order publication fault-state and observer matrix
+        run: node scripts/check-local-file-process-eleventh-order.mjs
+
+      - name: Eleventh-order POSIX permission/read-only fault matrix
+        run: node scripts/check-local-file-permission-faults-v11.mjs

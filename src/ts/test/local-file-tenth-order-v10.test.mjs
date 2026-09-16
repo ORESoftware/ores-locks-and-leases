@@ -129,7 +129,7 @@ test("ownerless publication window is modeled as incomplete with a reason code",
     assert.deepEqual(await inspect_local_file_lock(path), {
       state: "incomplete",
       reason: "owner_marker_missing",
-      message: "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+      message: "lock directory has no owner marker; acquisition, release, or recovery may have crashed mid-transition",
     });
   });
 });

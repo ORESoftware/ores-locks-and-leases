@@ -5,9 +5,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
+
+const localFileOwnerRecoveringName = "owner.recovering"
 
 // LocalFileLockInspectionState describes read-only portable-lock state.
 type LocalFileLockInspectionState string
@@ -61,9 +65,9 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		return compromisedInspection(LocalFilePermissionsWidened, err.Error()), nil
 	}
 
-	// Two names are enough to distinguish empty, pending publication, exactly
-	// one published owner, and dirty state. Never enumerate an arbitrarily large
-	// attacker-expanded directory.
+	// Two names are enough to distinguish empty, pending/recovering transition,
+	// exactly one published owner, and dirty state. Never enumerate an
+	// arbitrarily large attacker-expanded directory.
 	dir, err := os.Open(path)
 	if err != nil {
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "open local lock directory failed", err)
@@ -77,10 +81,13 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 		return LocalFileLockInspection{}, localFileError(LocalFileIO, path, "close local lock directory failed", closeErr)
 	}
 	if len(entries) == 0 {
-		return incompleteInspection("lock directory has no owner marker; acquisition or release may have crashed mid-transition"), nil
+		return incompleteInspection("lock directory has no owner marker; acquisition, release, or recovery may have crashed mid-transition"), nil
 	}
 	if len(entries) == 1 && entries[0] == localFileOwnerPendingName {
 		return incompleteInspection("owner publication is incomplete; pending owner marker is not ownership authority"), nil
+	}
+	if len(entries) == 1 && entries[0] == localFileOwnerRecoveringName {
+		return incompleteInspection("owner recovery is in progress; recovery claim is not reusable ownership authority"), nil
 	}
 	if len(entries) != 1 || entries[0] != localFileOwnerName {
 		return compromisedInspection(LocalFileDirtyDirectory, "lock directory must contain exactly one published owner marker"), nil
@@ -210,21 +217,67 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 	}
 
 	ownerPath := filepath.Join(path, localFileOwnerName)
-	if err := os.Remove(ownerPath); err != nil {
-		return false, localFileError(LocalFileIO, path, "remove recovered owner token failed", err)
+	recoveringPath := filepath.Join(path, localFileOwnerRecoveringName)
+	if err := os.Rename(ownerPath, recoveringPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			after, inspectErr := InspectLocalFileLock(path)
+			if inspectErr != nil {
+				return false, inspectErr
+			}
+			if after.State == LocalFileLockAbsent || after.State == LocalFileLockIncomplete {
+				return false, nil
+			}
+			return false, localFileError(LocalFileCompromised, path, "local lock changed while claiming recovery", err)
+		}
+		if errors.Is(err, os.ErrExist) {
+			return false, localFileError(LocalFileCompromised, path, "recovery claim already exists", err)
+		}
+		return false, localFileError(LocalFileIO, path, "claim local lock recovery failed", err)
 	}
-	if err := os.Remove(path); err != nil {
-		kind := LocalFileIO
-		if dir, openErr := os.Open(path); openErr == nil {
+	if err := os.Remove(recoveringPath); err != nil {
+		return false, localFileError(LocalFileIO, path, "remove recovered owner claim failed", err)
+	}
+	if err := removeRecoveredLockDirectory(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Windows refuses to remove an otherwise empty directory while another
+// concurrent inspector still has a directory handle open. The recovery claim
+// has already removed the sole authoritative owner marker at this point, so a
+// bounded retry is safe and lets the one destructive winner finish after those
+// read-only handles close. POSIX keeps its single-attempt behavior.
+func removeRecoveredLockDirectory(path string) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := os.Remove(path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		dir, openErr := os.Open(path)
+		if openErr == nil {
 			names, readErr := dir.Readdirnames(1)
 			_ = dir.Close()
 			if readErr == nil && len(names) > 0 {
-				kind = LocalFileCompromised
+				return localFileError(LocalFileCompromised, path, "remove recovered lock directory failed after recovery claim; directory is no longer empty", lastErr)
 			}
+		} else if errors.Is(openErr, os.ErrNotExist) {
+			return nil
 		}
-		return false, localFileError(kind, path, "remove recovered lock directory failed", err)
+
+		if runtime.GOOS != "windows" || attempt+1 == attempts {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	return true, nil
+	return localFileError(LocalFileIO, path, "remove recovered lock directory failed after recovery claim", lastErr)
 }
 
 func incompleteInspection(message string) LocalFileLockInspection {

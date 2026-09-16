@@ -15,6 +15,7 @@ use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
 const OWNER_PENDING_FILE: &str = "owner.pending";
+const OWNER_RECOVERING_FILE: &str = "owner.recovering";
 const OWNER_MAX_CODEPOINTS: usize = 512;
 const OWNER_MAX_UTF8_BYTES: usize = 2048;
 const INSPECTION_MAX_DIRECTORY_ENTRIES: usize = 2;
@@ -28,8 +29,9 @@ pub enum LocalFileLockInspectionState {
     /// The rendezvous directory exists but has no published owner marker.
     ///
     /// This covers the observable crash windows after atomic `mkdir`, while a
-    /// fully written `owner.pending` awaits atomic rename, and after owner
-    /// removal before `rmdir`. It is never stale authority or auto-recovered.
+    /// fully written `owner.pending` awaits atomic rename, while an authenticated
+    /// `owner.recovering` claim is being removed, and after owner removal before
+    /// `rmdir`. It is never stale authority or auto-recovered.
     Incomplete,
     Compromised,
 }
@@ -101,12 +103,17 @@ pub fn inspect_local_file_lock(
     let entries = read_entry_names_bounded(path)?;
     if entries.is_empty() {
         return Ok(incomplete(
-            "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
+            "lock directory has no owner marker; acquisition, release, or recovery may have crashed mid-transition",
         ));
     }
     if entries.len() == 1 && entries[0] == OWNER_PENDING_FILE {
         return Ok(incomplete(
             "owner publication is incomplete; pending owner marker is not ownership authority",
+        ));
+    }
+    if entries.len() == 1 && entries[0] == OWNER_RECOVERING_FILE {
+        return Ok(incomplete(
+            "owner recovery is in progress; recovery claim is not reusable ownership authority",
         ));
     }
     if entries.len() != 1 || entries[0] != OWNER_FILE {
@@ -277,8 +284,36 @@ pub fn recover_local_file_lock(
     }
 
     let owner_path = path.join(OWNER_FILE);
-    fs::remove_file(&owner_path)
-        .map_err(|error| io_error(path, "remove recovered owner token", error))?;
+    let recovering_path = path.join(OWNER_RECOVERING_FILE);
+    match fs::rename(&owner_path, &recovering_path) {
+        Ok(()) => {}
+        Err(rename_error) if rename_error.kind() == io::ErrorKind::NotFound => {
+            let after = inspect_local_file_lock(path)?;
+            return match after.state {
+                LocalFileLockInspectionState::Absent | LocalFileLockInspectionState::Incomplete => {
+                    Ok(false)
+                }
+                _ => Err(error(
+                    LocalFileLockErrorKind::Compromised,
+                    path,
+                    "local lock changed while claiming recovery",
+                )),
+            };
+        }
+        Err(rename_error) if rename_error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(error(
+                LocalFileLockErrorKind::Compromised,
+                path,
+                format!("recovery claim already exists: {rename_error}"),
+            ));
+        }
+        Err(rename_error) => {
+            return Err(io_error(path, "claim local lock recovery", rename_error));
+        }
+    }
+
+    fs::remove_file(&recovering_path)
+        .map_err(|remove_error| io_error(path, "remove recovered owner claim", remove_error))?;
     fs::remove_dir(path).map_err(|remove_error| {
         let kind = match fs::read_dir(path) {
             Ok(mut entries) => {
@@ -293,7 +328,7 @@ pub fn recover_local_file_lock(
         error(
             kind,
             path,
-            format!("remove recovered lock directory failed: {remove_error}"),
+            format!("remove recovered lock directory failed after recovery claim: {remove_error}"),
         )
     })?;
     Ok(true)
