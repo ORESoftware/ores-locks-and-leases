@@ -140,10 +140,11 @@ pub fn owner_hard_link_is_compromised_for_inspection_and_release_test() {
     local_file.try_acquire(root, "install.lock", "owner-a")
   let path = local_file.local_file_lock_path(lock)
   let alias = root <> "/owner-alias"
-  case make_hard_link_status(path <> "/owner", alias) {
+  case make_hardlink_status(path <> "/owner", alias) {
     0 -> {
       let assert Ok(local_file_recovery.LocalFileLockInspection(
         local_file_recovery.Compromised,
+        _,
         _,
         _,
       )) = local_file_recovery.inspect(root, "install.lock")
@@ -216,5 +217,5 @@ pub fn recovery_absent_noop_and_dirty_fails_closed_test() {
   clean(root)
 }
 
-@external(erlang, "ores_locks_and_leases_local_file_ffi", "make_hard_link_status")
-fn make_hard_link_status(target: String, link: String) -> Int
+@external(erlang, "ores_locks_and_leases_local_file_ffi", "make_hardlink_status")
+fn make_hardlink_status(target: String, link: String) -> Int
