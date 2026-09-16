@@ -36,8 +36,12 @@ requireRegex(config, /\[profiles\.postgres\][\s\S]*scope\s*=\s*"transaction"/, '
 for (const [label, source] of [['rust', rust], ['typescript', ts], ['go', go], ['dart', dart]]) {
   requireRegex(source, /renew/i, `${label} maintained path`);
   requireRegex(source, /commit/i, `${label} maintained path`);
+}
+for (const [label, source] of [['rust', rust], ['typescript', ts], ['go', go]]) {
   requireRegex(source, /rollback/i, `${label} maintained path`);
 }
+requireRegex(dart, /roll the transaction back|runTx\(|throwWithStackTrace|throw /i, 'dart maintained path abort semantics');
+
 requireRegex(rust, /final[\s_-]*renew/i, 'rust maintained path');
 requireRegex(ts, /final[\s_-]*renew/i, 'typescript maintained path');
 requireRegex(go, /final[\s_-]*renew/i, 'go maintained path');
