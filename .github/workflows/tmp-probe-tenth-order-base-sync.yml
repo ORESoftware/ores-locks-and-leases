@@ -52,6 +52,7 @@ jobs:
           let s = fs.readFileSync(p, 'utf8');
           s = once(s, 'use std::fs::{self, OpenOptions};', 'use std::fs::{self, File, OpenOptions};', 'File import');
           s = once(s, 'use std::io::{self, Write};', 'use std::io::{self, Read, Write};', 'Read import');
+          s = once(s, 'use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};', 'use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};', 'PermissionsExt import');
           s = once(s, 'const OWNER_MAX_CODEPOINTS: usize = 512;\n', 'const OWNER_MAX_CODEPOINTS: usize = 512;\nconst OWNER_MAX_UTF8_BYTES: usize = 2048;\n', 'byte bound');
           s = once(s, lines('        if !created {','            return Ok(None);','        }','', '        let owner_path = path.join(OWNER_FILE);'), lines('        if !created {','            return Ok(None);','        }','        validate_private_lock_directory(path)?;','', '        let owner_path = path.join(OWNER_FILE);'), 'post-create privacy');
           s = once(s, lines('        validate_real_directory(&self.path, &self.path, "lock directory")?;','        let owner_path = self.path.join(OWNER_FILE);'), lines('        validate_real_directory(&self.path, &self.path, "lock directory")?;','        validate_private_lock_directory(&self.path)?;','        let owner_path = self.path.join(OWNER_FILE);'), 'release privacy');
@@ -106,7 +107,7 @@ jobs:
             '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound")));',
             '    }',
             '    let mut owner_bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);',
-            '    owner_file.by_ref().take((OWNER_MAX_UTF8_BYTES + 1) as u64).read_to_end(&mut owner_bytes).map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;',
+            '    std::io::Read::by_ref(&mut owner_file).take((OWNER_MAX_UTF8_BYTES + 1) as u64).read_to_end(&mut owner_bytes).map_err(|error| LocalFileLockError::io(lock_path, "read local lock owner token", error))?;',
             '    if owner_bytes.len() > OWNER_MAX_UTF8_BYTES {',
             '        return Err(LocalFileLockError::new(LocalFileLockErrorKind::Compromised, lock_path, format!("owner token exceeds the portable {OWNER_MAX_UTF8_BYTES}-byte UTF-8 storage bound")));',
             '    }',
