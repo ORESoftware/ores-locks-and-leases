@@ -1,0 +1,52 @@
+name: tmp fix DEN-2037 v11 EACCES classification
+
+on:
+  push:
+    branches: [den-2037-eleventh-order-15-20260915]
+    paths: [.github/workflows/tmp-fix-den-2037-v11-eacces.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: den-2037-eleventh-order-15-20260915
+          fetch-depth: 0
+      - name: Move synthetic EACCES into the normal IO wrapping path
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name ORESoftware
+          git config user.email noreply@github.com
+          node <<'NODE'
+          const fs = require('node:fs');
+          const p = '.github/workflows/tmp-den-2037-v11-runtime-patch.yml';
+          let s = fs.readFileSync(p, 'utf8');
+          const oldGenerated = 'export async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {\\n  maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");\\n  let handle;';
+          const newGenerated = 'export async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {\\n  let handle;';
+          if (!s.includes(oldGenerated)) throw new Error('missing generated owner-read injection');
+          s = s.replace(oldGenerated, newGenerated);
+          s = s.replace("            'owner identity helper and read permission fault',", "            'owner identity helper',");
+          const anchor = "          fs.writeFileSync(p, s);\n\n          p = 'src/ts/src/local-file-recovery.ts';";
+          const insertion = `          s = once(
+            s,
+            '  try {\\n    handle = await open(ownerPath, "r");',
+            '  try {\\n    maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");\\n    handle = await open(ownerPath, "r");',
+            'owner read permission fault',
+          );
+          fs.writeFileSync(p, s);
+
+          p = 'src/ts/src/local-file-recovery.ts';`;
+          if (!s.includes(anchor)) throw new Error('missing local-file write anchor');
+          s = s.replace(anchor, insertion);
+          fs.writeFileSync(p, s);
+          NODE
+          rm .github/workflows/tmp-fix-den-2037-v11-eacces.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(DEN-2037): classify injected owner EACCES through IO wrapper'
+          git push origin HEAD:den-2037-eleventh-order-15-20260915
