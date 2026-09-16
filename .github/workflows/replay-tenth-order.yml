@@ -1,0 +1,64 @@
+name: replay tenth-order delta
+
+on:
+  push:
+    branches:
+      - reconcile/den-2037-tenth-order-current-main-20260916
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out current-main replay branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: reconcile/den-2037-tenth-order-current-main-20260916
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Replay only the tenth-order commit range
+        shell: bash
+        env:
+          BASE: e95730ee8705130e141cb2d7002f950658e08613
+          HEAD: 020c62c6731b28464a20c3e101b7064e40f668fb
+        run: |
+          set -euo pipefail
+          git config user.name 'ORESoftware replay bot'
+          git config user.email 'alex@oresoftware.com'
+          git fetch --no-tags origin refs/heads/den-2037-tenth-order-10-20260915:refs/remotes/origin/tenth-order-old
+          git cat-file -e "$BASE^{commit}"
+          git cat-file -e "$HEAD^{commit}"
+          mapfile -t commits < <(git rev-list --reverse --no-merges --ancestry-path "$BASE..$HEAD")
+          test "${#commits[@]}" -gt 0
+          echo "Replaying ${#commits[@]} tenth-order commits"
+          for commit in "${commits[@]}"; do
+            echo "cherry-pick $commit $(git show -s --format=%s "$commit")"
+            if ! git cherry-pick "$commit"; then
+              echo '::error::Semantic replay has conflicts; preserving diagnostics and aborting without push.'
+              git status --short
+              git diff --name-only --diff-filter=U
+              git diff --cc || true
+              git cherry-pick --abort || true
+              exit 1
+            fi
+          done
+
+          changed=$(git diff --name-only 82cb1a2c4ca535bdf23148b1b71d8494b91e0831..HEAD | grep -v '^.github/workflows/replay-tenth-order.yml$' | sort)
+          count=$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')
+          echo "Replayed file count: $count"
+          printf '%s\n' "$changed"
+          test "$count" -eq 24
+
+      - name: Remove replay workflow and push replayed commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/replay-tenth-order.yml
+          git add -A
+          git commit -m 'ci: remove one-shot tenth-order replay workflow'
+          git push origin HEAD:reconcile/den-2037-tenth-order-current-main-20260916
