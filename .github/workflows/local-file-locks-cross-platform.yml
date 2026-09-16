@@ -158,3 +158,6 @@ jobs:
 
       - name: Ninth-order path alias, transition, and recovery isolation matrix
         run: node scripts/check-local-file-process-ninth-order.mjs
+
+      - name: Eleventh-order publication fault-state and observer matrix
+        run: node scripts/check-local-file-process-eleventh-order.mjs
