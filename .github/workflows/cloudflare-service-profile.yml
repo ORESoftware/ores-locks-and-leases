@@ -1,0 +1,47 @@
+name: cloudflare-service-profile
+
+on:
+  pull_request:
+    paths:
+      - ".ores-lock.toml"
+      - "contracts/lock-config/**"
+      - "conformance/cases/service-cloudflare-pg.json"
+      - "docs/cloudflare-service-profile.md"
+      - "scripts/check-service-cloudflare-profile.mjs"
+      - "src/rust/maintained.rs"
+      - "src/ts/src/maintained.ts"
+      - "src/go/maintained.go"
+      - "src/dart/lib/src/maintained.dart"
+      - ".github/workflows/cloudflare-service-profile.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".ores-lock.toml"
+      - "contracts/lock-config/**"
+      - "conformance/cases/service-cloudflare-pg.json"
+      - "docs/cloudflare-service-profile.md"
+      - "scripts/check-service-cloudflare-profile.mjs"
+      - "src/rust/maintained.rs"
+      - "src/ts/src/maintained.ts"
+      - "src/go/maintained.go"
+      - "src/dart/lib/src/maintained.dart"
+      - ".github/workflows/cloudflare-service-profile.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-service-profile-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, show-progress: false }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: "22" }
+      - run: node scripts/check-service-cloudflare-profile.mjs
