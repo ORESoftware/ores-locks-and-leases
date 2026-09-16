@@ -14,11 +14,12 @@ pub fn finite_wait_uses_timeout_path_test() {
   let assert Ok(Some(holder)) =
     local_file.try_acquire(root, "install.lock", "holder")
 
-  let options = local_file.LocalFileLockOptions(
-    wait: True,
-    wait_timeout_ms: 20,
-    retry_interval_ms: 5,
-  )
+  let options =
+    local_file.LocalFileLockOptions(
+      wait: True,
+      wait_timeout_ms: 20,
+      retry_interval_ms: 5,
+    )
   let assert Error(error) =
     local_file.acquire(root, "install.lock", "waiter", options)
   error.kind |> should.equal(local_file.Timeout)
