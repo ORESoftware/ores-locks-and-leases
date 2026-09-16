@@ -10,6 +10,7 @@
     make_private_directory_status/1,
     make_symlink_status/2,
     make_hardlink_status/2,
+    make_hard_link_status/2,
     unicode_codepoint_count/1,
     owner_private_mode_status/1,
     monotonic_milliseconds/0,
@@ -287,3 +288,7 @@ make_hardlink_status(Existing, Link) ->
         {error, Reason} when Reason =:= eperm; Reason =:= eacces; Reason =:= enotsup; Reason =:= exdev -> 1;
         {error, _} -> 2
     end.
+
+%% Compatibility spelling used by the newer Gleam recovery test surface.
+make_hard_link_status(Existing, Link) ->
+    make_hardlink_status(Existing, Link).

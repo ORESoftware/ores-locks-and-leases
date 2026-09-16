@@ -25,7 +25,9 @@ fn destructive_partial_release_retains_original_error() {
     fs::write(path.join("unexpected"), b"dirty").expect("seed dirty entry");
 
     let first = lock.release().expect_err("partial release must fail");
-    let second = lock.release().expect_err("later release must retain failure");
+    let second = lock
+        .release()
+        .expect_err("later release must retain failure");
     assert_eq!(first, second);
 
     fs::remove_file(path.join("unexpected")).expect("cleanup dirty entry");
@@ -52,16 +54,25 @@ fn finite_wait_budget_is_end_to_end() {
     .expect_err("waiter must time out");
     let elapsed = started.elapsed();
     assert_eq!(error.kind, LocalFileLockErrorKind::Timeout);
-    assert!(elapsed >= Duration::from_millis(20), "returned too early: {elapsed:?}");
-    assert!(elapsed < Duration::from_secs(2), "budget ran unbounded: {elapsed:?}");
+    assert!(
+        elapsed >= Duration::from_millis(20),
+        "returned too early: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "budget ran unbounded: {elapsed:?}"
+    );
 }
 
 #[test]
 fn pending_owner_publication_is_incomplete_not_held() {
     let path = test_path("pending");
     fs::create_dir(&path).expect("create rendezvous");
-    fs::write(path.join("owner.pending"), b"syntactically-valid-owner-prefix")
-        .expect("seed pending owner");
+    fs::write(
+        path.join("owner.pending"),
+        b"syntactically-valid-owner-prefix",
+    )
+    .expect("seed pending owner");
 
     let inspection = inspect_local_file_lock(&path).expect("inspect pending publication");
     assert_eq!(inspection.state, LocalFileLockInspectionState::Incomplete);

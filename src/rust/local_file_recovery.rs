@@ -3,6 +3,7 @@
 use crate::local_file::{
     LocalFileLockError, LocalFileLockErrorKind, validate_local_file_owner, validate_local_file_path,
 };
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
@@ -16,6 +17,7 @@ const OWNER_FILE: &str = "owner";
 const OWNER_PENDING_FILE: &str = "owner.pending";
 const OWNER_MAX_CODEPOINTS: usize = 512;
 const OWNER_MAX_UTF8_BYTES: usize = 2048;
+const INSPECTION_MAX_DIRECTORY_ENTRIES: usize = 2;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
@@ -96,21 +98,18 @@ pub fn inspect_local_file_lock(
         ));
     }
 
-    let entries = fs::read_dir(path)
-        .map_err(|error| io_error(path, "list local lock directory", error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| io_error(path, "read local lock directory entry", error))?;
+    let entries = read_entry_names_bounded(path)?;
     if entries.is_empty() {
         return Ok(incomplete(
             "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
         ));
     }
-    if entries.len() == 1 && entries[0].file_name() == OWNER_PENDING_FILE {
+    if entries.len() == 1 && entries[0] == OWNER_PENDING_FILE {
         return Ok(incomplete(
             "owner publication is incomplete; pending owner marker is not ownership authority",
         ));
     }
-    if entries.len() != 1 || entries[0].file_name() != OWNER_FILE {
+    if entries.len() != 1 || entries[0] != OWNER_FILE {
         return Ok(compromised(
             LocalFileLockInspectionReason::DirtyDirectory,
             "lock directory must contain exactly one published owner marker",
@@ -164,6 +163,12 @@ pub fn inspect_local_file_lock(
         return Ok(compromised(
             LocalFileLockInspectionReason::OwnerIdentityChanged,
             "opened owner token became multiply linked while inspecting",
+        ));
+    }
+    if !same_file_identity(&owner_metadata, &opened_metadata) {
+        return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerIdentityChanged,
+            "owner token identity changed while opening; refusing raced path-to-handle state",
         ));
     }
 
@@ -294,6 +299,22 @@ pub fn recover_local_file_lock(
     Ok(true)
 }
 
+fn read_entry_names_bounded(path: &Path) -> Result<Vec<OsString>, LocalFileLockError> {
+    let mut directory =
+        fs::read_dir(path).map_err(|error| io_error(path, "list local lock directory", error))?;
+    let mut entries = Vec::with_capacity(INSPECTION_MAX_DIRECTORY_ENTRIES);
+    for _ in 0..INSPECTION_MAX_DIRECTORY_ENTRIES {
+        match directory.next() {
+            None => break,
+            Some(Ok(entry)) => entries.push(entry.file_name()),
+            Some(Err(error)) => {
+                return Err(io_error(path, "read local lock directory entry", error));
+            }
+        }
+    }
+    Ok(entries)
+}
+
 fn incomplete(message: &str) -> LocalFileLockInspection {
     LocalFileLockInspection {
         state: LocalFileLockInspectionState::Incomplete,
@@ -303,10 +324,7 @@ fn incomplete(message: &str) -> LocalFileLockInspection {
     }
 }
 
-fn compromised(
-    reason: LocalFileLockInspectionReason,
-    message: &str,
-) -> LocalFileLockInspection {
+fn compromised(reason: LocalFileLockInspectionReason, message: &str) -> LocalFileLockInspection {
     LocalFileLockInspection {
         state: LocalFileLockInspectionState::Compromised,
         owner: None,
@@ -347,6 +365,16 @@ fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
     {
         false
     }
+}
+
+#[cfg(unix)]
+fn same_file_identity(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
+    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
