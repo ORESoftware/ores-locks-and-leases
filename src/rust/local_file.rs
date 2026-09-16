@@ -25,22 +25,15 @@ const OWNER_MAX_CODEPOINTS: usize = 512;
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 
-/// Why the portable local filesystem lock operation failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalFileLockErrorKind {
-    /// Another holder already owns the lock and no waiting was requested.
     Contention,
-    /// The finite wait budget elapsed before ownership was obtained.
     Timeout,
-    /// The lock's owner token changed or its directory was unexpectedly dirty.
     Compromised,
-    /// The filesystem rejected an operation for another reason.
     Io,
-    /// The caller supplied invalid options or an empty owner token.
     InvalidInput,
 }
 
-/// Structured error for the dependency-free local filesystem backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalFileLockError {
     pub kind: LocalFileLockErrorKind,
@@ -80,15 +73,11 @@ impl fmt::Display for LocalFileLockError {
 
 impl Error for LocalFileLockError {}
 
-/// Waiting policy for [`LocalFileLock::acquire`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalFileLockOptions {
-    /// When false, acquisition is one immediate attempt.
     pub wait: bool,
-    /// Maximum end-to-end time spent waiting when `wait` is true. Filesystem
-    /// attempt latency counts against this budget.
+    /// End-to-end wait budget. Filesystem-call latency counts against it.
     pub wait_timeout: Duration,
-    /// Delay between portable lockfile attempts.
     pub retry_interval: Duration,
 }
 
@@ -102,10 +91,6 @@ impl Default for LocalFileLockOptions {
     }
 }
 
-/// A held portable filesystem lock.
-///
-/// The lock is released on drop on a best-effort basis. Call [`Self::release`]
-/// when release failure must be observed.
 #[derive(Debug)]
 pub struct LocalFileLock {
     path: PathBuf,
@@ -115,10 +100,6 @@ pub struct LocalFileLock {
 }
 
 impl LocalFileLock {
-    /// Make one immediate atomic attempt to create `path` as the lock directory.
-    ///
-    /// `owner` must be a non-empty token unique to this logical acquisition.
-    /// `Ok(None)` means ordinary contention.
     pub fn try_acquire(
         path: impl AsRef<Path>,
         owner: impl Into<String>,
@@ -218,9 +199,6 @@ impl LocalFileLock {
                 error,
             ));
         }
-        // std::fs::File does not expose a fallible explicit close. sync_data is
-        // the observable publication barrier; only a fully synced pending file
-        // is renamed into the canonical owner name that readers trust.
         if let Err(error) = owner_file.sync_data() {
             drop(owner_file);
             let _ = fs::remove_file(&pending_path);
@@ -272,10 +250,6 @@ impl LocalFileLock {
         }))
     }
 
-    /// Acquire a local filesystem lock, optionally waiting up to the configured
-    /// end-to-end budget. Time spent in filesystem attempts counts against the
-    /// budget. This portable backend retries `mkdir`; zed-pkg's native Rust
-    /// lock should continue to use one kernel-backed blocking request instead.
     pub fn acquire(
         path: impl AsRef<Path>,
         owner: impl Into<String>,
@@ -292,7 +266,6 @@ impl LocalFileLock {
             if let Some(lock) = Self::try_acquire(&path, owner.clone())? {
                 return Ok(lock);
             }
-
             if !options.wait {
                 return Err(LocalFileLockError::new(
                     LocalFileLockErrorKind::Contention,
@@ -300,7 +273,6 @@ impl LocalFileLock {
                     "lock is already held by another owner",
                 ));
             }
-
             let elapsed = started.elapsed();
             if elapsed >= options.wait_timeout {
                 return Err(LocalFileLockError::new(
@@ -312,23 +284,19 @@ impl LocalFileLock {
                     ),
                 ));
             }
-
             let remaining = options.wait_timeout.saturating_sub(elapsed);
             thread::sleep(options.retry_interval.min(remaining));
         }
     }
 
-    /// Path used as the atomic lock-directory rendezvous point.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Owner token written inside the lock directory.
     pub fn owner(&self) -> &str {
         &self.owner
     }
 
-    /// Release the lock after verifying the persisted owner token.
     pub fn release(&mut self) -> Result<(), LocalFileLockError> {
         self.release_inner()
     }
@@ -400,10 +368,6 @@ impl Drop for LocalFileLock {
     }
 }
 
-/// Return whether a portable local lock directory currently exists.
-///
-/// This is diagnostics only. A caller must still use `try_acquire`/`acquire`
-/// to obtain ownership.
 pub fn local_file_lock_exists(path: impl AsRef<Path>) -> Result<bool, LocalFileLockError> {
     let path = path.as_ref();
     validate_local_file_path(path)?;
@@ -445,7 +409,81 @@ pub(crate) fn validate_local_file_path(path: &Path) -> Result<(), LocalFileLockE
             "local lock path must not contain NUL",
         ));
     }
+    #[cfg(windows)]
+    if !windows_local_file_lock_path_admitted(text) {
+        return Err(LocalFileLockError::new(
+            LocalFileLockErrorKind::InvalidInput,
+            path,
+            "Windows local lock paths must avoid device namespaces, reserved device names, trailing dot/space components, and alternate-data-stream syntax",
+        ));
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_local_file_lock_path_admitted(text: &str) -> bool {
+    let normalized = text.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if lower.starts_with("//?/") || lower.starts_with("//./") || lower.starts_with("/??/") {
+        return false;
+    }
+
+    let mut first = true;
+    for component in normalized.split('/') {
+        if component.is_empty() {
+            continue;
+        }
+        if component == "." || component == ".." {
+            continue;
+        }
+        let bytes = component.as_bytes();
+        if first
+            && bytes.len() == 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+        {
+            first = false;
+            continue;
+        }
+        first = false;
+        if component.ends_with('.') || component.ends_with(' ') || component.contains(':') {
+            return false;
+        }
+        let base = component.split('.').next().unwrap_or_default().trim();
+        if windows_reserved_device_base(base) {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(windows)]
+fn windows_reserved_device_base(base: &str) -> bool {
+    matches!(
+        base.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 fn create_lock_directory(path: &Path) -> io::Result<()> {
@@ -461,10 +499,7 @@ fn create_lock_directory(path: &Path) -> io::Result<()> {
     }
 }
 
-pub(crate) fn validate_local_file_owner(
-    path: &Path,
-    owner: &str,
-) -> Result<(), LocalFileLockError> {
+pub(crate) fn validate_local_file_owner(path: &Path, owner: &str) -> Result<(), LocalFileLockError> {
     if owner.is_empty() {
         return Err(LocalFileLockError::new(
             LocalFileLockErrorKind::InvalidInput,
@@ -680,8 +715,8 @@ mod tests {
     #[test]
     fn empty_owner_is_invalid_input() {
         let path = test_path("empty-owner");
-        let error =
-            LocalFileLock::try_acquire(&path, "").expect_err("empty owner must be rejected");
+        let error = LocalFileLock::try_acquire(&path, "")
+            .expect_err("empty owner must be rejected");
         assert_eq!(error.kind, LocalFileLockErrorKind::InvalidInput);
     }
 
