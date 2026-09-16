@@ -8,6 +8,7 @@ import ores_locks_and_leases/local_file_owner_validation as owner_validation
 import simplifile
 
 const owner_file = "owner"
+
 const owner_recovering_file = "owner.recovering"
 
 pub type LocalFileLockInspectionState {
