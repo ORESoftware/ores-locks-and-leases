@@ -14,7 +14,6 @@ import process from "node:process";
 
 import {
   LocalFileLockError,
-  generated_local_file_lock_owner,
   inspect_local_file_lock,
   recover_local_file_lock,
   try_acquire_local_file_lock,
@@ -215,21 +214,25 @@ async function run(root) {
   }
   record("wrong-owner-recovery-is-non-destructive");
 
-  // 12. Generated acquisition identities are fresh across recovery/reacquire cycles.
+  // 12. Same-token ABA: a stale handle from the pre-recovery acquisition must
+  // not release a later acquisition even when the caller deliberately reuses
+  // the exact same owner text.
   {
-    const path = join(root, "fresh-generation.lock");
-    const firstOwner = generated_local_file_lock_owner();
-    const secondOwner = generated_local_file_lock_owner();
-    assert.notEqual(firstOwner, secondOwner);
-    const first = await try_acquire_local_file_lock(path, firstOwner);
-    assert.ok(first);
-    assert.equal(await recover_local_file_lock(path, firstOwner, true), true);
-    const second = await try_acquire_local_file_lock(path, secondOwner);
-    assert.ok(second);
-    assert.deepEqual(await inspect_local_file_lock(path), { state: "held", owner: secondOwner });
-    await second.release();
+    const path = join(root, "same-token-aba.lock");
+    const owner = "reused-owner-text";
+    const stale = await try_acquire_local_file_lock(path, owner);
+    assert.ok(stale);
+    assert.equal(await recover_local_file_lock(path, owner, true), true);
+    const replacement = await try_acquire_local_file_lock(path, owner);
+    assert.ok(replacement);
+    await assert.rejects(
+      stale.release(),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    assert.deepEqual(await inspect_local_file_lock(path), { state: "held", owner });
+    await replacement.release();
   }
-  record("generated-owner-recovery-reacquire-uses-fresh-identity");
+  record("same-token-aba-stale-handle-cannot-release-later-acquisition");
 
   // 13. Live observers see only modeled states through an ordinary release transition.
   {
