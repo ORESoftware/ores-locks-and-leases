@@ -6,6 +6,9 @@ import { resolve } from "node:path";
 const PIN_SCHEMA = "ores.locks.shared-interfaces-pin/v1";
 const UPSTREAM_SCHEMA = "ores.shared-interfaces-source/v1";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const SHARED_COMMIT = "a347aac8b828998a80a3f99215bc00dd3046bdcd";
+const SOURCE_COMMIT = "3d26d3c0f79277b040e4b0665e6d6e6808f695de";
+const CERTIFICATION_VALIDATOR_COMMIT = "1614779275115258db73b92c938313e8ae437936";
 const DECLARATIONS = Object.freeze([
   "Ores.Validation.GitHubActionsBuildLogEvent",
   "Ores.Validation.GitHubActionsLogStream",
@@ -25,10 +28,13 @@ function validatePin(pin) {
   assert.equal(pin?.schema, PIN_SCHEMA);
   assert.equal(pin.repository, "ORESoftware/ores-interfaces");
   assert.match(pin.commit ?? "", SHA_PATTERN, "shared-interface dependency must use an immutable SHA");
+  assert.equal(pin.commit, SHARED_COMMIT, "shared-interface dependency must use the reviewed exact commit");
   assert.equal(pin.source?.repository, "ores-otel/ores-interfaces");
   assert.match(pin.source?.commit ?? "", SHA_PATTERN);
+  assert.equal(pin.source.commit, SOURCE_COMMIT, "shared-interface source provenance must remain exact");
   assert.equal(pin.certification?.validatorRepository, "ORESoftware/typespec-json-schema-validator");
   assert.match(pin.certification?.validatorCommit ?? "", SHA_PATTERN);
+  assert.equal(pin.certification.validatorCommit, CERTIFICATION_VALIDATOR_COMMIT, "producer certification provenance must remain exact");
   assert.equal(pin.authorityModel, "independent-typespec-and-json-schema-peers");
   assert.equal(pin.authorityTransfer, false, "shared interfaces must not transfer local contract authority");
   assert.deepEqual(pin.expectedDeclarations, DECLARATIONS);
