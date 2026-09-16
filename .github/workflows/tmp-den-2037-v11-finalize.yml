@@ -27,12 +27,14 @@ jobs:
           set -euo pipefail
           git config user.name ORESoftware
           git config user.email noreply@github.com
+          node scripts/tmp-normalize-v11-runtime-patch.mjs
           node scripts/tmp-apply-v11-runtime.mjs
           npm ci --prefix src/ts --no-audit --no-fund
           npm run build --prefix src/ts
           npm test --prefix src/ts
           node scripts/check-local-file-fault-injection-eleventh-order.mjs
           rm -f scripts/tmp-apply-v11-runtime.mjs
+          rm -f scripts/tmp-normalize-v11-runtime-patch.mjs
           rm -f .github/workflows/tmp-den-2037-v11-runtime-patch.yml
           rm -f .github/workflows/tmp-den-2037-v11-finalize.yml
           git add -A
