@@ -14,6 +14,7 @@ import ores_locks_and_leases/local_file_owner_validation as owner_validation
 import simplifile
 
 const owner_file = "owner"
+
 const owner_pending_file = "owner.pending"
 
 /// Why a portable local filesystem lock operation failed.
@@ -138,7 +139,8 @@ fn create_lock_directory(
           case make_private_directory_status(path) {
             0 -> write_owner_or_unwind(path, owner)
             1 -> Ok(None)
-            _ -> Error(io_error(path, "retry local lock directory creation failed"))
+            _ ->
+              Error(io_error(path, "retry local lock directory creation failed"))
           }
         4 -> Error(io_error(path, "inspect contended local lock path failed"))
         _ ->
@@ -332,11 +334,12 @@ fn remove_owned_lock(
       case delete_empty_directory(path) {
         Ok(Nil) -> ReleaseSucceeded
         Error(_) -> {
-          let error = LocalFileLockError(
-            Compromised,
-            path,
-            "remove local lock directory failed; refusing recursive deletion of an unexpectedly non-empty or inaccessible directory",
-          )
+          let error =
+            LocalFileLockError(
+              Compromised,
+              path,
+              "remove local lock directory failed; refusing recursive deletion of an unexpectedly non-empty or inaccessible directory",
+            )
           ReleaseFailedPartial(error)
         }
       }
@@ -396,6 +399,12 @@ fn validate_inputs(
         "owner token must not exceed 512 Unicode code points",
       ))
     False, False, False, 0, owner_validation.OwnerValid -> Ok(Nil)
+    False, False, False, _, owner_validation.OwnerValid ->
+      Error(LocalFileLockError(
+        InvalidInput,
+        path,
+        "Windows local lock path admission returned an unsupported status",
+      ))
   }
 }
 
