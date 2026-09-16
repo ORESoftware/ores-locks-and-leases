@@ -39,13 +39,13 @@ jobs:
           s = once(
             s,
             'import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises";\n',
-            'import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises";\n\nimport {\n  local_file_test_fault_enabled,\n  maybe_crash_local_file_test_fault,\n  maybe_inject_local_file_test_fault,\n} from "./local-file-test-faults.js";\n',
+            'import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises";\n\nimport {\n  is_local_file_test_crash,\n  local_file_test_fault_enabled,\n  maybe_inject_local_file_test_fault,\n  maybe_simulate_local_file_test_crash,\n} from "./local-file-test-faults.js";\n',
             'fault imports',
           );
           s = once(
             s,
             'type LocalFileLockReleaseState = "held" | "released" | "partial";\nconst LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN = Symbol("ores-local-file-lock-held-constructor");\n',
-            'type LocalFileLockReleaseState = "held" | "released" | "partial";\ntype LocalFileOwnerIdentity = Readonly<{\n  dev: number;\n  ino: number;\n  birthtime_ms: number;\n  ctime_ms: number;\n}>;\nconst LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN = Symbol("ores-local-file-lock-held-constructor");\n',
+            'type LocalFileLockReleaseState = "held" | "released" | "partial";\ntype LocalFileOwnerIdentity = Readonly<{ dev: number; ino: number }>;\nconst LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN = Symbol("ores-local-file-lock-held-constructor");\n',
             'owner identity type',
           );
           s = once(
@@ -81,14 +81,14 @@ jobs:
           s = once(
             s,
             '    pendingHandle = await open(pendingPath, "wx", 0o600);\n    await pendingHandle.writeFile(owner, { encoding: "utf8" });\n    await pendingHandle.sync();\n    await pendingHandle.close();\n    pendingHandle = undefined;\n',
-            '    pendingHandle = await open(pendingPath, "wx", 0o600);\n    maybe_crash_local_file_test_fault("after_pending_create_crash", 81);\n    if (local_file_test_fault_enabled("owner_short_write")) {\n      const bytes = Buffer.from(owner, "utf8");\n      const prefixLength = Math.max(1, Math.floor(bytes.byteLength / 2));\n      await pendingHandle.write(bytes.subarray(0, prefixLength), 0, prefixLength, 0);\n      maybe_inject_local_file_test_fault("owner_short_write", "EIO");\n    } else {\n      await pendingHandle.writeFile(owner, { encoding: "utf8" });\n    }\n    maybe_inject_local_file_test_fault("owner_sync_failure", "EIO");\n    await pendingHandle.sync();\n    await pendingHandle.close();\n    pendingHandle = undefined;\n    maybe_inject_local_file_test_fault("owner_close_failure", "EIO");\n    maybe_crash_local_file_test_fault("after_pending_sync_crash", 82);\n',
+            '    pendingHandle = await open(pendingPath, "wx", 0o600);\n    maybe_simulate_local_file_test_crash("after_pending_create_crash");\n    if (local_file_test_fault_enabled("owner_short_write")) {\n      const prefixLength = Math.max(1, Math.floor(owner.length / 2));\n      await pendingHandle.writeFile(owner.slice(0, prefixLength), { encoding: "utf8" });\n      maybe_inject_local_file_test_fault("owner_short_write", "EIO");\n    } else {\n      await pendingHandle.writeFile(owner, { encoding: "utf8" });\n    }\n    maybe_inject_local_file_test_fault("owner_sync_failure", "EIO");\n    await pendingHandle.sync();\n    await pendingHandle.close();\n    pendingHandle = undefined;\n    maybe_inject_local_file_test_fault("owner_close_failure", "EIO");\n    maybe_simulate_local_file_test_crash("after_pending_sync_crash");\n',
             'publication fault points',
           );
           s = once(
             s,
-            '    await rename(pendingPath, ownerPath);\n  } catch (error) {',
-            '    maybe_inject_local_file_test_fault("owner_rename_failure", "EIO");\n    await rename(pendingPath, ownerPath);\n    maybe_crash_local_file_test_fault("after_owner_rename_crash", 83);\n  } catch (error) {',
-            'rename fault points',
+            '    await rename(pendingPath, ownerPath);\n  } catch (error) {\n    try {',
+            '    maybe_inject_local_file_test_fault("owner_rename_failure", "EIO");\n    await rename(pendingPath, ownerPath);\n    maybe_simulate_local_file_test_crash("after_owner_rename_crash");\n  } catch (error) {\n    if (is_local_file_test_crash(error)) throw error;\n    try {',
+            'rename and crash fault points',
           );
           s = once(
             s,
@@ -117,7 +117,7 @@ jobs:
           s = once(
             s,
             'export async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {\n  let handle;',
-            'async function read_local_file_owner_identity(\n  lockPath: string,\n  ownerPath: string,\n): Promise<LocalFileOwnerIdentity> {\n  let metadata;\n  try {\n    metadata = await lstat(ownerPath);\n  } catch (error) {\n    throw io_error(lockPath, "inspect local lock owner identity", error);\n  }\n  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {\n    throw new LocalFileLockError(\n      "compromised",\n      lockPath,\n      "owner marker identity is not a single-link unaliased regular file",\n    );\n  }\n  return {\n    dev: metadata.dev,\n    ino: metadata.ino,\n    birthtime_ms: metadata.birthtimeMs,\n    ctime_ms: metadata.ctimeMs,\n  };\n}\n\nfunction same_local_file_owner_identity(\n  left: LocalFileOwnerIdentity,\n  right: LocalFileOwnerIdentity,\n): boolean {\n  return left.dev === right.dev\n    && left.ino === right.ino\n    && left.birthtime_ms === right.birthtime_ms\n    && left.ctime_ms === right.ctime_ms;\n}\n\nexport async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {\n  maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");\n  let handle;',
+            'async function read_local_file_owner_identity(\n  lockPath: string,\n  ownerPath: string,\n): Promise<LocalFileOwnerIdentity> {\n  let metadata;\n  try {\n    metadata = await lstat(ownerPath);\n  } catch (error) {\n    throw io_error(lockPath, "inspect local lock owner identity", error);\n  }\n  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {\n    throw new LocalFileLockError(\n      "compromised",\n      lockPath,\n      "owner marker identity is not a single-link unaliased regular file",\n    );\n  }\n  return { dev: metadata.dev, ino: metadata.ino };\n}\n\nfunction same_local_file_owner_identity(\n  left: LocalFileOwnerIdentity,\n  right: LocalFileOwnerIdentity,\n): boolean {\n  return left.dev === right.dev && left.ino === right.ino;\n}\n\nexport async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {\n  maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");\n  let handle;',
             'owner identity helper and read permission fault',
           );
           fs.writeFileSync(p, s);
@@ -136,18 +136,13 @@ jobs:
             '  try {\n    maybe_inject_local_file_test_fault("recovery_claim_failure", "EIO");\n    // This rename is the destructive recovery linearization point.',
             'recovery claim fault',
           );
-          s = once(
-            s,
-            '    await rename(ownerPath, recoveringPath);\n  } catch (error) {',
-            '    await rename(ownerPath, recoveringPath);\n    maybe_inject_local_file_test_fault("recovery_after_claim_failure", "EIO");\n  } catch (error) {',
-            'recovery post-claim fault',
-          );
           fs.writeFileSync(p, s);
           NODE
 
           npm ci --prefix src/ts --no-audit --no-fund
           npm run build --prefix src/ts
           npm test --prefix src/ts
+          node scripts/check-local-file-fault-injection-eleventh-order.mjs
           rm .github/workflows/tmp-den-2037-v11-runtime-patch.yml
           git add -A
           git diff --cached --check
