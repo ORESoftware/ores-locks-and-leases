@@ -14,8 +14,9 @@ url = "https://github.com/ORESoftware/ores-locks-and-leases"
 # mechanics belong here. Runtime lock/lease provider and timing policy belongs
 # in .ores-lock.toml and is intentionally not duplicated in this manifest.
 # Local TypeSpec + authored JSON Schema remain the domain peer authorities.
-# ores-interfaces supplies the fleet-wide shared public validation interfaces;
-# neither dependency transfers authority to generated output.
+# ores-interfaces supplies fleet-wide shared public validation interfaces; its
+# exact reviewed source revision is consumer-pinned in contracts/shared-interfaces.json.
+# Neither package dependency transfers authority to generated output.
 [dependencies]
 "oresoftware/ores-contracts" = "^0.1.0"
 "oresoftware/ores-interfaces" = "^0.1.0"
