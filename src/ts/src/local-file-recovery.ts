@@ -1,4 +1,4 @@
-import { lstat, rmdir, unlink } from "node:fs/promises";
+import { lstat, rename, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -14,6 +14,8 @@ import {
 } from "./local-file.js";
 
 export { MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES } from "./local-file.js";
+
+const LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE = "owner.recovering";
 
 export type LocalFileLockInspectionState = "absent" | "held" | "incomplete" | "compromised";
 
@@ -160,15 +162,35 @@ export async function recover_local_file_lock(
     );
   }
 
+  const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
+  const recoveringPath = join(path, LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE);
   try {
-    await unlink(join(path, LOCAL_FILE_LOCK_OWNER_FILE));
+    // This rename is the destructive recovery linearization point. In
+    // particular, Windows may allow more than one concurrent unlink() caller
+    // to report success while deletion is pending. Moving the authenticated
+    // owner marker to one fixed private recovery name gives exactly one caller
+    // the capability to continue; every competing caller loses the source name
+    // and therefore cannot also report destructive success.
+    await rename(ownerPath, recoveringPath);
+  } catch (error) {
+    const code = error_code(error);
+    throw new LocalFileLockError(
+      code === "EEXIST" || code === "ENOTEMPTY" ? "compromised" : "io",
+      path,
+      `claim local lock recovery failed: ${describe_error(error)}`,
+      error,
+    );
+  }
+
+  try {
+    await unlink(recoveringPath);
     await rmdir(path);
   } catch (error) {
     const code = error_code(error);
     throw new LocalFileLockError(
       code === "ENOTEMPTY" || code === "EEXIST" ? "compromised" : "io",
       path,
-      `recover local lock failed: ${describe_error(error)}`,
+      `recover local lock failed after recovery claim: ${describe_error(error)}`,
       error,
     );
   }
