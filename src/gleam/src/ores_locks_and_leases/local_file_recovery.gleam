@@ -16,10 +16,41 @@ pub type LocalFileLockInspectionState {
   Compromised
 }
 
+/// Stable machine-readable diagnostic reason shared with the authored local
+/// TypeSpec and JSON Schema authorities.
+pub type LocalFileLockInspectionReason {
+  OwnerMarkerMissing
+  PathNotDirectory
+  DirtyDirectory
+  OwnerNotRegularFile
+  OwnerTooLarge
+  OwnerInvalidUtf8
+  OwnerIdentityChanged
+  PermissionsWidened
+  OwnerContractViolation
+}
+
+pub fn inspection_reason_string(
+  reason: LocalFileLockInspectionReason,
+) -> String {
+  case reason {
+    OwnerMarkerMissing -> "owner_marker_missing"
+    PathNotDirectory -> "path_not_directory"
+    DirtyDirectory -> "dirty_directory"
+    OwnerNotRegularFile -> "owner_not_regular_file"
+    OwnerTooLarge -> "owner_too_large"
+    OwnerInvalidUtf8 -> "owner_invalid_utf8"
+    OwnerIdentityChanged -> "owner_identity_changed"
+    PermissionsWidened -> "permissions_widened"
+    OwnerContractViolation -> "owner_contract_violation"
+  }
+}
+
 pub type LocalFileLockInspection {
   LocalFileLockInspection(
     state: LocalFileLockInspectionState,
     owner: Option(String),
+    reason: Option(LocalFileLockInspectionReason),
     message: Option(String),
   )
 }
@@ -40,10 +71,14 @@ fn inspect_path(
   path: String,
 ) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
   case path_kind(path) {
-    0 -> Ok(LocalFileLockInspection(Absent, None, None))
+    0 -> Ok(LocalFileLockInspection(Absent, None, None, None))
     4 -> Error(io_error(path, "inspect local lock path failed"))
     1 -> inspect_directory(path)
-    _ -> Ok(compromised("lock path is not an unaliased directory"))
+    _ ->
+      Ok(compromised(
+        PathNotDirectory,
+        "lock path is not an unaliased directory",
+      ))
   }
 }
 
@@ -56,7 +91,11 @@ fn inspect_directory(
       Ok(incomplete(
         "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
       ))
-    1 -> Ok(compromised("lock directory must contain exactly one owner marker"))
+    1 ->
+      Ok(compromised(
+        DirtyDirectory,
+        "lock directory must contain exactly one owner marker",
+      ))
     _ -> inspect_owner(path)
   }
 }
@@ -78,7 +117,11 @@ fn inspect_owner(
           ))
       }
     0 -> Ok(incomplete("owner token disappeared during inspection"))
-    _ -> Ok(compromised("owner token is not an unaliased regular file"))
+    _ ->
+      Ok(compromised(
+        OwnerNotRegularFile,
+        "owner token is not an unaliased regular file",
+      ))
   }
 }
 
@@ -86,13 +129,15 @@ fn inspect_owner_value(
   owner: String,
 ) -> Result(LocalFileLockInspection, local_file.LocalFileLockError) {
   case owner_validation.validate(owner) {
-    owner_validation.OwnerEmpty -> Ok(compromised("owner token is empty"))
+    owner_validation.OwnerEmpty ->
+      Ok(compromised(OwnerContractViolation, "owner token is empty"))
     owner_validation.OwnerOversized ->
       Ok(compromised(
+        OwnerContractViolation,
         "owner token exceeds the portable 512-code-point contract bound",
       ))
     owner_validation.OwnerValid ->
-      Ok(LocalFileLockInspection(Held, Some(owner), None))
+      Ok(LocalFileLockInspection(Held, Some(owner), None, None))
   }
 }
 
@@ -146,14 +191,14 @@ fn recover_inspected(
 ) -> Result(Bool, local_file.LocalFileLockError) {
   case inspect_path(path) {
     Error(error) -> Error(error)
-    Ok(LocalFileLockInspection(Absent, _, _)) -> Ok(False)
-    Ok(LocalFileLockInspection(Incomplete, _, _)) ->
+    Ok(LocalFileLockInspection(Absent, _, _, _)) -> Ok(False)
+    Ok(LocalFileLockInspection(Incomplete, _, _, _)) ->
       Error(local_file.LocalFileLockError(
         local_file.Compromised,
         path,
         "incomplete lock state has no owner identity; refusing automatic recovery",
       ))
-    Ok(LocalFileLockInspection(Compromised, _, message)) ->
+    Ok(LocalFileLockInspection(Compromised, _, _, message)) ->
       Error(
         local_file.LocalFileLockError(
           local_file.Compromised,
@@ -164,10 +209,10 @@ fn recover_inspected(
           },
         ),
       )
-    Ok(LocalFileLockInspection(Held, Some(owner), _))
+    Ok(LocalFileLockInspection(Held, Some(owner), _, _))
       if owner == expected_owner
     -> recover_after_recheck(path, expected_owner)
-    Ok(LocalFileLockInspection(Held, _, _)) ->
+    Ok(LocalFileLockInspection(Held, _, _, _)) ->
       Error(local_file.LocalFileLockError(
         local_file.Compromised,
         path,
@@ -181,7 +226,7 @@ fn recover_after_recheck(
   expected_owner: String,
 ) -> Result(Bool, local_file.LocalFileLockError) {
   case inspect_path(path) {
-    Ok(LocalFileLockInspection(Held, Some(owner), _))
+    Ok(LocalFileLockInspection(Held, Some(owner), _, _))
       if owner == expected_owner
     -> remove_recovered(path)
     Error(error) -> Error(error)
@@ -254,11 +299,19 @@ fn validate_inputs(
 }
 
 fn incomplete(message: String) -> LocalFileLockInspection {
-  LocalFileLockInspection(Incomplete, None, Some(message))
+  LocalFileLockInspection(
+    Incomplete,
+    None,
+    Some(OwnerMarkerMissing),
+    Some(message),
+  )
 }
 
-fn compromised(message: String) -> LocalFileLockInspection {
-  LocalFileLockInspection(Compromised, None, Some(message))
+fn compromised(
+  reason: LocalFileLockInspectionReason,
+  message: String,
+) -> LocalFileLockInspection {
+  LocalFileLockInspection(Compromised, None, Some(reason), Some(message))
 }
 
 fn lock_path(lock_root: String, lock_name: String) -> String {

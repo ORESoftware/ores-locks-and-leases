@@ -216,8 +216,15 @@ async function proveEighthOrder(root) {
   record("same-runtime-crash-held-lock-does-not-block-sibling-rendezvous");
 
   // 10. Explicit crash recovery owns only the rendezvous, not caller directories.
+  // Windows rejects trailing-space path components by contract. Keep the
+  // stronger surrounding-whitespace spelling on POSIX while Windows still
+  // exercises Unicode and embedded spaces with a portable parent component.
   for (const runtime of runtimes) {
-    const parent = join(root, ` caller-parent-${runtime}-λ `, "nested 子");
+    const parent = join(
+      root,
+      isWindows ? `caller parent-${runtime}-λ` : ` caller-parent-${runtime}-λ `,
+      "nested 子",
+    );
     await mkdir(parent, { recursive: true });
     const lockPath = join(parent, "crash-recovery.lock");
     const owner = `parent-recovery-${runtime}`;

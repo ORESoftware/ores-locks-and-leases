@@ -1,7 +1,7 @@
 //! Explicit inspection and operator-driven recovery for portable local locks.
 
 use crate::local_file::{
-    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_path, validate_owner,
+    LocalFileLockError, LocalFileLockErrorKind, validate_local_file_owner, validate_local_file_path,
 };
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -14,6 +14,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::windows::fs::MetadataExt;
 
 const OWNER_FILE: &str = "owner";
+const OWNER_PENDING_FILE: &str = "owner.pending";
 const OWNER_MAX_CODEPOINTS: usize = 512;
 const OWNER_MAX_UTF8_BYTES: usize = 2048;
 const INSPECTION_MAX_DIRECTORY_ENTRIES: usize = 2;
@@ -24,19 +25,51 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 pub enum LocalFileLockInspectionState {
     Absent,
     Held,
-    /// The rendezvous directory exists but contains no owner marker.
+    /// The rendezvous directory exists but has no published owner marker.
     ///
-    /// This is the observable crash window either after atomic `mkdir` and
-    /// before owner publication, or after owner removal and before `rmdir`.
-    /// It is never treated as stale authority and is never auto-recovered.
+    /// This covers the observable crash windows after atomic `mkdir`, while a
+    /// fully written `owner.pending` awaits atomic rename, and after owner
+    /// removal before `rmdir`. It is never stale authority or auto-recovered.
     Incomplete,
     Compromised,
+}
+
+/// Stable machine-readable diagnostic reason aligned with the independent
+/// TypeSpec and authored JSON Schema local-file authorities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalFileLockInspectionReason {
+    OwnerMarkerMissing,
+    PathNotDirectory,
+    DirtyDirectory,
+    OwnerNotRegularFile,
+    OwnerTooLarge,
+    OwnerInvalidUtf8,
+    OwnerIdentityChanged,
+    PermissionsWidened,
+    OwnerContractViolation,
+}
+
+impl LocalFileLockInspectionReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OwnerMarkerMissing => "owner_marker_missing",
+            Self::PathNotDirectory => "path_not_directory",
+            Self::DirtyDirectory => "dirty_directory",
+            Self::OwnerNotRegularFile => "owner_not_regular_file",
+            Self::OwnerTooLarge => "owner_too_large",
+            Self::OwnerInvalidUtf8 => "owner_invalid_utf8",
+            Self::OwnerIdentityChanged => "owner_identity_changed",
+            Self::PermissionsWidened => "permissions_widened",
+            Self::OwnerContractViolation => "owner_contract_violation",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalFileLockInspection {
     pub state: LocalFileLockInspectionState,
     pub owner: Option<String>,
+    pub reason: Option<LocalFileLockInspectionReason>,
     pub message: Option<String>,
 }
 
@@ -52,13 +85,17 @@ pub fn inspect_local_file_lock(
             return Ok(LocalFileLockInspection {
                 state: LocalFileLockInspectionState::Absent,
                 owner: None,
+                reason: None,
                 message: None,
             });
         }
         Err(error) => return Err(io_error(path, "inspect local lock path", error)),
     };
     if !metadata.is_dir() || metadata_is_alias(&metadata) {
-        return Ok(compromised("lock path is not an unaliased directory"));
+        return Ok(compromised(
+            LocalFileLockInspectionReason::PathNotDirectory,
+            "lock path is not an unaliased directory",
+        ));
     }
 
     let entries = read_entry_names_bounded(path)?;
@@ -67,9 +104,15 @@ pub fn inspect_local_file_lock(
             "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
         ));
     }
+    if entries.len() == 1 && entries[0] == OWNER_PENDING_FILE {
+        return Ok(incomplete(
+            "owner publication is incomplete; pending owner marker is not ownership authority",
+        ));
+    }
     if entries.len() != 1 || entries[0] != OWNER_FILE {
         return Ok(compromised(
-            "lock directory must contain exactly one owner marker",
+            LocalFileLockInspectionReason::DirtyDirectory,
+            "lock directory must contain exactly one published owner marker",
         ));
     }
 
@@ -82,15 +125,20 @@ pub fn inspect_local_file_lock(
         Err(error) => return Err(io_error(path, "inspect local lock owner token", error)),
     };
     if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
-        return Ok(compromised("owner token is not an unaliased regular file"));
-    }
-    if owner_has_multiple_links(&owner_metadata) {
         return Ok(compromised(
-            "owner token has multiple hard links; refusing aliased ownership state",
+            LocalFileLockInspectionReason::OwnerNotRegularFile,
+            "owner token is not an unaliased regular file",
+        ));
+    }
+    if metadata_has_multiple_links(&owner_metadata) {
+        return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerIdentityChanged,
+            "owner token has multiple filesystem links; refusing aliased ownership state",
         ));
     }
     if owner_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
         return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerTooLarge,
             "owner token exceeds the portable 2048-byte UTF-8 storage bound",
         ));
     }
@@ -104,20 +152,23 @@ pub fn inspect_local_file_lock(
     };
     let opened_metadata = owner_file
         .metadata()
-        .map_err(|error| io_error(path, "inspect opened local lock owner token", error))?;
-    if !opened_metadata.is_file() || owner_has_multiple_links(&opened_metadata) {
+        .map_err(|error| io_error(path, "reinspect opened local lock owner token", error))?;
+    if !opened_metadata.is_file() || metadata_is_alias(&opened_metadata) {
         return Ok(compromised(
-            "opened owner token is not a single-link regular file",
+            LocalFileLockInspectionReason::OwnerNotRegularFile,
+            "opened owner token is not an unaliased regular file",
+        ));
+    }
+    if metadata_has_multiple_links(&opened_metadata) {
+        return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerIdentityChanged,
+            "opened owner token became multiply linked while inspecting",
         ));
     }
     if !same_file_identity(&owner_metadata, &opened_metadata) {
         return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerIdentityChanged,
             "owner token identity changed while opening; refusing raced path-to-handle state",
-        ));
-    }
-    if opened_metadata.len() > OWNER_MAX_UTF8_BYTES as u64 {
-        return Ok(compromised(
-            "owner token exceeds the portable 2048-byte UTF-8 storage bound",
         ));
     }
 
@@ -129,18 +180,28 @@ pub fn inspect_local_file_lock(
         .map_err(|error| io_error(path, "read local lock owner token", error))?;
     if owner_bytes.len() > OWNER_MAX_UTF8_BYTES {
         return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerTooLarge,
             "owner token exceeds the portable 2048-byte UTF-8 storage bound",
         ));
     }
     let owner = match String::from_utf8(owner_bytes) {
         Ok(owner) => owner,
-        Err(_) => return Ok(compromised("owner token is not valid UTF-8")),
+        Err(_) => {
+            return Ok(compromised(
+                LocalFileLockInspectionReason::OwnerInvalidUtf8,
+                "owner token is not valid UTF-8",
+            ));
+        }
     };
     if owner.is_empty() {
-        return Ok(compromised("owner token is empty"));
+        return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerContractViolation,
+            "owner token is empty",
+        ));
     }
     if owner.chars().count() > OWNER_MAX_CODEPOINTS {
         return Ok(compromised(
+            LocalFileLockInspectionReason::OwnerContractViolation,
             "owner token exceeds the portable 512-code-point contract bound",
         ));
     }
@@ -148,6 +209,7 @@ pub fn inspect_local_file_lock(
     Ok(LocalFileLockInspection {
         state: LocalFileLockInspectionState::Held,
         owner: Some(owner),
+        reason: None,
         message: None,
     })
 }
@@ -172,7 +234,7 @@ pub fn recover_local_file_lock(
             "explicit confirmed_inactive=true is required for recovery",
         ));
     }
-    validate_owner(path, expected_owner)?;
+    validate_local_file_owner(path, expected_owner)?;
 
     let inspection = inspect_local_file_lock(path)?;
     match inspection.state {
@@ -203,8 +265,6 @@ pub fn recover_local_file_lock(
         ));
     }
 
-    // Re-inspect immediately before destructive action so recovery never relies
-    // on an earlier snapshot after the operator confirmation step.
     let final_inspection = inspect_local_file_lock(path)?;
     if final_inspection.state != LocalFileLockInspectionState::Held
         || final_inspection.owner.as_deref() != Some(expected_owner)
@@ -259,14 +319,16 @@ fn incomplete(message: &str) -> LocalFileLockInspection {
     LocalFileLockInspection {
         state: LocalFileLockInspectionState::Incomplete,
         owner: None,
+        reason: Some(LocalFileLockInspectionReason::OwnerMarkerMissing),
         message: Some(message.to_owned()),
     }
 }
 
-fn compromised(message: &str) -> LocalFileLockInspection {
+fn compromised(reason: LocalFileLockInspectionReason, message: &str) -> LocalFileLockInspection {
     LocalFileLockInspection {
         state: LocalFileLockInspectionState::Compromised,
         owner: None,
+        reason: Some(reason),
         message: Some(message.to_owned()),
     }
 }
@@ -291,14 +353,18 @@ fn io_error(path: &Path, operation: &str, source: io::Error) -> LocalFileLockErr
     )
 }
 
-#[cfg(unix)]
-fn owner_has_multiple_links(metadata: &fs::Metadata) -> bool {
-    metadata.nlink() != 1
-}
-
-#[cfg(not(unix))]
-fn owner_has_multiple_links(_metadata: &fs::Metadata) -> bool {
-    false
+fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 #[cfg(unix)]
@@ -311,16 +377,14 @@ fn same_file_identity(_path_metadata: &fs::Metadata, _opened_metadata: &fs::Meta
     true
 }
 
-fn metadata_is_alias(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
+fn metadata_has_multiple_links(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
     {
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        metadata.nlink() != 1
     }
-    #[cfg(not(windows))]
+    #[cfg(not(unix))]
     {
+        let _ = metadata;
         false
     }
 }

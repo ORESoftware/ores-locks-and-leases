@@ -112,8 +112,8 @@ pub use local_file::{
     local_file_lock_exists,
 };
 pub use local_file_recovery::{
-    LocalFileLockInspection, LocalFileLockInspectionState, inspect_local_file_lock,
-    recover_local_file_lock,
+    LocalFileLockInspection, LocalFileLockInspectionReason, LocalFileLockInspectionState,
+    inspect_local_file_lock, recover_local_file_lock,
 };
 pub use local_file_scoped::{ScopedLocalFileLockError, with_local_file_lock};
 pub use managed::{

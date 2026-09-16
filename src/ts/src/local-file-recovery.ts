@@ -1,8 +1,9 @@
-import { lstat, rmdir, unlink } from "node:fs/promises";
+import { lstat, rename, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   LOCAL_FILE_LOCK_OWNER_FILE,
+  LOCAL_FILE_LOCK_OWNER_PENDING_FILE,
   LocalFileLockError,
   MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS,
   MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES,
@@ -13,6 +14,8 @@ import {
 } from "./local-file.js";
 
 export { MAX_LOCAL_FILE_LOCK_OWNER_UTF8_BYTES } from "./local-file.js";
+
+const LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE = "owner.recovering";
 
 export type LocalFileLockInspectionState = "absent" | "held" | "incomplete" | "compromised";
 
@@ -68,8 +71,16 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
       "lock directory has no owner marker; acquisition or release may have crashed mid-transition",
     );
   }
+  if (entries.length === 1 && entries[0] === LOCAL_FILE_LOCK_OWNER_PENDING_FILE) {
+    return incomplete(
+      "owner publication is incomplete; pending owner marker is not ownership authority",
+    );
+  }
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
-    return compromised("dirty_directory", "lock directory must contain exactly one owner marker");
+    return compromised(
+      "dirty_directory",
+      "lock directory must contain exactly one published owner marker",
+    );
   }
 
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
@@ -151,15 +162,35 @@ export async function recover_local_file_lock(
     );
   }
 
+  const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
+  const recoveringPath = join(path, LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE);
   try {
-    await unlink(join(path, LOCAL_FILE_LOCK_OWNER_FILE));
+    // This rename is the destructive recovery linearization point. In
+    // particular, Windows may allow more than one concurrent unlink() caller
+    // to report success while deletion is pending. Moving the authenticated
+    // owner marker to one fixed private recovery name gives exactly one caller
+    // the capability to continue; every competing caller loses the source name
+    // and therefore cannot also report destructive success.
+    await rename(ownerPath, recoveringPath);
+  } catch (error) {
+    const code = error_code(error);
+    throw new LocalFileLockError(
+      code === "EEXIST" || code === "ENOTEMPTY" ? "compromised" : "io",
+      path,
+      `claim local lock recovery failed: ${describe_error(error)}`,
+      error,
+    );
+  }
+
+  try {
+    await unlink(recoveringPath);
     await rmdir(path);
   } catch (error) {
     const code = error_code(error);
     throw new LocalFileLockError(
       code === "ENOTEMPTY" || code === "EEXIST" ? "compromised" : "io",
       path,
-      `recover local lock failed: ${describe_error(error)}`,
+      `recover local lock failed after recovery claim: ${describe_error(error)}`,
       error,
     );
   }
@@ -194,15 +225,6 @@ async function lstat_inspection_lock_path(path: string) {
   throw io_error(path, "inspect local lock path", lastError);
 }
 
-/**
- * Read the bounded directory shape while tolerating only the two OS-level
- * disappearance signals produced by a concurrent clean release.
- *
- * POSIX typically reports ENOENT when rmdir wins between lstat and opendir.
- * Windows can transiently report EPERM while the directory is deletion-pending.
- * For Windows EPERM we perform a tiny bounded retry: disappearance linearizes
- * as `absent`; a persistent EPERM on an extant path remains a genuine IO error.
- */
 async function read_inspection_entry_names(path: string): Promise<string[] | null> {
   const maxAttempts = process.platform === "win32" ? 4 : 1;
   let lastError: unknown;
@@ -238,13 +260,6 @@ async function read_inspection_entry_names(path: string): Promise<string[] | nul
   throw lastError;
 }
 
-/**
- * Read the owner marker for diagnostics while preserving fail-closed release
- * behavior. Windows may report EPERM when a clean concurrent release has
- * already put the owner/directory into deletion-pending state. Inspection may
- * linearize that bounded race as absent/incomplete, but persistent EPERM on an
- * extant lock remains an IO error and is never converted to healthy state.
- */
 async function read_inspection_owner(
   path: string,
   ownerPath: string,
