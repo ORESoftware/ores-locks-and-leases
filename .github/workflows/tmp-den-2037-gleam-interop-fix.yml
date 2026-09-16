@@ -1,0 +1,83 @@
+name: tmp DEN-2037 Gleam interop fix
+
+on:
+  push:
+    branches: [reconcile/den-2037-tenth-order-current-main-20260915]
+    paths: [.github/workflows/tmp-den-2037-gleam-interop-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: reconcile/den-2037-tenth-order-current-main-20260915
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Patch interop harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name ORESoftware
+          git config user.email noreply@github.com
+          node <<'NODE'
+          const fs = require('node:fs');
+          const p = 'scripts/check-local-file-process-interop.mjs';
+          let s = fs.readFileSync(p, 'utf8');
+          const anchor = 'const gleamRoot = resolve(repoRoot, "src/gleam");\nconst runtimes = ["rust", "go", "node", "gleam"];';
+          const replacement = 'const gleamRoot = resolve(repoRoot, "src/gleam");\nconst gleamEbinRoot = resolve(gleamRoot, "build/dev/erlang");\nconst gleamEbinPaths = (await readdir(gleamEbinRoot))\n  .sort()\n  .map((name) => resolve(gleamEbinRoot, name, "ebin"));\nconst gleamCodePathArgs = gleamEbinPaths.flatMap((path) => ["-pa", path]);\nconst runtimes = ["rust", "go", "node", "gleam"];';
+          if (!s.includes(anchor)) throw new Error('missing gleam root anchor');
+          s = s.replace(anchor, replacement);
+          const oldBlock = `  if (runtime === "gleam") {
+    return {
+      command: "gleam",
+      args: [
+        "run",
+        "-m",
+        "local_file_probe",
+        "--",
+        mode,
+        dirname(lockPath),
+        basename(lockPath),
+        owner,
+        String(holdMs),
+      ],
+      cwd: gleamRoot,
+    };
+  }`;
+          const newBlock = `  if (runtime === "gleam") {
+    return {
+      command: "erl",
+      args: [
+        "-noshell",
+        ...gleamCodePathArgs,
+        "-s",
+        "local_file_probe",
+        "main",
+        "-s",
+        "init",
+        "stop",
+        "-extra",
+        mode,
+        dirname(lockPath),
+        basename(lockPath),
+        owner,
+        String(holdMs),
+      ],
+      cwd: gleamRoot,
+    };
+  }`;
+          if (!s.includes(oldBlock)) throw new Error('missing gleam command block');
+          s = s.replace(oldBlock, newBlock);
+          fs.writeFileSync(p, s);
+          NODE
+          rm .github/workflows/tmp-den-2037-gleam-interop-fix.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'DEN-2037 run built Gleam probe directly in process races'
+          git push origin HEAD:reconcile/den-2037-tenth-order-current-main-20260915
