@@ -13,6 +13,7 @@ declare module "node:fs/promises" {
     readonly ino: number;
     readonly mode: number;
     readonly nlink: number;
+    readonly birthtimeMs: number;
     isDirectory(): boolean;
     isFile(): boolean;
     isSymbolicLink(): boolean;

@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { lstat, mkdir, open, opendir, rename, rmdir, unlink } from "node:fs/promises";
 
+import {
+  is_local_file_test_crash,
+  local_file_test_fault_enabled,
+  maybe_inject_local_file_test_fault,
+  maybe_simulate_local_file_test_crash,
+} from "./local-file-test-faults.js";
+
 export const LOCAL_FILE_LOCK_OWNER_FILE = "owner";
 export const LOCAL_FILE_LOCK_OWNER_PENDING_FILE = "owner.pending";
 export const MAX_LOCAL_FILE_LOCK_OWNER_CODEPOINTS = 512;
@@ -45,6 +52,11 @@ export function generated_local_file_lock_owner(): string {
 }
 
 type LocalFileLockReleaseState = "held" | "released" | "partial";
+type LocalFileOwnerIdentity = Readonly<{
+  dev: number;
+  ino: number;
+  birthtime_ms: number;
+}>;
 const LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN = Symbol("ores-local-file-lock-held-constructor");
 
 export class LocalFileLock {
@@ -53,8 +65,14 @@ export class LocalFileLock {
   #release_state: LocalFileLockReleaseState = "held";
   #release_promise: Promise<void> | undefined;
   #partial_release_error: unknown | undefined;
+  readonly #owner_identity: LocalFileOwnerIdentity;
 
-  constructor(path: string, owner: string, token: typeof LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN) {
+  constructor(
+    path: string,
+    owner: string,
+    ownerIdentity: LocalFileOwnerIdentity,
+    token: typeof LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN,
+  ) {
     if (token !== LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN) {
       throw new LocalFileLockError(
         "invalid_input",
@@ -64,6 +82,7 @@ export class LocalFileLock {
     }
     this.path = path;
     this.owner = owner;
+    this.#owner_identity = ownerIdentity;
   }
 
   get released(): boolean {
@@ -104,6 +123,14 @@ export class LocalFileLock {
 
     const ownerPath = join(this.path, LOCAL_FILE_LOCK_OWNER_FILE);
     await validate_regular_file(this.path, ownerPath, "owner token");
+    const currentOwnerIdentity = await read_local_file_owner_identity(this.path, ownerPath);
+    if (!same_local_file_owner_identity(this.#owner_identity, currentOwnerIdentity)) {
+      throw new LocalFileLockError(
+        "compromised",
+        this.path,
+        "owner marker identity changed; refusing stale-handle release across recovery/reacquisition",
+      );
+    }
     const observed = await read_bounded_local_file_lock_owner(this.path, ownerPath);
     if (observed !== this.owner) {
       throw new LocalFileLockError(
@@ -117,6 +144,7 @@ export class LocalFileLock {
     try {
       await unlink(ownerPath);
       ownerRemoved = true;
+      maybe_inject_local_file_test_fault("release_rmdir_failure", "EIO");
       await rmdir(this.path);
     } catch (error) {
       const code = error_code(error);
@@ -141,6 +169,7 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
   validate_local_file_lock_owner(path, owner);
   const parent = dirname(path);
   try {
+    maybe_inject_local_file_test_fault("parent_prepare_ero_fs", "EROFS");
     await mkdir(parent, { recursive: true, mode: 0o700 });
     await validate_real_directory(path, parent, "lock parent");
     await validate_posix_trusted_parent(path, parent);
@@ -187,10 +216,20 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
   let pendingHandle;
   try {
     pendingHandle = await open(pendingPath, "wx", 0o600);
-    await pendingHandle.writeFile(owner, { encoding: "utf8" });
+    maybe_simulate_local_file_test_crash("after_pending_create_crash");
+    if (local_file_test_fault_enabled("owner_short_write")) {
+      const prefixLength = Math.max(1, Math.floor(owner.length / 2));
+      await pendingHandle.writeFile(owner.slice(0, prefixLength), { encoding: "utf8" });
+      maybe_inject_local_file_test_fault("owner_short_write", "EIO");
+    } else {
+      await pendingHandle.writeFile(owner, { encoding: "utf8" });
+    }
+    maybe_inject_local_file_test_fault("owner_sync_failure", "EIO");
     await pendingHandle.sync();
     await pendingHandle.close();
     pendingHandle = undefined;
+    maybe_inject_local_file_test_fault("owner_close_failure", "EIO");
+    maybe_simulate_local_file_test_crash("after_pending_sync_crash");
 
     try {
       await lstat(ownerPath);
@@ -205,8 +244,11 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
         throw io_error(path, "inspect owner publication target", targetError);
       }
     }
+    maybe_inject_local_file_test_fault("owner_rename_failure", "EIO");
     await rename(pendingPath, ownerPath);
+    maybe_simulate_local_file_test_crash("after_owner_rename_crash");
   } catch (error) {
+    if (is_local_file_test_crash(error)) throw error;
     try {
       await pendingHandle?.close();
     } catch {
@@ -220,6 +262,7 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
       await unlink(ownerPath).catch((cleanupError) => {
         if (error_code(cleanupError) !== "ENOENT") throw cleanupError;
       });
+      maybe_inject_local_file_test_fault("rollback_rmdir_failure", "EIO");
       await rmdir(path);
     } catch (cleanupError) {
       rollbackError = cleanupError;
@@ -228,8 +271,8 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
       throw new LocalFileLockError(
         "compromised",
         path,
-        `owner publication failed and provisional lock rollback also failed: ${describe_error(rollbackError)}`,
-        rollbackError,
+        `owner publication failed: ${describe_error(error)}; provisional lock rollback also failed: ${describe_error(rollbackError)}`,
+        { primary_error: error, rollback_error: rollbackError },
       );
     }
     if (error instanceof LocalFileLockError) throw error;
@@ -244,8 +287,10 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
     throw io_error(path, "publish local lock owner token", error);
   }
 
+  let ownerIdentity: LocalFileOwnerIdentity;
   try {
     await validate_regular_file(path, ownerPath, "owner token");
+    ownerIdentity = await read_local_file_owner_identity(path, ownerPath);
   } catch (error) {
     let rollbackError: unknown;
     try {
@@ -265,7 +310,7 @@ export async function try_acquire_local_file_lock(path: string, owner: string): 
     throw error;
   }
 
-  return new LocalFileLock(path, owner, LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN);
+  return new LocalFileLock(path, owner, ownerIdentity, LOCAL_FILE_LOCK_CONSTRUCTOR_TOKEN);
 }
 
 export async function acquire_local_file_lock(
@@ -347,9 +392,43 @@ export async function read_local_file_lock_entry_names_bounded(path: string): Pr
   }
 }
 
+async function read_local_file_owner_identity(
+  lockPath: string,
+  ownerPath: string,
+): Promise<LocalFileOwnerIdentity> {
+  let metadata;
+  try {
+    metadata = await lstat(ownerPath);
+  } catch (error) {
+    throw io_error(lockPath, "inspect local lock owner identity", error);
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
+    throw new LocalFileLockError(
+      "compromised",
+      lockPath,
+      "owner marker identity is not a single-link unaliased regular file",
+    );
+  }
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    birthtime_ms: metadata.birthtimeMs,
+  };
+}
+
+function same_local_file_owner_identity(
+  left: LocalFileOwnerIdentity,
+  right: LocalFileOwnerIdentity,
+): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.birthtime_ms === right.birthtime_ms;
+}
+
 export async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {
   let handle;
   try {
+    maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");
     const pathMetadata = await lstat(ownerPath);
     if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
       throw new LocalFileLockError("compromised", lockPath, "owner token is not an unaliased regular file");
