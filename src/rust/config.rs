@@ -527,7 +527,10 @@ fn validate_outer_authority(
         }
     }
 
-    match profile.outer_authority.unwrap_or(OuterLeaseAuthority::Fiducia) {
+    match profile
+        .outer_authority
+        .unwrap_or(OuterLeaseAuthority::Fiducia)
+    {
         OuterLeaseAuthority::Fiducia => {
             if profile.cloudflare_durable_object.is_some() || profile.redis.is_some() {
                 return Err(LockConfigError::new(
@@ -560,16 +563,13 @@ fn validate_outer_authority(
                     "Cloudflare authority must not carry Fiducia or Redis config",
                 ));
             }
-            let cloudflare = profile
-                .cloudflare_durable_object
-                .as_ref()
-                .ok_or_else(|| {
-                    LockConfigError::new(
-                        "cloudflare_missing",
-                        "profiles.cloudflare_durable_object",
-                        "Cloudflare Durable Object authority requires its config table",
-                    )
-                })?;
+            let cloudflare = profile.cloudflare_durable_object.as_ref().ok_or_else(|| {
+                LockConfigError::new(
+                    "cloudflare_missing",
+                    "profiles.cloudflare_durable_object",
+                    "Cloudflare Durable Object authority requires its config table",
+                )
+            })?;
             validate_endpoint_and_secret(
                 env,
                 &cloudflare.endpoint_env,
@@ -730,9 +730,14 @@ mod tests {
         );
         assert_eq!(local.pg_scope(), None);
 
-        let fiducia = config.profile("service-composed").expect("legacy service profile");
+        let fiducia = config
+            .profile("service-composed")
+            .expect("legacy service profile");
         assert_eq!(fiducia.layers(), LockLayers::BOTH);
-        assert_eq!(fiducia.outer_authority(), Some(OuterLeaseAuthority::Fiducia));
+        assert_eq!(
+            fiducia.outer_authority(),
+            Some(OuterLeaseAuthority::Fiducia)
+        );
         assert!(fiducia.local_file_options().is_none());
         assert_eq!(fiducia.pg_scope(), Some(PgScope::Transaction));
 

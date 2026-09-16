@@ -103,7 +103,11 @@ jobs:
       - name: Rust portable local lock tests
         working-directory: src/rust
         run: |
-          cargo test --locked --no-default-features local_file
+          # Run only library unit tests for the feature-free local-file slice.
+          # Without --lib, Cargo also compiles config-only integration tests even
+          # though the name filter is `local_file`, which incorrectly makes this
+          # portable local-file gate depend on the disabled `config` feature.
+          cargo test --locked --no-default-features --lib local_file
           cargo test --locked --no-default-features --test local_file_fail_closed
           cargo test --locked --no-default-features --test local_file_scoped
           cargo test --locked --no-default-features --test local_file_recovery

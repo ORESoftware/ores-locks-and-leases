@@ -1,0 +1,24 @@
+{
+  "schema": "ores.locks.shared-interfaces-pin/v1",
+  "repository": "ORESoftware/ores-interfaces",
+  "commit": "a347aac8b828998a80a3f99215bc00dd3046bdcd",
+  "source": {
+    "repository": "ores-otel/ores-interfaces",
+    "commit": "3d26d3c0f79277b040e4b0665e6d6e6808f695de"
+  },
+  "certification": {
+    "validatorRepository": "ORESoftware/typespec-json-schema-validator",
+    "validatorCommit": "1614779275115258db73b92c938313e8ae437936"
+  },
+  "authorityModel": "independent-typespec-and-json-schema-peers",
+  "authorityTransfer": false,
+  "expectedDeclarations": [
+    "Ores.Validation.GitHubActionsBuildLogEvent",
+    "Ores.Validation.GitHubActionsLogStream",
+    "Ores.Validation.PageQuery",
+    "Ores.Validation.ProblemDetails",
+    "Ores.Validation.PublicValidationContract",
+    "Ores.Validation.RequestMeta"
+  ],
+  "requiredRuntimeExports": ["node", "native"]
+}

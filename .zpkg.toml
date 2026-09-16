@@ -13,11 +13,13 @@ url = "https://github.com/ORESoftware/ores-locks-and-leases"
 # Package coordinates, immutable dependencies, and build/install/publish/test
 # mechanics belong here. Runtime lock/lease provider and timing policy belongs
 # in .ores-lock.toml and is intentionally not duplicated in this manifest.
-# The contract types are authored twice (TypeSpec + JSON Schema) and checked
-# for parity by ores-contracts; the fiducia wire protocol is the one the
-# fiducia-clients speak. Neither is a runtime dependency of the slices.
+# Local TypeSpec + authored JSON Schema remain the domain peer authorities.
+# ores-interfaces supplies fleet-wide shared public validation interfaces; its
+# exact reviewed source revision is consumer-pinned in contracts/shared-interfaces.json.
+# Neither package dependency transfers authority to generated output.
 [dependencies]
 "oresoftware/ores-contracts" = "^0.1.0"
+"oresoftware/ores-interfaces" = "^0.1.0"
 
 [publish]
 include_readme = true
