@@ -1,0 +1,94 @@
+name: tmp DEN-2037 Gleam probe runtime
+
+on:
+  push:
+    branches: [reconcile/den-2037-tenth-order-current-main-20260915]
+    paths: [.github/workflows/tmp-den-2037-gleam-probe-runtime.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-prove:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: reconcile/den-2037-tenth-order-current-main-20260915
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.85.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.22'
+          cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: '27'
+          gleam-version: '1.16.0'
+          rebar3-version: '3'
+      - name: Patch process harness and execute full interop matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name ORESoftware
+          git config user.email noreply@github.com
+          node <<'NODE'
+          const fs = require('node:fs');
+          const p = 'scripts/check-local-file-process-interop.mjs';
+          let s = fs.readFileSync(p, 'utf8');
+          const anchor = 'const nodeProbe = resolve(repoRoot, "src/ts/test/local-file-process-probe.mjs");\nconst gleamRoot = resolve(repoRoot, "src/gleam");';
+          const replacement = 'const nodeProbe = resolve(repoRoot, "src/ts/test/local-file-process-probe.mjs");\nconst gleamProbe = resolve(repoRoot, "scripts/local-file-gleam-probe.mjs");\nconst gleamRoot = resolve(repoRoot, "src/gleam");';
+          if (!s.includes(anchor)) throw new Error('missing gleam probe path anchor');
+          s = s.replace(anchor, replacement);
+          const oldBlock = `  if (runtime === "gleam") {
+    return {
+      command: "gleam",
+      args: [
+        "run",
+        "-m",
+        "local_file_probe",
+        "--",
+        mode,
+        dirname(lockPath),
+        basename(lockPath),
+        owner,
+        String(holdMs),
+      ],
+      cwd: gleamRoot,
+    };
+  }`;
+          const newBlock = `  if (runtime === "gleam") {
+    return {
+      command: process.execPath,
+      args: [
+        gleamProbe,
+        mode,
+        dirname(lockPath),
+        basename(lockPath),
+        owner,
+        String(holdMs),
+      ],
+      cwd: repoRoot,
+    };
+  }`;
+          if (!s.includes(oldBlock)) throw new Error('missing gleam command block');
+          s = s.replace(oldBlock, newBlock);
+          fs.writeFileSync(p, s);
+          NODE
+          npm ci --prefix src/ts --no-audit --no-fund
+          npm run build --prefix src/ts
+          mkdir -p tmp
+          (cd src/rust && cargo build --locked --no-default-features --example local_file_probe)
+          (cd src/go && go build -o ../../tmp/local-file-go-probe ./cmd/local_file_probe)
+          (cd src/gleam && gleam build)
+          node scripts/check-local-file-process-interop.mjs
+          rm .github/workflows/tmp-den-2037-gleam-probe-runtime.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'test(DEN-2037): execute prebuilt Gleam probe in process matrices'
+          git push origin HEAD:reconcile/den-2037-tenth-order-current-main-20260915
