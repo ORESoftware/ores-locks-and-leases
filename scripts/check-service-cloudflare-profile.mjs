@@ -31,7 +31,7 @@ if (JSON.stringify(vector.config_runtime_owners) !== JSON.stringify(['rust'])) {
 }
 
 requireRegex(config, /profile_id\s*=\s*"service-cloudflare-pg"[\s\S]*outer_authority\s*=\s*"cloudflare_durable_object"/, '.ores-lock.toml');
-requireRegex(config, /\[profiles\.pg_advisory\][\s\S]*scope\s*=\s*"transaction"/, '.ores-lock.toml');
+requireRegex(config, /\[profiles\.postgres\][\s\S]*scope\s*=\s*"transaction"/, '.ores-lock.toml');
 
 for (const [label, source] of [['rust', rust], ['typescript', ts], ['go', go], ['dart', dart]]) {
   requireRegex(source, /renew/i, `${label} maintained path`);
