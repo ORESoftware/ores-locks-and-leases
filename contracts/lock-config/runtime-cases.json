@@ -103,7 +103,7 @@
     {
       "id": "reject-fiducia-dormant-table",
       "accept": false,
-      "expected_error": "fiducia_dormant",
+      "expected_error": "outer_authority_config_dormant",
       "toml": "schema_version = \"ores.lock.config.v1\"\ndefault_profile = \"local\"\n\n[[env]]\nkey = \"ORES_LOCK_ROOT\"\nkind = \"path\"\nrequired = false\nsecret = false\npurpose = \"Local lock rendezvous root.\"\n\n[[env]]\nkey = \"FIDUCIA_BASE_URL\"\nkind = \"url\"\nrequired = false\nsecret = false\npurpose = \"Fiducia endpoint.\"\n\n[[env]]\nkey = \"FIDUCIA_AUTH_TOKEN\"\nkind = \"string\"\nrequired = false\nsecret = true\npurpose = \"Fiducia credential.\"\n\n[[profiles]]\nprofile_id = \"local\"\nwait = false\nwait_timeout_ms = 0\nretry_interval_ms = 0\n[profiles.providers]\nlocal_file = true\nfiducia = false\npg_advisory = false\n[profiles.local_file]\nroot_env = \"ORES_LOCK_ROOT\"\nrequire_existing_root = false\n[profiles.fiducia]\nendpoint_env = \"FIDUCIA_BASE_URL\"\nauth_token_env = \"FIDUCIA_AUTH_TOKEN\"\n"
     },
     {
