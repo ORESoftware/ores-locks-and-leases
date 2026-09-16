@@ -21,9 +21,10 @@ jobs:
           persist-credentials: true
           show-progress: false
 
-      - name: Apply the exact 24-file tenth-order delta with three-way semantics
+      - name: Apply the exact tenth-order delta with three-way semantics
         shell: bash
         env:
+          CURRENT_MAIN: 82cb1a2c4ca535bdf23148b1b71d8494b91e0831
           BASE: e95730ee8705130e141cb2d7002f950658e08613
           HEAD: 020c62c6731b28464a20c3e101b7064e40f668fb
         run: |
@@ -33,6 +34,12 @@ jobs:
           git fetch --no-tags origin refs/heads/den-2037-tenth-order-10-20260915:refs/remotes/origin/tenth-order-old
           git cat-file -e "$BASE^{commit}"
           git cat-file -e "$HEAD^{commit}"
+
+          # This one source file was independently brought to the exact tenth-order
+          # blob by the current-main DEN-3828 reconciliation, so it must be a no-op.
+          test "$(git rev-parse "$CURRENT_MAIN:scripts/test-generated-lib-core.sh")" = \
+               "$(git rev-parse "$HEAD:scripts/test-generated-lib-core.sh")"
+
           git diff --binary "$BASE" "$HEAD" > "$RUNNER_TEMP/tenth-order.patch"
           if ! git apply --3way --index "$RUNNER_TEMP/tenth-order.patch"; then
             echo '::error::Exact tenth-order delta has genuine overlapping hunks; preserving diagnostics without pushing.'
@@ -43,9 +50,10 @@ jobs:
           fi
 
           mapfile -t changed < <(git diff --cached --name-only | sort)
-          echo "Replayed file count: ${#changed[@]}"
+          echo "Net replay file count: ${#changed[@]}"
           printf '%s\n' "${changed[@]}"
-          test "${#changed[@]}" -eq 24
+          test "${#changed[@]}" -eq 23
+          ! printf '%s\n' "${changed[@]}" | grep -qx 'scripts/test-generated-lib-core.sh'
 
       - name: Commit replay, remove one-shot workflow, and push
         shell: bash
@@ -53,5 +61,5 @@ jobs:
           set -euo pipefail
           git rm .github/workflows/replay-tenth-order.yml
           git commit -m 'DEN-2037: replay tenth-order local-lock hardening on current main'
-          test "$(git diff --name-only 82cb1a2c4ca535bdf23148b1b71d8494b91e0831..HEAD | wc -l | tr -d ' ')" -eq 24
+          test "$(git diff --name-only 82cb1a2c4ca535bdf23148b1b71d8494b91e0831..HEAD | wc -l | tr -d ' ')" -eq 23
           git push origin HEAD:reconcile/den-2037-tenth-order-current-main-20260916
