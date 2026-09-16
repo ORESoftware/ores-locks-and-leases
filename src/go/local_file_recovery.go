@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -235,18 +237,47 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 	if err := os.Remove(recoveringPath); err != nil {
 		return false, localFileError(LocalFileIO, path, "remove recovered owner claim failed", err)
 	}
-	if err := os.Remove(path); err != nil {
-		kind := LocalFileIO
-		if dir, openErr := os.Open(path); openErr == nil {
+	if err := removeRecoveredLockDirectory(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Windows refuses to remove an otherwise empty directory while another
+// concurrent inspector still has a directory handle open. The recovery claim
+// has already removed the sole authoritative owner marker at this point, so a
+// bounded retry is safe and lets the one destructive winner finish after those
+// read-only handles close. POSIX keeps its single-attempt behavior.
+func removeRecoveredLockDirectory(path string) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := os.Remove(path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		dir, openErr := os.Open(path)
+		if openErr == nil {
 			names, readErr := dir.Readdirnames(1)
 			_ = dir.Close()
 			if readErr == nil && len(names) > 0 {
-				kind = LocalFileCompromised
+				return localFileError(LocalFileCompromised, path, "remove recovered lock directory failed after recovery claim; directory is no longer empty", lastErr)
 			}
+		} else if errors.Is(openErr, os.ErrNotExist) {
+			return nil
 		}
-		return false, localFileError(kind, path, "remove recovered lock directory failed after recovery claim", err)
+
+		if runtime.GOOS != "windows" || attempt+1 == attempts {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	return true, nil
+	return localFileError(LocalFileIO, path, "remove recovered lock directory failed after recovery claim", lastErr)
 }
 
 func incompleteInspection(message string) LocalFileLockInspection {
