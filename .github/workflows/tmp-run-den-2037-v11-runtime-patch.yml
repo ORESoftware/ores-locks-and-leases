@@ -49,10 +49,10 @@ jobs:
           const after = 'export async function read_bounded_local_file_lock_owner(lockPath: string, ownerPath: string): Promise<string> {\n  let handle;';
           if (!s.includes(before)) throw new Error('missing pre-open permission injection');
           s = s.replace(before, after);
-          const openBefore = '  try {\n    handle = await open(ownerPath, "r");';
-          const openAfter = '  try {\n    maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");\n    handle = await open(ownerPath, "r");';
-          if (!s.includes(openBefore)) throw new Error('missing owner open try/catch');
-          s = s.replace(openBefore, openAfter);
+          const tryBefore = '  let handle;\n  try {\n    const pathMetadata = await lstat(ownerPath);';
+          const tryAfter = '  let handle;\n  try {\n    maybe_inject_local_file_test_fault("owner_read_permission", "EACCES");\n    const pathMetadata = await lstat(ownerPath);';
+          if (!s.includes(tryBefore)) throw new Error('missing owner-read IO try/catch');
+          s = s.replace(tryBefore, tryAfter);
           fs.writeFileSync(p, s);
           NODE
           npm ci --prefix src/ts --no-audit --no-fund
