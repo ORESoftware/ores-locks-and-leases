@@ -64,7 +64,17 @@ sh -n "$scratch/locks/persistence/redis/test-fenced-write.sh"
 test "$(grep -c 'ores-locks-and-leases:fencing-assets:v1' "$scratch/locks/README.md")" -eq 1
 
 log "Rust"
-cargo test --manifest-path "$scratch/locks/langs/rust/Cargo.toml" --all-targets --features full
+generated_rust_manifest="$scratch/locks/langs/rust/Cargo.toml"
+# The repository's Rust slice declares rust-version=1.85 and its admitted lock
+# currently resolves yoke-derive 0.8.2. A fresh scratch resolution started
+# selecting yoke-derive 0.8.3, whose proc-macro source does not compile on
+# rustc 1.85.1 despite lacking a restrictive rust-version declaration. Build
+# generated consumers from an explicit lock and pin that known-compatible
+# transitive version so the MSRV gate is deterministic rather than registry-tip
+# dependent. `cargo test --locked` then proves the lock used for admission.
+cargo generate-lockfile --manifest-path "$generated_rust_manifest"
+cargo update --manifest-path "$generated_rust_manifest" -p yoke-derive --precise 0.8.2
+cargo test --manifest-path "$generated_rust_manifest" --locked --all-targets --features full
 
 log "Go"
 go -C "$scratch/locks/langs/golang" mod tidy
