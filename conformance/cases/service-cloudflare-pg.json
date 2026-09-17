@@ -1,0 +1,18 @@
+{
+  "schema": "ores.lock.service-profile.v1",
+  "profile_id": "service-cloudflare-pg",
+  "outer_authority": "cloudflare_durable_object",
+  "inner_authority": "postgres_advisory",
+  "postgres_scope": "transaction",
+  "lock_key_shape": "<github-org>/data-lifecycle/<environment>/<policy-id>",
+  "final_renewal_required": true,
+  "scheduler_local_lock_is_authority": false,
+  "config_runtime_owners": ["rust"],
+  "runtime_key_examples": {
+    "rust": "oresoftware/data-lifecycle/prod/default-v2",
+    "typescript": "oresoftware/data-lifecycle/prod/default-v2",
+    "go": "oresoftware/data-lifecycle/prod/default-v2",
+    "gleam": "oresoftware/data-lifecycle/prod/default-v2",
+    "dart": "oresoftware/data-lifecycle/prod/default-v2"
+  }
+}
