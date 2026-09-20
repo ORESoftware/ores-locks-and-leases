@@ -10,21 +10,15 @@ keywords = ["lock", "lease", "postgres", "advisory-lock", "fencing", "fiducia", 
 vcs = "git"
 url = "https://github.com/ORESoftware/ores-locks-and-leases"
 
-# Package coordinates, immutable dependencies, and build/install/publish/test
-# mechanics belong here. Runtime lock/lease provider and timing policy belongs
-# in .ores-lock.toml and is intentionally not duplicated in this manifest.
-# Local TypeSpec + authored JSON Schema remain the domain peer authorities.
-# ores-interfaces supplies fleet-wide shared public validation interfaces; its
-# exact reviewed source revision is consumer-pinned in contracts/shared-interfaces.json.
-# Neither package dependency transfers authority to generated output.
 [dependencies]
 "oresoftware/ores-contracts" = "^0.1.0"
 "oresoftware/ores-interfaces" = "^0.1.0"
+"oresoftware/typespec-json-schema-validator" = "^0.1.0"
 
 [publish]
 include_readme = true
 tag_format = "v{version}"
-smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/.ores-lock.toml\" && test -f \"$ZED_PKG_TEST_TARGET/contracts/lock-config/contracts.config.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/fence-decision.json\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/postgres/fencing.sql\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/redis/fenced-write.lua\""
+smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/.ores-lock.toml\" && test -f \"$ZED_PKG_TEST_TARGET/contracts/lock-config/contracts.config.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/check.sh\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/lock-plan.json\" && test -f \"$ZED_PKG_TEST_TARGET/conformance/cases/fence-decision.json\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/postgres/fencing.sql\" && test -f \"$ZED_PKG_TEST_TARGET/persistence/redis/fenced-write.lua\""
 exclude = [
   ".env",
   ".env.*",
@@ -47,8 +41,6 @@ exclude = [
 [install]
 dir = ".vendor/.zed"
 
-# Whole-repository slice: every implementation plus the corpus and persistence
-# adapters they are all verified against.
 [targets.repository]
 dir = "."
 
@@ -87,18 +79,20 @@ tag_format = "dart/v{version}"
 dir = "src/gleam"
 adapter = "none"
 
-# The corpus on its own: an implementation in a language this package does
-# not ship yet still has something to be correct against.
+[targets.contracts]
+dir = "contracts"
+name = "ores-locks-and-leases-contracts"
+adapter = "none"
+
 [targets.conformance]
 dir = "conformance"
 name = "ores-locks-and-leases-conformance"
 adapter = "none"
 
-# Database-owned fencing enforcement for Supabase/Neon/PostgreSQL and Redis.
 [targets.persistence]
 dir = "persistence"
 name = "ores-locks-and-leases-persistence"
 adapter = "none"
 
 [scripts]
-test = "sh scripts/test-all.sh"
+test = "sh conformance/check.sh"
