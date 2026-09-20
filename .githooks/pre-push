@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root"
+zed_bin="${ZED_BIN:-$(command -v zed 2>/dev/null || true)}"
+[ -n "$zed_bin" ] || { echo "[zed-pre-push] zed not found; refusing to bypass boundary admission" >&2; exit 1; }
+had_lock=0; [ -f .zpkg.lock ] && had_lock=1
+pack_dir="${TMPDIR:-/tmp}/ores-locks-zed-pack-$$"
+cleanup(){ [ "$had_lock" -eq 1 ] || rm -f .zpkg.lock; rm -rf "$pack_dir"; }
+trap cleanup EXIT HUP INT TERM
+if [ "$had_lock" -eq 1 ]; then "$zed_bin" validate --require-lock; else "$zed_bin" validate; fi
+"$zed_bin" install
+"$zed_bin" validate --require-lock
+"$zed_bin" install --frozen
+"$zed_bin" build
+"$zed_bin" run test
+mkdir -p "$pack_dir"
+"$zed_bin" pack --out "$pack_dir"
+if [ "$had_lock" -eq 1 ] && ! git diff --quiet -- .zpkg.lock; then
+  echo "[zed-pre-push] .zpkg.lock changed; commit the resolver-produced lock before pushing" >&2
+  exit 1
+fi
