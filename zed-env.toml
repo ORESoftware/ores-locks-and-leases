@@ -1,0 +1,17 @@
+schema = 2
+
+[tasks.conformance]
+description = "Run the canonical contracts/conformance boundary"
+run = ["sh conformance/check.sh"]
+
+[tasks.test]
+description = "Run the package-level test contract"
+run = ["sh conformance/check.sh"]
+
+[tasks.precommit]
+description = "Run staged boundary admission"
+run = ["sh .githooks/pre-commit"]
+
+[tasks.prepush]
+description = "Exercise the complete Zed lifecycle before push"
+run = ["sh .githooks/pre-push"]
