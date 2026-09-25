@@ -1,0 +1,69 @@
+{
+  "schema": "ores.locks.polyglot-governance/v1",
+  "repository": "ORESoftware/ores-locks-and-leases",
+  "sourceRoot": "src",
+  "languageBoundaries": "contracts/language-boundaries.json",
+  "primaryWorkflow": ".github/workflows/ci.yml",
+  "contractRuntimeWorkflow": ".github/workflows/contract-runtime-boundary.yml",
+  "tjsvRuntimeWorkflow": ".github/workflows/tjsv-language-runtime-boundary.yml",
+  "participants": [
+    {
+      "id": "rust",
+      "sourceDir": "src/rust",
+      "boundaryLanguage": "rust",
+      "ciJob": "rust",
+      "contractRuntimeJob": "rust",
+      "tjsvStepId": "rust"
+    },
+    {
+      "id": "typescript",
+      "sourceDir": "src/ts",
+      "boundaryLanguage": "typescript",
+      "ciJob": "typescript",
+      "contractRuntimeJob": "typescript",
+      "tjsvStepId": "typescript"
+    },
+    {
+      "id": "go",
+      "sourceDir": "src/go",
+      "boundaryLanguage": "go",
+      "ciJob": "go",
+      "contractRuntimeJob": "go",
+      "tjsvStepId": "go"
+    },
+    {
+      "id": "dart",
+      "sourceDir": "src/dart",
+      "boundaryLanguage": "dart",
+      "ciJob": "dart",
+      "contractRuntimeJob": "dart",
+      "tjsvStepId": "dart"
+    },
+    {
+      "id": "gleam",
+      "sourceDir": "src/gleam",
+      "boundaryLanguage": "gleam",
+      "ciJob": "gleam",
+      "contractRuntimeJob": "gleam",
+      "tjsvStepId": "gleam"
+    }
+  ],
+  "ownedProjections": [
+    {
+      "owner": "gleam",
+      "path": "src/gleam/src/ores_locks_and_leases_local_file_ffi.erl",
+      "language": "erlang",
+      "reason": "BEAM FFI is an implementation detail of the governed Gleam runtime."
+    }
+  ],
+  "policy": {
+    "allSourceDirectoriesMustBeGoverned": true,
+    "allGovernedLanguagesMustBeRequiredContractBoundaries": true,
+    "primaryCiMustExerciseEveryLanguage": true,
+    "contractRuntimeCiMustExerciseEveryLanguage": true,
+    "tjsvRuntimeAdmissionMustExerciseEveryLanguage": true,
+    "generatedEvidenceIsAuthority": false,
+    "runtimeSpecificContractForksAllowed": false,
+    "missingOrExtraParticipantFailsClosed": true
+  }
+}

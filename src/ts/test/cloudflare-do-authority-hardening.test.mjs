@@ -67,9 +67,23 @@ test("corrupt persisted fencing watermark fails closed without minting authority
   assert.equal(storage.sql.state.next_token, "01");
 });
 
-test("renew and release reject malformed or non-positive token authority", async () => {
+test("renew and release reject malformed, non-positive, or out-of-domain token authority", async () => {
   const {authority} = makeAuthority();
-  for (const fencing_token of [undefined, null, 0, -1, 1.5, true, "0", "01", "+1", "1.0", " 1", "9007199254740992"]) {
+  for (const fencing_token of [
+    undefined,
+    null,
+    0,
+    -1,
+    1.5,
+    true,
+    "0",
+    "01",
+    "+1",
+    "1.0",
+    " 1",
+    9_007_199_254_740_992,
+    "18446744073709551616",
+  ]) {
     assert.deepEqual(
       await authority.renew({holder: "a", fencing_token, ttl_ms: 1000}),
       {renewed: false, error: "invalid_fencing_token"},
@@ -81,6 +95,29 @@ test("renew and release reject malformed or non-positive token authority", async
       `release admitted ${String(fencing_token)}`,
     );
   }
+});
+
+test("renew and release preserve full-width decimal token authority", async (t) => {
+  const originalNow = Date.now;
+  let now = 10_000;
+  Date.now = () => now;
+  t.after(() => { Date.now = originalNow; });
+
+  const {storage, authority} = makeAuthority();
+  storage.sql.state.next_token = "9007199254740991";
+
+  const grant = await authority.acquire({holder: "wide", request_id: "wide-1", ttl_ms: 1000});
+  assert.equal(grant.fencing_token, "9007199254740992");
+
+  now = 10_100;
+  assert.deepEqual(
+    await authority.renew({holder: "wide", fencing_token: "9007199254740992", ttl_ms: 1000}),
+    {renewed: true, lease_expires_ms: 11_100, ttl_ms: 1000},
+  );
+  assert.deepEqual(
+    await authority.release({holder: "wide", fencing_token: "9007199254740992"}),
+    {released: true},
+  );
 });
 
 test("superseded owner cannot renew or release successor authority", async (t) => {
