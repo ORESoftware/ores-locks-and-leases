@@ -4,6 +4,7 @@ import test from "node:test";
 import { LockLeaseAuthority } from "../../../managed/cloudflare-do/src/authority.js";
 
 const MAX_SAFE_FENCING_TOKEN = "9007199254740991";
+const MAX_U64_FENCING_TOKEN = "18446744073709551615";
 
 function rows(items = []) {
   return { toArray: () => items };
@@ -118,17 +119,30 @@ test("RPC authority values preserve replay, explicit renewal, and fencing monoto
   assert.equal(next.fencing_token, "2");
 });
 
-test("RPC authority fails closed at Number.MAX_SAFE_INTEGER", async (t) => {
+test("RPC authority advances safely past Number.MAX_SAFE_INTEGER using decimal text", async (t) => {
   const originalNow = Date.now;
   Date.now = () => 10_000;
   t.after(() => { Date.now = originalNow; });
 
   const { authority: leases, storage } = authority();
   storage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
+  const grant = await leases.acquire({ holder: "worker-wide", request_id: "attempt-wide", ttl_ms: 1_000 });
+  assert.equal(grant.acquired, true);
+  assert.equal(grant.fencing_token, "9007199254740992");
+  assert.equal(storage.sql.state.next_token, "9007199254740992");
+});
+
+test("RPC authority fails closed only at uint64 exhaustion", async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => 10_000;
+  t.after(() => { Date.now = originalNow; });
+
+  const { authority: leases, storage } = authority();
+  storage.sql.state.next_token = MAX_U64_FENCING_TOKEN;
   assert.deepEqual(
     await leases.acquire({ holder: "worker-overflow", request_id: "attempt-overflow", ttl_ms: 1_000 }),
     { acquired: false, error: "fencing_token_exhausted" },
   );
   assert.equal(storage.sql.state.holder, null);
-  assert.equal(storage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
+  assert.equal(storage.sql.state.next_token, MAX_U64_FENCING_TOKEN);
 });
