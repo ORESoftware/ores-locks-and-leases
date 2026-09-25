@@ -11,8 +11,20 @@ fi
 
 if [ ! -f "$config" ]; then
   echo "missing $config" >&2
-  echo "copy managed/beamscale-critical-section/.bmscl-durable-objects.toml.example and set the admitted build_sha256" >&2
+  echo "copy managed/beamscale-critical-section/.bmscl-durable-objects.toml.example first" >&2
   exit 2
 fi
 
-exec bmscl durable-objects deploy --config "$config" "$@"
+case "${1:-deploy}" in
+  build)
+    shift
+    exec bmscl durable-objects build --config "$config" "$@"
+    ;;
+  deploy)
+    if [ "${1:-}" = "deploy" ]; then shift; fi
+    exec bmscl durable-objects deploy --config "$config" "$@"
+    ;;
+  *)
+    exec bmscl durable-objects deploy --config "$config" "$@"
+    ;;
+esac
