@@ -4,15 +4,12 @@ import type { AcquireOptions, Lease, LeaseGrant } from "./lease.js";
 
 /**
  * Structural subset of the lock object exposed by common Redlock clients.
- *
- * The Redlock algorithm provides a TTL-bounded quorum lock. It does NOT
- * inherently provide the monotonically increasing fencing token required to
- * reject a client that pauses past its lease and resumes after a successor has
- * acquired the resource. That token is deliberately supplied by the separate
- * `FencingTokenAuthority` below.
+ * `expiration` is the Redlock library's already drift-adjusted Unix epoch in
+ * milliseconds. It is required: fabricating `now + ttl` after acquisition can
+ * overstate authority when quorum acquisition or fencing-token minting was slow.
  */
 export interface RedlockHandle {
-  readonly expiration?: number;
+  readonly expiration: number;
   extend(ttlMs: number): Promise<RedlockHandle>;
   release(): Promise<unknown>;
 }
@@ -71,10 +68,16 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function expirationOf(handle: RedlockHandle, now: () => number, ttlMs: number): number {
-  return typeof handle.expiration === "number" && Number.isFinite(handle.expiration)
-    ? handle.expiration
-    : now() + ttlMs;
+function validExpiration(expiration: number, now: number): boolean {
+  return Number.isSafeInteger(expiration) && expiration > now;
+}
+
+async function releaseBestEffort(handle: RedlockHandle): Promise<void> {
+  try {
+    await handle.release();
+  } catch {
+    // The TTL remains the final cleanup bound. The caller receives no grant.
+  }
 }
 
 /**
@@ -83,11 +86,12 @@ function expirationOf(handle: RedlockHandle, now: () => number, ttlMs: number): 
  *
  * Ordering is intentionally strict:
  *
- *   Redlock quorum acquire -> mint monotonic fence -> guarded work
+ *   Redlock quorum acquire -> mint monotonic fence -> re-check lease expiry -> guarded work
  *
- * If token minting fails, the Redlock handle is released best-effort and no
- * grant is returned. Renewals extend only the existing Redlock lease and NEVER
- * mint a new token. A new token is minted only after a new acquisition.
+ * If token minting fails, or the Redlock validity window expires while the
+ * token is being minted, the handle is released best-effort and no grant is
+ * returned. Renewals extend only the existing Redlock lease and NEVER mint a
+ * new token. A new token is minted only after a new acquisition.
  */
 export class FencedRedlockLease implements Lease {
   readonly #redlock: RedlockClient;
@@ -140,6 +144,15 @@ export class FencedRedlockLease implements Lease {
         continue;
       }
 
+      if (!validExpiration(handle.expiration, this.#now())) {
+        await releaseBestEffort(handle);
+        throw new LockError(
+          "lost_lease",
+          key,
+          "Redlock grant was already expired or returned an invalid expiration",
+        );
+      }
+
       let fencingToken: bigint;
       try {
         fencingToken = await this.#fencing.nextFencingToken(key, holder, opts.requestId);
@@ -147,21 +160,27 @@ export class FencedRedlockLease implements Lease {
           throw new Error("fencing authority returned a non-positive token");
         }
       } catch (error) {
-        try {
-          await handle.release();
-        } catch {
-          // Preserve the token-authority failure as primary. No grant was ever
-          // returned, so guarded work cannot start; the Redlock TTL is the
-          // final cleanup bound if best-effort release also failed.
-        }
+        await releaseBestEffort(handle);
         throw LockError.transport(key, error, "fiducia.acquire");
+      }
+
+      // Fencing allocation can itself block on a database/consensus authority.
+      // Never begin guarded work if the Redlock validity window elapsed while
+      // that stronger monotonic epoch was being allocated.
+      if (!validExpiration(handle.expiration, this.#now())) {
+        await releaseBestEffort(handle);
+        throw new LockError(
+          "lost_lease",
+          key,
+          "Redlock grant expired while allocating its fencing token",
+        );
       }
 
       const grant: LeaseGrant = {
         key,
         holder,
         fencingToken,
-        leaseExpiresMs: expirationOf(handle, this.#now, opts.ttlMs),
+        leaseExpiresMs: handle.expiration,
         ttlMs: opts.ttlMs,
       };
       this.#held.set(grantId(grant), { handle, grant });
@@ -196,10 +215,20 @@ export class FencedRedlockLease implements Lease {
       );
     }
 
+    if (!validExpiration(handle.expiration, this.#now())) {
+      this.#held.delete(id);
+      await releaseBestEffort(handle);
+      throw new LockError(
+        "lost_lease",
+        grant.key,
+        "Redlock renewal returned an already-expired or invalid validity window",
+      );
+    }
+
     const renewed: LeaseGrant = {
       ...grant,
       ttlMs,
-      leaseExpiresMs: expirationOf(handle, this.#now, ttlMs),
+      leaseExpiresMs: handle.expiration,
     };
     this.#held.set(id, { handle, grant: renewed });
     return renewed;
