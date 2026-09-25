@@ -13,6 +13,8 @@ const DEFAULT_RECEIPT = "target/adversarial/cloudflare-do-receipt.json";
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_MINUS_ONE = MAX_SAFE - 1n;
 const MAX_PLUS_ONE = MAX_SAFE + 1n;
+const MAX_U64 = 18_446_744_073_709_551_615n;
+const MAX_U64_MINUS_ONE = MAX_U64 - 1n;
 
 function parseArgs(argv) {
   const options = {
@@ -260,7 +262,7 @@ async function runStaleOwnerScenario(clock) {
   };
 }
 
-async function runSafeIntegerBoundaryScenario() {
+async function runTokenBoundaryScenario() {
   const { authority: leases, storage } = authority();
   storage.sql.state.next_token = (MAX_SAFE - 2n).toString();
 
@@ -286,23 +288,65 @@ async function runSafeIntegerBoundaryScenario() {
     fencing_token: max.fencing_token,
   }), { released: true });
 
+  // Crossing JavaScript's Number safe-integer ceiling is valid because the
+  // authority persists and transports fencing tokens as canonical decimal text.
   const maxPlusOne = await restart(storage).acquire({
-    holder: "worker-overflow",
+    holder: "worker-json-unsafe",
     request_id: "boundary-max-plus-one",
     ttl_ms: 1_000,
   });
-  assert.deepEqual(maxPlusOne, { acquired: false, error: "fencing_token_exhausted" });
-  assert.equal(storage.sql.state.next_token, MAX_SAFE.toString());
+  assert.equal(maxPlusOne.acquired, true);
+  assert.equal(maxPlusOne.fencing_token, MAX_PLUS_ONE.toString());
+  assert.deepEqual(await restart(storage).release({
+    holder: "worker-json-unsafe",
+    fencing_token: maxPlusOne.fencing_token,
+  }), { released: true });
+
+  // Jump near the actual authority ceiling and prove the last two uint64 epochs
+  // are usable while the following acquire fails closed without mutating state.
+  storage.sql.state.next_token = (MAX_U64 - 2n).toString();
+
+  const u64MinusOne = await restart(storage).acquire({
+    holder: "worker-u64-minus-one",
+    request_id: "boundary-u64-minus-one",
+    ttl_ms: 1_000,
+  });
+  assert.equal(u64MinusOne.fencing_token, MAX_U64_MINUS_ONE.toString());
+  assert.deepEqual(await restart(storage).release({
+    holder: "worker-u64-minus-one",
+    fencing_token: u64MinusOne.fencing_token,
+  }), { released: true });
+
+  const u64Max = await restart(storage).acquire({
+    holder: "worker-u64-max",
+    request_id: "boundary-u64-max",
+    ttl_ms: 1_000,
+  });
+  assert.equal(u64Max.fencing_token, MAX_U64.toString());
+  assert.deepEqual(await restart(storage).release({
+    holder: "worker-u64-max",
+    fencing_token: u64Max.fencing_token,
+  }), { released: true });
+
+  const overflow = await restart(storage).acquire({
+    holder: "worker-overflow",
+    request_id: "boundary-u64-overflow",
+    ttl_ms: 1_000,
+  });
+  assert.deepEqual(overflow, { acquired: false, error: "fencing_token_exhausted" });
+  assert.equal(storage.sql.state.next_token, MAX_U64.toString());
   assert.equal(storage.sql.state.holder, null);
 
   return {
     status: "passed",
     fixtures: {
       maxMinusOne: MAX_MINUS_ONE.toString(),
-      max: MAX_SAFE.toString(),
-      maxPlusOne: MAX_PLUS_ONE.toString(),
+      maxSafe: MAX_SAFE.toString(),
+      firstJsonUnsafe: MAX_PLUS_ONE.toString(),
+      u64MinusOne: MAX_U64_MINUS_ONE.toString(),
+      u64Max: MAX_U64.toString(),
     },
-    maxPlusOneDecision: "fencing_token_exhausted",
+    overflowDecision: "fencing_token_exhausted",
   };
 }
 
@@ -334,7 +378,7 @@ async function main() {
     clock.now += 10_000;
     receipt.checks.staleOwner = await runStaleOwnerScenario(clock);
     clock.now += 10_000;
-    receipt.checks.safeIntegerBoundary = await runSafeIntegerBoundaryScenario();
+    receipt.checks.tokenBoundaries = await runTokenBoundaryScenario();
     receipt.status = "passed";
     receipt.zeroUnexplainedFindings = true;
   } catch (error) {
