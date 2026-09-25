@@ -25,10 +25,15 @@ pub enum RedlockAcquireError {
     Transport(String),
 }
 
-/// Structural Redlock handle. Extending a lease never mints a new fence.
+/// Structural Redlock handle.
+///
+/// `expiration_ms` is the concrete Redlock library's already drift-adjusted
+/// Unix epoch in milliseconds. It is required: synthesizing `now + ttl` after
+/// acquisition can overstate authority when quorum acquisition or fence minting
+/// was slow. Extending a lease never mints a new fencing token.
 pub trait RedlockHandle: Send {
-    fn expiration_ms(&self) -> Option<u64>;
-    fn extend(&mut self, ttl_ms: u64) -> RedlockFuture<'_, Result<Option<u64>, String>>;
+    fn expiration_ms(&self) -> u64;
+    fn extend(&mut self, ttl_ms: u64) -> RedlockFuture<'_, Result<u64, String>>;
     fn release(&mut self) -> RedlockFuture<'_, Result<(), String>>;
 }
 
@@ -76,11 +81,12 @@ impl GrantId {
 ///
 /// Ordering is fixed:
 ///
-/// `Redlock acquire -> mint fence -> guarded work -> Redlock release`.
+/// `Redlock acquire -> mint fence -> re-check expiry -> guarded work -> release`.
 ///
-/// If fence allocation fails, the Redlock handle is released best-effort and
-/// no grant is returned. Renewal extends the existing Redlock handle and keeps
-/// the original fencing token unchanged.
+/// If fence allocation fails, or the Redlock validity window elapses while the
+/// token is being allocated, the handle is released best-effort and no grant is
+/// returned. Renewal extends the existing Redlock handle and keeps the original
+/// fencing token unchanged.
 pub struct FencedRedlockLease<R, F>
 where
     R: RedlockClient,
@@ -109,6 +115,13 @@ where
     pub fn fencing(&self) -> &F {
         &self.fencing
     }
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(duration_ms)
+        .unwrap_or(0)
 }
 
 fn generated_holder() -> String {
@@ -208,6 +221,15 @@ where
                 }
             };
 
+            if handle.expiration_ms() <= unix_now_ms() {
+                let _ = handle.release().await;
+                return Err(LockError::new(
+                    LockErrorKind::LostLease,
+                    key,
+                    "Redlock grant was already expired when acquisition returned",
+                ));
+            }
+
             let fencing_token = match self.fencing.next_fencing_token(key, &holder).await {
                 Ok(token) if token > 0 => token,
                 Ok(_) => {
@@ -226,11 +248,24 @@ where
                 }
             };
 
+            // Fence allocation can wait on PostgreSQL, a Durable Object, or a
+            // consensus authority. Never start guarded work if the Redlock
+            // window elapsed while that stronger epoch was being allocated.
+            let lease_expires_ms = handle.expiration_ms();
+            if lease_expires_ms <= unix_now_ms() {
+                let _ = handle.release().await;
+                return Err(LockError::new(
+                    LockErrorKind::LostLease,
+                    key,
+                    "Redlock grant expired while allocating its fencing token",
+                ));
+            }
+
             let grant = LeaseGrant {
                 key: key.clone(),
                 holder,
                 fencing_token,
-                lease_expires_ms: handle.expiration_ms(),
+                lease_expires_ms: Some(lease_expires_ms),
                 ttl_ms,
             };
             self.held
@@ -260,7 +295,15 @@ where
         })?;
 
         let lease_expires_ms = match handle.extend(ttl_ms).await {
-            Ok(expires) => expires.or_else(|| handle.expiration_ms()),
+            Ok(expires) if expires > unix_now_ms() => expires,
+            Ok(_) => {
+                let _ = handle.release().await;
+                return Err(LockError::new(
+                    LockErrorKind::LostLease,
+                    &grant.key,
+                    "Redlock renewal returned an already-expired validity window",
+                ));
+            }
             Err(message) => {
                 return Err(LockError::new(
                     LockErrorKind::LostLease,
@@ -271,7 +314,7 @@ where
         };
 
         let renewed = LeaseGrant {
-            lease_expires_ms,
+            lease_expires_ms: Some(lease_expires_ms),
             ttl_ms,
             ..grant.clone()
         };
@@ -306,21 +349,21 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     struct FakeHandle {
-        expires: Option<u64>,
+        expires: u64,
         fail_extend: bool,
     }
 
     impl RedlockHandle for FakeHandle {
-        fn expiration_ms(&self) -> Option<u64> {
+        fn expiration_ms(&self) -> u64 {
             self.expires
         }
 
-        fn extend(&mut self, ttl_ms: u64) -> RedlockFuture<'_, Result<Option<u64>, String>> {
+        fn extend(&mut self, ttl_ms: u64) -> RedlockFuture<'_, Result<u64, String>> {
             Box::pin(async move {
                 if self.fail_extend {
                     Err("quorum lost".into())
                 } else {
-                    self.expires = Some(self.expires.unwrap_or(0).saturating_add(ttl_ms));
+                    self.expires = self.expires.saturating_add(ttl_ms);
                     Ok(self.expires)
                 }
             })
@@ -343,7 +386,7 @@ mod tests {
         ) -> RedlockFuture<'a, Result<Self::Handle, RedlockAcquireError>> {
             Box::pin(async {
                 Ok(FakeHandle {
-                    expires: Some(10_000),
+                    expires: unix_now_ms().saturating_add(60_000),
                     fail_extend: false,
                 })
             })
