@@ -128,3 +128,11 @@ export {
   UpstashRedisLease,
   type UpstashRedisLeaseOptions,
 } from "./upstash-redis.js";
+export {
+  FencedRedlockLease,
+  type FencedRedlockLeaseOptions,
+  type FencingTokenAuthority,
+  type RedlockAcquireErrorKind,
+  type RedlockClient,
+  type RedlockHandle,
+} from "./redlock.js";
