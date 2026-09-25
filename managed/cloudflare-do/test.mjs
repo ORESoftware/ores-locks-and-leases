@@ -198,7 +198,7 @@ test("HTTP boundary rejects unknown fields and invalid operation values", () => 
       ttl_ms: 1_000,
       fencing_token: "9007199254740992",
     }),
-    null,
+    "invalid_fencing_token",
   );
   assert.equal(
     validatePublicOperation("/v1/leases/renew", {
