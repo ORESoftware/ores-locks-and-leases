@@ -83,11 +83,39 @@ test("fencing mint failure releases Redlock and returns no grant", async () => {
         throw new Error("token authority unavailable");
       },
     },
+    now: () => 1_000,
   });
 
   await assert.rejects(
     lease.acquire(lockKey("redlock/fence-failure"), options(), false),
     (error) => error?.kind === "transport",
+  );
+  assert.deepEqual(events, [["acquire"], ["fence"], ["release"]]);
+});
+
+test("grant is refused if Redlock expires while the fencing token is minted", async () => {
+  const events = [];
+  let now = 1_000;
+  const lease = new FencedRedlockLease({
+    redlock: {
+      async acquire() {
+        events.push(["acquire"]);
+        return new FakeHandle(events, 1_500);
+      },
+    },
+    fencing: {
+      async nextFencingToken() {
+        events.push(["fence"]);
+        now = 1_500;
+        return 8n;
+      },
+    },
+    now: () => now,
+  });
+
+  await assert.rejects(
+    lease.acquire(lockKey("redlock/expired-during-fence"), options(), false),
+    (error) => error?.kind === "lost_lease",
   );
   assert.deepEqual(events, [["acquire"], ["fence"], ["release"]]);
 });
@@ -110,6 +138,7 @@ test("renewal failure is fail-closed as lost_lease", async () => {
         return 7n;
       },
     },
+    now: () => 1_000,
   });
 
   const grant = await lease.acquire(lockKey("redlock/lost"), options(), false);
