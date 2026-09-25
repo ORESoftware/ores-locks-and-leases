@@ -36,11 +36,11 @@ pub trait RedlockHandle: Send {
 pub trait RedlockClient: Sync {
     type Handle: RedlockHandle;
 
-    fn acquire(
-        &self,
-        key: &LockKey,
+    fn acquire<'a>(
+        &'a self,
+        key: &'a LockKey,
         ttl_ms: u64,
-    ) -> RedlockFuture<'_, Result<Self::Handle, RedlockAcquireError>>;
+    ) -> RedlockFuture<'a, Result<Self::Handle, RedlockAcquireError>>;
 }
 
 /// Strongly ordered source of fencing tokens.
@@ -48,11 +48,11 @@ pub trait RedlockClient: Sync {
 /// Implementations must survive process restart/failover and return a token
 /// strictly greater than every token previously returned for the same key.
 pub trait FencingTokenAuthority: Sync {
-    fn next_fencing_token(
-        &self,
-        key: &LockKey,
-        holder: &str,
-    ) -> RedlockFuture<'_, Result<u64, String>>;
+    fn next_fencing_token<'a>(
+        &'a self,
+        key: &'a LockKey,
+        holder: &'a str,
+    ) -> RedlockFuture<'a, Result<u64, String>>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -334,11 +334,11 @@ mod tests {
     impl RedlockClient for FakeRedlock {
         type Handle = FakeHandle;
 
-        fn acquire(
-            &self,
-            _key: &LockKey,
+        fn acquire<'a>(
+            &'a self,
+            _key: &'a LockKey,
             _ttl_ms: u64,
-        ) -> RedlockFuture<'_, Result<Self::Handle, RedlockAcquireError>> {
+        ) -> RedlockFuture<'a, Result<Self::Handle, RedlockAcquireError>> {
             Box::pin(async {
                 Ok(FakeHandle {
                     expires: Some(10_000),
@@ -352,11 +352,11 @@ mod tests {
     struct FakeFence(AtomicU64);
 
     impl FencingTokenAuthority for FakeFence {
-        fn next_fencing_token(
-            &self,
-            _key: &LockKey,
-            _holder: &str,
-        ) -> RedlockFuture<'_, Result<u64, String>> {
+        fn next_fencing_token<'a>(
+            &'a self,
+            _key: &'a LockKey,
+            _holder: &'a str,
+        ) -> RedlockFuture<'a, Result<u64, String>> {
             Box::pin(async { Ok(self.0.fetch_add(1, Ordering::SeqCst) + 1) })
         }
     }
