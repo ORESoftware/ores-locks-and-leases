@@ -5,6 +5,7 @@ on:
     paths:
       - 'contracts/**'
       - 'conformance/**'
+      - 'governance/**'
       - 'src/**'
       - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
@@ -12,12 +13,15 @@ on:
       - 'scripts/verify-language-runtime-boundaries.mjs'
       - 'scripts/verify-language-runtime-hardening.mjs'
       - 'scripts/verify-shared-interfaces-pin.mjs'
+      - 'scripts/check-polyglot-governance.mjs'
+      - 'scripts/check-polyglot-governance.mjs'
       - '.github/workflows/tjsv-language-runtime-boundary.yml'
   push:
     branches: [main]
     paths:
       - 'contracts/**'
       - 'conformance/**'
+      - 'governance/**'
       - 'src/**'
       - '.zpkg.toml'
       - 'scripts/check-tjsv-contracts.sh'
@@ -68,6 +72,9 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: '22' }
+
+      - name: Enforce governed language membership and CI parity
+        run: node scripts/check-polyglot-governance.mjs
 
       - name: Resolve immutable ores-interfaces dependency pin
         id: shared_pin
