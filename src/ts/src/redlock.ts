@@ -64,7 +64,7 @@ function grantId(grant: Pick<LeaseGrant, "key" | "holder" | "fencingToken">): st
 }
 
 function generatedHolder(): string {
-  return `redlock-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `redlock-${globalThis.crypto.randomUUID()}`;
 }
 
 function defaultSleep(ms: number): Promise<void> {
