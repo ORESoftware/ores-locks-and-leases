@@ -67,9 +67,23 @@ test("corrupt persisted fencing watermark fails closed without minting authority
   assert.equal(storage.sql.state.next_token, "01");
 });
 
-test("renew and release reject malformed or non-positive token authority", async () => {
+test("renew and release reject malformed, non-positive, or out-of-domain token authority", async () => {
   const {authority} = makeAuthority();
-  for (const fencing_token of [undefined, null, 0, -1, 1.5, true, "0", "01", "+1", "1.0", " 1", "9007199254740992"]) {
+  for (const fencing_token of [
+    undefined,
+    null,
+    0,
+    -1,
+    1.5,
+    true,
+    "0",
+    "01",
+    "+1",
+    "1.0",
+    " 1",
+    9_007_199_254_740_992,
+    "18446744073709551616",
+  ]) {
     assert.deepEqual(
       await authority.renew({holder: "a", fencing_token, ttl_ms: 1000}),
       {renewed: false, error: "invalid_fencing_token"},
