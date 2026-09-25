@@ -1,12 +1,17 @@
 schema_version = 1
-project = "ores-locks-and-leases"
 tenant_id = "replace-with-tenant"
 namespace = "locks"
-language = "gleam"
+language = "erlang"
 tenancy_class = "tenant_dedicated"
 
+[build]
+project = "./critical-worker"
+out_dir = "dist-critical"
+
 [artifact]
-build_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+directory = "dist-critical"
+# Optional exact pin after a reproducible build:
+# build_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 [deployment]
 id = "ores-locks-critical-sections"
