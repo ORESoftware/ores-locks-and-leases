@@ -1,0 +1,12 @@
+schema_version = 1
+project = "ores-locks-and-leases"
+tenant_id = "replace-with-tenant"
+namespace = "locks"
+language = "gleam"
+tenancy_class = "tenant_dedicated"
+
+[artifact]
+build_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[deployment]
+id = "ores-locks-critical-sections"

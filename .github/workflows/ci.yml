@@ -179,6 +179,8 @@ jobs:
         run: |
           bash -n templates/lib-core/fanout.sh
           sh -n scripts/test-persistence.sh
+          sh -n deploy/cloudflare-durable-objects.sh
+          sh -n deploy/beamscale-durable-objects.sh
           sh -n persistence/redis/test-fenced-write.sh
           sh -n managed/redis/test-authority.sh
           node --check managed/cloudflare-do/src/index.js
