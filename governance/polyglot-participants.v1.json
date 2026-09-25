@@ -1,0 +1,73 @@
+{
+  "schema": "ores.polyglot-governance/v1",
+  "repository": "ORESoftware/ores-locks-and-leases",
+  "sourceRoot": "src",
+  "workflow": ".github/workflows/ci.yml",
+  "requiredWorkflowTokens": [
+    "TypeSpec and JSON Schema authorities agree"
+  ],
+  "participants": [
+    {
+      "id": "rust",
+      "sourceDir": "src/rust",
+      "ciJob": "rust",
+      "boundaryLanguage": "rust",
+      "providerLanguage": "rust",
+      "requiredCiTokens": [
+        "cargo test --locked --all-targets --features full"
+      ]
+    },
+    {
+      "id": "go",
+      "sourceDir": "src/go",
+      "ciJob": "go",
+      "boundaryLanguage": "go",
+      "providerLanguage": "go",
+      "requiredCiTokens": [
+        "go test ./..."
+      ]
+    },
+    {
+      "id": "typescript",
+      "sourceDir": "src/ts",
+      "ciJob": "typescript",
+      "boundaryLanguage": "typescript",
+      "providerLanguage": "typescript",
+      "requiredCiTokens": [
+        "npm test"
+      ]
+    },
+    {
+      "id": "dart",
+      "sourceDir": "src/dart",
+      "ciJob": "dart",
+      "boundaryLanguage": "dart",
+      "providerLanguage": "dart",
+      "requiredCiTokens": [
+        "dart test"
+      ]
+    },
+    {
+      "id": "gleam",
+      "sourceDir": "src/gleam",
+      "ciJob": "gleam",
+      "boundaryLanguage": "gleam",
+      "providerLanguage": "gleam",
+      "requiredCiTokens": [
+        "gleam test"
+      ]
+    }
+  ],
+  "ignoredSourceDirectories": [],
+  "mirrors": {
+    "languageBoundaries": "contracts/language-boundaries.json",
+    "providerMatrix": "conformance/providers.v1.json"
+  },
+  "policy": {
+    "allSourceDirectoriesMustBeGoverned": true,
+    "ciExercisesEveryParticipant": true,
+    "missingOrExtraParticipantFailsClosed": true,
+    "languageBoundariesMustMatchParticipants": true,
+    "providerLanguagesMustBeGoverned": true
+  }
+}
