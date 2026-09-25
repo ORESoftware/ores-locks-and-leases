@@ -158,26 +158,19 @@ test("Durable Object authority replays without extending and renews only by toke
   assert.equal(second.fencing_token, "2");
 });
 
-test("Durable Object authority advances beyond the JSON safe-integer ceiling and fails closed at uint64", async (t) => {
+test("Durable Object authority fails closed at the public cross-runtime fencing ceiling", async (t) => {
   const originalNow = Date.now;
   Date.now = () => 10_000;
   t.after(() => { Date.now = originalNow; });
 
-  const { authority: wideLeases, storage: wideStorage } = authority();
-  wideStorage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
-  const wide = await wideLeases.acquire({ holder: "worker-wide", request_id: "wide", ttl_ms: 1_000 });
-  assert.equal(wide.acquired, true);
-  assert.equal(wide.fencing_token, "9007199254740992");
-  assert.equal(wideStorage.sql.state.next_token, "9007199254740992");
-
   const { authority: exhaustedLeases, storage: exhaustedStorage } = authority();
-  exhaustedStorage.sql.state.next_token = MAX_U64_FENCING_TOKEN;
+  exhaustedStorage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
   assert.deepEqual(
     await exhaustedLeases.acquire({ holder: "worker-overflow", request_id: "overflow", ttl_ms: 1_000 }),
     { acquired: false, error: "fencing_token_exhausted" },
   );
   assert.equal(exhaustedStorage.sql.state.holder, null);
-  assert.equal(exhaustedStorage.sql.state.next_token, MAX_U64_FENCING_TOKEN);
+  assert.equal(exhaustedStorage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
 });
 
 test("HTTP boundary rejects unknown fields and invalid operation values", () => {
