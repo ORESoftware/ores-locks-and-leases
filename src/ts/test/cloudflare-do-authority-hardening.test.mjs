@@ -97,6 +97,29 @@ test("renew and release reject malformed, non-positive, or out-of-domain token a
   }
 });
 
+test("renew and release preserve full-width decimal token authority", async (t) => {
+  const originalNow = Date.now;
+  let now = 10_000;
+  Date.now = () => now;
+  t.after(() => { Date.now = originalNow; });
+
+  const {storage, authority} = makeAuthority();
+  storage.sql.state.next_token = "9007199254740991";
+
+  const grant = await authority.acquire({holder: "wide", request_id: "wide-1", ttl_ms: 1000});
+  assert.equal(grant.fencing_token, "9007199254740992");
+
+  now = 10_100;
+  assert.deepEqual(
+    await authority.renew({holder: "wide", fencing_token: "9007199254740992", ttl_ms: 1000}),
+    {renewed: true, lease_expires_ms: 11_100, ttl_ms: 1000},
+  );
+  assert.deepEqual(
+    await authority.release({holder: "wide", fencing_token: "9007199254740992"}),
+    {released: true},
+  );
+});
+
 test("superseded owner cannot renew or release successor authority", async (t) => {
   const originalNow = Date.now;
   let now = 10_000;
