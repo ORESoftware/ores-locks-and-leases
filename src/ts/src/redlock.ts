@@ -71,6 +71,12 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function expirationOf(handle: RedlockHandle, now: () => number, ttlMs: number): number {
+  return typeof handle.expiration === "number" && Number.isFinite(handle.expiration)
+    ? handle.expiration
+    : now() + ttlMs;
+}
+
 /**
  * Redlock + independent fencing-token authority exposed through the common
  * `Lease` contract.
@@ -155,9 +161,7 @@ export class FencedRedlockLease implements Lease {
         key,
         holder,
         fencingToken,
-        leaseExpiresMs: Number.isFinite(handle.expiration)
-          ? handle.expiration
-          : this.#now() + opts.ttlMs,
+        leaseExpiresMs: expirationOf(handle, this.#now, opts.ttlMs),
         ttlMs: opts.ttlMs,
       };
       this.#held.set(grantId(grant), { handle, grant });
@@ -195,9 +199,7 @@ export class FencedRedlockLease implements Lease {
     const renewed: LeaseGrant = {
       ...grant,
       ttlMs,
-      leaseExpiresMs: Number.isFinite(handle.expiration)
-        ? handle.expiration
-        : this.#now() + ttlMs,
+      leaseExpiresMs: expirationOf(handle, this.#now, ttlMs),
     };
     this.#held.set(id, { handle, grant: renewed });
     return renewed;
