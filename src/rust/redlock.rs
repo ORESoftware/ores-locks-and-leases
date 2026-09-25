@@ -291,8 +291,10 @@ where
                 // Release failure is ambiguous. Keep the local handle so the
                 // caller can retry cleanup; never reinterpret it as "not held".
                 self.held.lock().unwrap().insert(id, handle);
-                Err(LockError::new(LockErrorKind::Transport, &grant.key, message)
-                    .at(LockStep::FiduciaRelease))
+                Err(
+                    LockError::new(LockErrorKind::Transport, &grant.key, message)
+                        .at(LockStep::FiduciaRelease),
+                )
             }
         }
     }
