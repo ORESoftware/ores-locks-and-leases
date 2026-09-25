@@ -1,7 +1,7 @@
 const MAX_HOLDER_BYTES = 512;
 const MAX_REQUEST_ID_BYTES = 128;
 const MAX_TTL_MS = 86_400_000;
-const MAX_FENCING_TOKEN = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_FENCING_TOKEN = 18_446_744_073_709_551_615n;
 const encoder = new TextEncoder();
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -43,7 +43,7 @@ function nextToken(current) {
     throw new Error("corrupt fencing counter");
   }
   const next = BigInt(current) + 1n;
-  if (next > MAX_FENCING_TOKEN) throw new Error("safe-integer fencing token exhausted");
+  if (next > MAX_FENCING_TOKEN) throw new Error("uint64 fencing token exhausted");
   return next.toString();
 }
 

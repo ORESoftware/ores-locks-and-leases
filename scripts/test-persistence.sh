@@ -34,6 +34,10 @@ log "canonical PostgreSQL adapter"
 psql_db -v ON_ERROR_STOP=1 \
   -f "$root/persistence/postgres/test-fencing.sql"
 
+log "PostgreSQL monotonic fencing token authority"
+psql_db -v ON_ERROR_STOP=1 \
+  -f "$root/persistence/postgres/test-token-authority.sql"
+
 log "adversarial PostgreSQL boundaries and rollback"
 psql_db -v ON_ERROR_STOP=1 \
   -f "$root/persistence/postgres/test-fencing-adversarial.sql"

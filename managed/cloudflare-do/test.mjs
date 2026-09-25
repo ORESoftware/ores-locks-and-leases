@@ -14,6 +14,8 @@ import {
 } from "./src/http-boundary.js";
 
 const MAX_SAFE_FENCING_TOKEN = "9007199254740991";
+const MAX_U64_FENCING_TOKEN = "18446744073709551615";
+const ABOVE_MAX_U64_FENCING_TOKEN = "18446744073709551616";
 
 function rows(items = []) {
   return { toArray: () => items };
@@ -156,19 +158,26 @@ test("Durable Object authority replays without extending and renews only by toke
   assert.equal(second.fencing_token, "2");
 });
 
-test("Durable Object authority fails closed at the exact JSON fencing ceiling", async (t) => {
+test("Durable Object authority advances beyond the JSON safe-integer ceiling and fails closed at uint64", async (t) => {
   const originalNow = Date.now;
   Date.now = () => 10_000;
   t.after(() => { Date.now = originalNow; });
 
-  const { authority: leases, storage } = authority();
-  storage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
+  const { authority: wideLeases, storage: wideStorage } = authority();
+  wideStorage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
+  const wide = await wideLeases.acquire({ holder: "worker-wide", request_id: "wide", ttl_ms: 1_000 });
+  assert.equal(wide.acquired, true);
+  assert.equal(wide.fencing_token, "9007199254740992");
+  assert.equal(wideStorage.sql.state.next_token, "9007199254740992");
+
+  const { authority: exhaustedLeases, storage: exhaustedStorage } = authority();
+  exhaustedStorage.sql.state.next_token = MAX_U64_FENCING_TOKEN;
   assert.deepEqual(
-    await leases.acquire({ holder: "worker-overflow", request_id: "overflow", ttl_ms: 1_000 }),
+    await exhaustedLeases.acquire({ holder: "worker-overflow", request_id: "overflow", ttl_ms: 1_000 }),
     { acquired: false, error: "fencing_token_exhausted" },
   );
-  assert.equal(storage.sql.state.holder, null);
-  assert.equal(storage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
+  assert.equal(exhaustedStorage.sql.state.holder, null);
+  assert.equal(exhaustedStorage.sql.state.next_token, MAX_U64_FENCING_TOKEN);
 });
 
 test("HTTP boundary rejects unknown fields and invalid operation values", () => {
@@ -195,6 +204,15 @@ test("HTTP boundary rejects unknown fields and invalid operation values", () => 
       holder: "worker-a",
       ttl_ms: 1_000,
       fencing_token: "9007199254740992",
+    }),
+    null,
+  );
+  assert.equal(
+    validatePublicOperation("/v1/leases/renew", {
+      key: "shared-auth/session/rotate",
+      holder: "worker-a",
+      ttl_ms: 1_000,
+      fencing_token: ABOVE_MAX_U64_FENCING_TOKEN,
     }),
     "invalid_fencing_token",
   );

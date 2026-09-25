@@ -13,9 +13,10 @@
 //! Distributed coordination has two layers, each individually switchable:
 //!
 //! * **fenced lease authority** — the outermost layer. Fiducia remains the
-//!   historical/default adapter, while managed Cloudflare Durable Objects and
-//!   Redis authorities implement the same [`Lease`] seam. Every grant carries
-//!   a monotonically increasing [`FencingToken`] that guarded writes should
+//!   historical/default adapter, while managed Cloudflare Durable Objects,
+//!   Redis authorities, and Redlock composed with an independent fencing-token
+//!   authority implement the same [`Lease`] seam. Every grant carries a
+//!   monotonically increasing [`FencingToken`] that guarded writes should
 //!   record, so a holder whose lease lapsed cannot clobber the next holder's
 //!   work.
 //! * **Postgres advisory lock** — the inner layer. Single-database mutual
@@ -57,7 +58,7 @@
 //!
 //! Nothing here depends on the network or on SeaORM unless the matching cargo
 //! feature is enabled: the core (`key`, `plan`, `error`, `lease`, `local_file`,
-//! `managed`, `fence`, `renewal`) is dependency-free and is what
+//! `managed`, `redlock`, `fence`, `renewal`) is dependency-free and is what
 //! `zed-lib-core` and friends import first.
 //!
 //! ```text
@@ -74,6 +75,7 @@ pub mod local_file_recovery;
 pub mod local_file_scoped;
 pub mod managed;
 pub mod plan;
+pub mod redlock;
 pub mod renewal;
 
 #[cfg(feature = "config")]
@@ -121,6 +123,10 @@ pub use managed::{
     ManagedLeaseBackend, ManagedLeaseTransport, ManagedRenewResult, RedisLease,
 };
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
+pub use redlock::{
+    FencedRedlockLease, FencingTokenAuthority as RedlockFencingTokenAuthority, RedlockAcquireError,
+    RedlockClient, RedlockFuture, RedlockHandle,
+};
 
 pub use renewal::{
     MAX_RENEWAL_CLOCK_MS, MAX_RENEWAL_TTL_MS, MonotonicClock, RenewalCheckpoint, RenewalDecision,
