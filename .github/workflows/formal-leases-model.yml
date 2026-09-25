@@ -1,0 +1,24 @@
+name: Formal lease model
+
+on:
+  pull_request:
+    paths:
+      - 'conformance/formal_model.rs'
+      - '.github/workflows/formal-leases-model.yml'
+      - 'src/**'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Exhaust lease and fencing state space
+        run: |
+          rustc --edition=2021 -D warnings conformance/formal_model.rs -o /tmp/formal-model
+          /tmp/formal-model
