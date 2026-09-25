@@ -26,8 +26,10 @@ lock-plan contract.
 | `src/gleam` | `ores_locks_and_leases` | `pog` | `gleam_httpc` |
 | `persistence/postgres` | Supabase/Neon/PostgreSQL watermark table and function | native SQL | |
 | `persistence/redis` | atomic fenced `SET` for Redis-resident state | | |
-| `contracts` | independent TypeSpec + JSON Schema authorities | | |
+| `formal` | bounded exhaustive models, Kani proof harnesses, refinement obligations | | |
 | `conformance` | vectors every runtime follows | | |
+| `contracts` | independent TypeSpec + JSON Schema authorities | | |
+| `governance` | change control, evidence requirements, release/admission gates | | |
 
 Every `*-lib-core` consumes this repository through zed-pkg and wraps lock keys
 with its own `<org>/<domain>/<name>` prefix rather than reimplementing the
