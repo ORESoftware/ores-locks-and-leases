@@ -124,8 +124,8 @@ pub use managed::{
 };
 pub use plan::{LockLayers, LockPlan, LockStep, PgScope, plan};
 pub use redlock::{
-    FencedRedlockLease, FencingTokenAuthority as RedlockFencingTokenAuthority,
-    RedlockAcquireError, RedlockClient, RedlockFuture, RedlockHandle,
+    FencedRedlockLease, FencingTokenAuthority as RedlockFencingTokenAuthority, RedlockAcquireError,
+    RedlockClient, RedlockFuture, RedlockHandle,
 };
 
 pub use renewal::{
