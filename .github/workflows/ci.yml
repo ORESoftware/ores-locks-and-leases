@@ -135,6 +135,12 @@ jobs:
           gleam format src test
           git diff --exit-code -- src test
           gleam test
+      - name: Compile BeamScale restricted Erlang fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/ores-locks-critical-erlang"
+          erlc -Werror -o "$RUNNER_TEMP/ores-locks-critical-erlang" \
+            managed/beamscale-critical-section/critical-worker/src/worker.erl
+          test -f "$RUNNER_TEMP/ores-locks-critical-erlang/worker.beam"
 
   persistence:
     runs-on: ubuntu-24.04
