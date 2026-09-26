@@ -132,7 +132,10 @@ impl<T> BeamScaleCriticalSectionLease<T> {
     }
 
     fn forget(&self, grant: &LeaseGrant) {
-        self.tokens.lock().unwrap().remove(&Self::registry_key(grant));
+        self.tokens
+            .lock()
+            .unwrap()
+            .remove(&Self::registry_key(grant));
     }
 }
 
@@ -208,10 +211,7 @@ where
                     });
                 }
                 BeamScaleAcquireResult::Contended if !wait => {
-                    return Err(LockError::contention(
-                        key,
-                        LockStep::FiduciaTryAcquire,
-                    ));
+                    return Err(LockError::contention(key, LockStep::FiduciaTryAcquire));
                 }
                 BeamScaleAcquireResult::Contended => {
                     let waited = started.elapsed();
@@ -228,11 +228,7 @@ where
         }
     }
 
-    async fn renew(
-        &self,
-        grant: &LeaseGrant,
-        ttl: Duration,
-    ) -> Result<LeaseGrant, LockError> {
+    async fn renew(&self, grant: &LeaseGrant, ttl: Duration) -> Result<LeaseGrant, LockError> {
         let ttl_ms = duration_ms(ttl);
         if ttl_ms == 0 {
             return Err(LockError::invalid_plan(
@@ -412,13 +408,21 @@ mod tests {
     #[test]
     fn sequence_is_external_fence_and_cloned_grant_keeps_full_authority() {
         let transport = FakeTransport::default();
-        transport.acquire_results.lock().unwrap().push_back(Ok(
-            BeamScaleAcquireResult::Acquired(native(13, 100_000)),
-        ));
-        transport.renew_results.lock().unwrap().push_back(Ok(
-            BeamScaleRenewResult::Renewed(native(13, 160_000)),
-        ));
-        transport.release_results.lock().unwrap().push_back(Ok(true));
+        transport
+            .acquire_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleAcquireResult::Acquired(native(13, 100_000))));
+        transport
+            .renew_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleRenewResult::Renewed(native(13, 160_000))));
+        transport
+            .release_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(true));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
         let grant = block_on(lease.acquire(
@@ -444,17 +448,16 @@ mod tests {
             .lock()
             .unwrap()
             .push_back(Err("connection reset".into()));
-        transport.acquire_results.lock().unwrap().push_back(Ok(
-            BeamScaleAcquireResult::Acquired(native(17, 100_000)),
-        ));
+        transport
+            .acquire_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleAcquireResult::Acquired(native(17, 100_000))));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
-        let grant = block_on(lease.acquire(
-            &key(),
-            &AcquireOptions::default().holder("worker-a"),
-            true,
-        ))
-        .unwrap();
+        let grant =
+            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), true))
+                .unwrap();
         assert_eq!(grant.fencing_token, 17);
 
         let calls = lease.transport().acquires.lock().unwrap();
@@ -465,12 +468,16 @@ mod tests {
     #[test]
     fn changed_token_on_renewal_is_lost_lease() {
         let transport = FakeTransport::default();
-        transport.acquire_results.lock().unwrap().push_back(Ok(
-            BeamScaleAcquireResult::Acquired(native(3, 100_000)),
-        ));
-        transport.renew_results.lock().unwrap().push_back(Ok(
-            BeamScaleRenewResult::Renewed(native(4, 160_000)),
-        ));
+        transport
+            .acquire_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleAcquireResult::Acquired(native(3, 100_000))));
+        transport
+            .renew_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleRenewResult::Renewed(native(4, 160_000))));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
         let grant = block_on(lease.acquire(
