@@ -70,9 +70,10 @@ function tokenRegistryKey(key: LockKey, holder: string, fencingToken: bigint): s
  * across owner failover because the runtime persists it with lease state.
  * The complete token is retained internally for renew/release.
  *
- * Transport ambiguity on acquire is fail-closed. BeamScale does not yet
- * expose request-id replay, so a transport failure is never retried as
- * ordinary contention.
+ * Acquire carries a durable request id. One ambiguous transport failure is
+ * retried with that same identity, allowing BeamScale to replay the committed
+ * grant without minting a second fencing sequence. Repeated ambiguity remains
+ * fail-closed.
  */
 export class BeamScaleCriticalSectionLease implements Lease {
   readonly #base: string;
@@ -152,9 +153,31 @@ export class BeamScaleCriticalSectionLease implements Lease {
 
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
+    const requestId = opts.requestId ?? generatedRequestId();
     const started = Date.now();
+    let ambiguousRetries = 0;
+
     for (;;) {
-      const { status, body } = await this.#post("acquire", key, { key, holder, lease_ms: opts.ttlMs });
+      let result: { status: number; body: BeamScaleResult };
+      try {
+        result = await this.#post("acquire", key, {
+          key,
+          holder,
+          request_id: requestId,
+          lease_ms: opts.ttlMs,
+        });
+      } catch (cause) {
+        const kind = cause && typeof cause === "object"
+          ? (cause as { kind?: unknown }).kind
+          : undefined;
+        if (kind === "transport" && ambiguousRetries === 0) {
+          ambiguousRetries += 1;
+          continue;
+        }
+        throw cause;
+      }
+
+      const { status, body } = result;
       if (status >= 200 && status < 300 && body.ok === true) {
         const token = decodeToken(body.token);
         const leaseExpiresMs = nonnegativeSafeInteger(body.expires_at_ms);
