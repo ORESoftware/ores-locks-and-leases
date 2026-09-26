@@ -1,7 +1,11 @@
 const MAX_HOLDER_BYTES = 512;
 const MAX_REQUEST_ID_BYTES = 128;
 const MAX_TTL_MS = 86_400_000;
-const MAX_FENCING_TOKEN = 18_446_744_073_709_551_615n;
+// New grants use the public cross-runtime exact-integer domain. Historical
+// decimal-text watermarks and token-bound cleanup may still carry wider uint64
+// values, so canonicalToken deliberately remains uint64-compatible below.
+const MAX_MINTED_FENCING_TOKEN = 9_007_199_254_740_991n;
+const MAX_PERSISTED_FENCING_TOKEN = 18_446_744_073_709_551_615n;
 const encoder = new TextEncoder();
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -34,7 +38,7 @@ export function canonicalToken(token) {
   }
   if (typeof token !== "string" || !/^[1-9][0-9]*$/.test(token)) return null;
   const value = BigInt(token);
-  if (value > MAX_FENCING_TOKEN) return null;
+  if (value > MAX_PERSISTED_FENCING_TOKEN) return null;
   return value.toString();
 }
 
@@ -43,7 +47,9 @@ function nextToken(current) {
     throw new Error("corrupt fencing counter");
   }
   const next = BigInt(current) + 1n;
-  if (next > MAX_FENCING_TOKEN) throw new Error("uint64 fencing token exhausted");
+  if (next > MAX_MINTED_FENCING_TOKEN) {
+    throw new Error("safe-integer fencing token exhausted");
+  }
   return next.toString();
 }
 
