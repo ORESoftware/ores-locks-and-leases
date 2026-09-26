@@ -480,14 +480,10 @@ mod tests {
             .push_back(Ok(BeamScaleRenewResult::Renewed(native(4, 160_000))));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
-        let grant = block_on(lease.acquire(
-            &key(),
-            &AcquireOptions::default().holder("worker-a"),
-            false,
-        ))
-        .unwrap();
-        let error =
-            block_on(lease.renew(&grant, Duration::from_secs(60))).unwrap_err();
+        let grant =
+            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), false))
+                .unwrap();
+        let error = block_on(lease.renew(&grant, Duration::from_secs(60))).unwrap_err();
         assert_eq!(error.kind, LockErrorKind::LostLease);
     }
 }
