@@ -425,16 +425,12 @@ mod tests {
             .push_back(Ok(true));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
-        let grant = block_on(lease.acquire(
-            &key(),
-            &AcquireOptions::default().holder("worker-a"),
-            false,
-        ))
-        .unwrap();
+        let grant =
+            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), false))
+                .unwrap();
         assert_eq!(grant.fencing_token, 13);
 
-        let renewed =
-            block_on(lease.renew(&grant.clone(), Duration::from_secs(60))).unwrap();
+        let renewed = block_on(lease.renew(&grant.clone(), Duration::from_secs(60))).unwrap();
         assert_eq!(renewed.fencing_token, 13);
         assert_eq!(renewed.lease_expires_ms, Some(160_000));
         assert!(block_on(lease.release(&renewed.clone())).unwrap());
