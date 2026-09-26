@@ -39,6 +39,7 @@ pub enum EnvKind {
 pub enum OuterLeaseAuthority {
     Fiducia,
     CloudflareDurableObject,
+    BeamScaleCriticalSection,
     Redis,
 }
 
@@ -81,6 +82,14 @@ pub struct FiduciaProviderConfig {
 pub struct CloudflareDurableObjectProviderConfig {
     pub endpoint_env: String,
     pub api_token_env: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeamScaleCriticalSectionProviderConfig {
+    pub endpoint_env: String,
+    pub api_token_env: String,
+    pub deployment_id_env: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -128,6 +137,7 @@ pub struct LockProfileConfig {
     pub local_file: Option<LocalFileProviderConfig>,
     pub fiducia: Option<FiduciaProviderConfig>,
     pub cloudflare_durable_object: Option<CloudflareDurableObjectProviderConfig>,
+    pub beamscale_critical_section: Option<BeamScaleCriticalSectionProviderConfig>,
     pub redis: Option<RedisProviderConfig>,
     pub postgres: Option<PostgresProviderConfig>,
 }
@@ -485,6 +495,7 @@ fn validate_outer_authority(
         }
         if profile.fiducia.is_some()
             || profile.cloudflare_durable_object.is_some()
+            || profile.beamscale_critical_section.is_some()
             || profile.redis.is_some()
         {
             return Err(LockConfigError::new(
@@ -532,7 +543,10 @@ fn validate_outer_authority(
         .unwrap_or(OuterLeaseAuthority::Fiducia)
     {
         OuterLeaseAuthority::Fiducia => {
-            if profile.cloudflare_durable_object.is_some() || profile.redis.is_some() {
+            if profile.cloudflare_durable_object.is_some()
+                || profile.beamscale_critical_section.is_some()
+                || profile.redis.is_some()
+            {
                 return Err(LockConfigError::new(
                     "outer_authority_conflict",
                     "profiles.outer_authority",
@@ -556,7 +570,10 @@ fn validate_outer_authority(
             )?;
         }
         OuterLeaseAuthority::CloudflareDurableObject => {
-            if profile.fiducia.is_some() || profile.redis.is_some() {
+            if profile.fiducia.is_some()
+                || profile.beamscale_critical_section.is_some()
+                || profile.redis.is_some()
+            {
                 return Err(LockConfigError::new(
                     "outer_authority_conflict",
                     "profiles.outer_authority",
@@ -579,8 +596,50 @@ fn validate_outer_authority(
                 "Cloudflare Durable Object",
             )?;
         }
+        OuterLeaseAuthority::BeamScaleCriticalSection => {
+            if profile.fiducia.is_some()
+                || profile.cloudflare_durable_object.is_some()
+                || profile.redis.is_some()
+            {
+                return Err(LockConfigError::new(
+                    "outer_authority_conflict",
+                    "profiles.outer_authority",
+                    "BeamScale authority must not carry Fiducia, Cloudflare, or Redis config",
+                ));
+            }
+            let beamscale = profile.beamscale_critical_section.as_ref().ok_or_else(|| {
+                LockConfigError::new(
+                    "beamscale_missing",
+                    "profiles.beamscale_critical_section",
+                    "BeamScale critical-section authority requires its config table",
+                )
+            })?;
+            validate_endpoint_and_secret(
+                env,
+                &beamscale.endpoint_env,
+                &beamscale.api_token_env,
+                "profiles.beamscale_critical_section.endpoint_env",
+                "profiles.beamscale_critical_section.api_token_env",
+                "BeamScale critical section",
+            )?;
+            let deployment = lookup_binding(
+                env,
+                &beamscale.deployment_id_env,
+                "profiles.beamscale_critical_section.deployment_id_env",
+            )?;
+            require_binding(
+                deployment,
+                EnvKind::String,
+                false,
+                "profiles.beamscale_critical_section.deployment_id_env",
+                "BeamScale deployment id must be a non-secret string environment binding",
+            )?;
+        }
         OuterLeaseAuthority::Redis => {
-            if profile.fiducia.is_some() || profile.cloudflare_durable_object.is_some() {
+            if profile.fiducia.is_some()
+                || profile.cloudflare_durable_object.is_some()
+                || profile.beamscale_critical_section.is_some()
+            {
                 return Err(LockConfigError::new(
                     "outer_authority_conflict",
                     "profiles.outer_authority",
@@ -634,6 +693,9 @@ fn validate_endpoint_and_secret(
             "Cloudflare Durable Object" => {
                 "Cloudflare Durable Object endpoint must be a non-secret URL environment binding"
             }
+            "BeamScale critical section" => {
+                "BeamScale critical-section endpoint must be a non-secret URL environment binding"
+            }
             "Redis" => "Redis endpoint must be a non-secret URL environment binding",
             _ => "authority endpoint must be a non-secret URL environment binding",
         },
@@ -648,6 +710,9 @@ fn validate_endpoint_and_secret(
             "Fiducia" => "Fiducia auth token must be a secret string environment binding",
             "Cloudflare Durable Object" => {
                 "Cloudflare Durable Object API token must be a secret string environment binding"
+            }
+            "BeamScale critical section" => {
+                "BeamScale API token must be a secret string environment binding"
             }
             "Redis" => "Redis auth token must be a secret string environment binding",
             _ => "authority credential must be a secret string environment binding",
