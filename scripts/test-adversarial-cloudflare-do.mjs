@@ -12,6 +12,7 @@ const DEFAULT_CORPUS = "conformance/cases/fence-decision.json";
 const DEFAULT_RECEIPT = "target/adversarial/cloudflare-do-receipt.json";
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_MINUS_ONE = MAX_SAFE - 1n;
+const MAX_PLUS_ONE = MAX_SAFE + 1n;
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
 function parseArgs(argv) {
