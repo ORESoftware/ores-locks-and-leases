@@ -120,7 +120,36 @@ test("BeamScale busy acquire maps to contention when wait is false", async () =>
   );
 });
 
-test("BeamScale acquire transport ambiguity is not retried", async () => {
+test("BeamScale ambiguous acquire safely replays once with the same request id", async () => {
+  const calls = [];
+  const lease = new BeamScaleCriticalSectionLease({
+    baseUrl: "https://api.beamscale.test",
+    apiToken: "secret",
+    deploymentId: "orders-critical",
+    fetch: async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      if (calls.length === 1) throw new Error("connection reset after write");
+      return response({
+        op: "critical_section_result",
+        operation: "acquire",
+        ok: true,
+        token: { runtime_epoch: 11, owner_epoch: 4, sequence: 17 },
+        expires_at_ms: 2_000_000_000_000,
+      });
+    },
+  });
+  const grant = await lease.acquire(
+    lockKey("orders/ambiguous"),
+    { ...opts, requestId: "request-ambiguous-1" },
+    true,
+  );
+  assert.equal(grant.fencingToken, 17n);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].request_id, "request-ambiguous-1");
+  assert.equal(calls[1].request_id, "request-ambiguous-1");
+});
+
+test("BeamScale repeated ambiguous transport still fails closed", async () => {
   let calls = 0;
   const lease = new BeamScaleCriticalSectionLease({
     baseUrl: "https://api.beamscale.test",
@@ -132,10 +161,14 @@ test("BeamScale acquire transport ambiguity is not retried", async () => {
     },
   });
   await assert.rejects(
-    () => lease.acquire(lockKey("orders/ambiguous"), opts, true),
+    () => lease.acquire(
+      lockKey("orders/ambiguous-twice"),
+      { ...opts, requestId: "request-ambiguous-2" },
+      true,
+    ),
     (error) => error instanceof LockError && error.kind === "transport",
   );
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 test("BeamScale release stale result is a committed no-op", async () => {
