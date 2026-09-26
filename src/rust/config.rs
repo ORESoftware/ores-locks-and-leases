@@ -148,7 +148,7 @@ impl LockProfileConfig {
         LockLayers {
             // v1 wire/config compatibility: `fiducia=true` means the managed
             // outer lease layer is enabled, even when its concrete backend is
-            // Cloudflare Durable Objects or Redis.
+            // Cloudflare Durable Objects, BeamScale critical sections, or Redis.
             fiducia: self.providers.fiducia,
             pg_advisory: self.providers.pg_advisory,
         }
@@ -550,7 +550,7 @@ fn validate_outer_authority(
                 return Err(LockConfigError::new(
                     "outer_authority_conflict",
                     "profiles.outer_authority",
-                    "Fiducia authority must not carry Cloudflare or Redis config",
+                    "Fiducia authority must not carry Cloudflare, BeamScale, or Redis config",
                 ));
             }
             let fiducia = profile.fiducia.as_ref().ok_or_else(|| {
@@ -577,7 +577,7 @@ fn validate_outer_authority(
                 return Err(LockConfigError::new(
                     "outer_authority_conflict",
                     "profiles.outer_authority",
-                    "Cloudflare authority must not carry Fiducia or Redis config",
+                    "Cloudflare authority must not carry Fiducia, BeamScale, or Redis config",
                 ));
             }
             let cloudflare = profile.cloudflare_durable_object.as_ref().ok_or_else(|| {
@@ -643,7 +643,7 @@ fn validate_outer_authority(
                 return Err(LockConfigError::new(
                     "outer_authority_conflict",
                     "profiles.outer_authority",
-                    "Redis authority must not carry Fiducia or Cloudflare config",
+                    "Redis authority must not carry Fiducia, Cloudflare, or BeamScale config",
                 ));
             }
             let redis = profile.redis.as_ref().ok_or_else(|| {
@@ -885,6 +885,21 @@ mod tests {
                 .unwrap_err()
                 .code,
             "renew_interval"
+        );
+    }
+
+    #[test]
+    fn rejects_beamscale_deployment_id_as_secret() {
+        let invalid = ROOT_CONFIG.replace(
+            "key = \"BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID\"\nkind = \"string\"\nrequired = false\nsecret = false",
+            "key = \"BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID\"\nkind = \"string\"\nrequired = false\nsecret = true",
+        );
+        let error = OresLockConfigV1::from_toml_str(&invalid)
+            .expect_err("deployment id must remain non-secret");
+        assert_eq!(error.code, "env_reference_policy");
+        assert_eq!(
+            error.path,
+            "profiles.beamscale_critical_section.deployment_id_env"
         );
     }
 
