@@ -105,6 +105,10 @@ export {
   type CloudflareDurableObjectLeaseOptions,
 } from "./cloudflare-do.js";
 export {
+  BeamScaleCriticalSectionLease,
+  type BeamScaleCriticalSectionLeaseOptions,
+} from "./beamscale-critical-section.js";
+export {
   CloudflareDurableObjectRpcLease,
   type CloudflareDurableObjectRpcLeaseOptions,
 } from "./cloudflare-do-rpc.js";

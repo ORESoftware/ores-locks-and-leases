@@ -50,6 +50,28 @@ required = false
 secret = true
 purpose = "Credential for the Cloudflare Durable Object lease authority."
 
+
+[[env]]
+key = "BMSCL_API_URL"
+kind = "url"
+required = false
+secret = false
+purpose = "BeamScale public API endpoint for the critical-section authority."
+
+[[env]]
+key = "BMSCL_TOKEN"
+kind = "string"
+required = false
+secret = true
+purpose = "Credential for the BeamScale critical-section authority."
+
+[[env]]
+key = "BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID"
+kind = "string"
+required = false
+secret = false
+purpose = "BeamScale critical-section deployment id selected for this environment."
+
 [[env]]
 key = "DATABASE_URL"
 kind = "string"
@@ -117,6 +139,32 @@ pg_advisory = true
 [profiles.cloudflare_durable_object]
 endpoint_env = "ORES_LOCKS_CF_URL"
 api_token_env = "ORES_LOCKS_CF_TOKEN"
+
+[profiles.postgres]
+database_url_env = "DATABASE_URL"
+scope = "transaction"
+
+# BeamScale Durable Object / critical-section authority with PostgreSQL as the
+# inner lock. BeamScale Durable Objects are tenant-dedicated at the BEAM VM
+# boundary; this profile does not opt into Lambda free-tier mixed tenancy.
+[[profiles]]
+profile_id = "service-beamscale-pg"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 250
+ttl_ms = 60000
+renew_interval_ms = 20000
+outer_authority = "beamscale_critical_section"
+
+[profiles.providers]
+local_file = false
+fiducia = true
+pg_advisory = true
+
+[profiles.beamscale_critical_section]
+endpoint_env = "BMSCL_API_URL"
+api_token_env = "BMSCL_TOKEN"
+deployment_id_env = "BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID"
 
 [profiles.postgres]
 database_url_env = "DATABASE_URL"

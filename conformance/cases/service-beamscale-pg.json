@@ -1,0 +1,18 @@
+{
+  "schema": "ores.lock.service-profile.v1",
+  "profile_id": "service-beamscale-pg",
+  "outer_authority": "beamscale_critical_section",
+  "inner_authority": "postgres_advisory",
+  "postgres_scope": "transaction",
+  "tenancy_class": "tenant_dedicated",
+  "fencing_watermark": "sequence",
+  "full_authority_token": [
+    "runtime_epoch",
+    "owner_epoch",
+    "sequence"
+  ],
+  "acquire_replay": "holder+request_id",
+  "config_runtime_owners": [
+    "rust"
+  ]
+}

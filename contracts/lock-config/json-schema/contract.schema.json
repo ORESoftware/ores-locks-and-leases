@@ -6,15 +6,29 @@
   "$defs": {
     "LockConfigSchemaVersion": {
       "type": "string",
-      "enum": ["ores.lock.config.v1"]
+      "enum": [
+        "ores.lock.config.v1"
+      ]
     },
     "EnvKind": {
       "type": "string",
-      "enum": ["string", "boolean", "integer", "double", "url", "path"]
+      "enum": [
+        "string",
+        "boolean",
+        "integer",
+        "double",
+        "url",
+        "path"
+      ]
     },
     "OuterLeaseAuthority": {
       "type": "string",
-      "enum": ["fiducia", "cloudflare_durable_object", "redis"]
+      "enum": [
+        "fiducia",
+        "cloudflare_durable_object",
+        "beamscale_critical_section",
+        "redis"
+      ]
     },
     "EnvKey": {
       "type": "string",
@@ -32,85 +46,163 @@
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "key": {"$ref": "#/$defs/EnvKey"},
-        "kind": {"$ref": "#/$defs/EnvKind"},
-        "required": {"type": "boolean"},
-        "secret": {"type": "boolean"},
-        "purpose": {"type": "string", "minLength": 1, "maxLength": 255}
+        "key": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "kind": {
+          "$ref": "#/$defs/EnvKind"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
       },
-      "required": ["key", "kind", "required", "secret", "purpose"]
+      "required": [
+        "key",
+        "kind",
+        "required",
+        "secret",
+        "purpose"
+      ]
     },
     "ProviderSelection": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "local_file": {"type": "boolean"},
+        "local_file": {
+          "type": "boolean"
+        },
         "fiducia": {
           "type": "boolean",
           "description": "Historical v1 name for the managed outer lease layer. outer_authority chooses its concrete backend; omission preserves Fiducia behavior."
         },
-        "pg_advisory": {"type": "boolean"}
+        "pg_advisory": {
+          "type": "boolean"
+        }
       },
-      "required": ["local_file", "fiducia", "pg_advisory"]
+      "required": [
+        "local_file",
+        "fiducia",
+        "pg_advisory"
+      ]
     },
     "LocalFileProviderConfig": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "root_env": {"$ref": "#/$defs/EnvKey"},
-        "require_existing_root": {"type": "boolean"}
+        "root_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "require_existing_root": {
+          "type": "boolean"
+        }
       },
-      "required": ["root_env", "require_existing_root"]
+      "required": [
+        "root_env",
+        "require_existing_root"
+      ]
     },
     "FiduciaProviderConfig": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "endpoint_env": {"$ref": "#/$defs/EnvKey"},
-        "auth_token_env": {"$ref": "#/$defs/EnvKey"}
+        "endpoint_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "auth_token_env": {
+          "$ref": "#/$defs/EnvKey"
+        }
       },
-      "required": ["endpoint_env", "auth_token_env"]
+      "required": [
+        "endpoint_env",
+        "auth_token_env"
+      ]
     },
     "CloudflareDurableObjectProviderConfig": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "endpoint_env": {"$ref": "#/$defs/EnvKey"},
-        "api_token_env": {"$ref": "#/$defs/EnvKey"}
+        "endpoint_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "api_token_env": {
+          "$ref": "#/$defs/EnvKey"
+        }
       },
-      "required": ["endpoint_env", "api_token_env"]
+      "required": [
+        "endpoint_env",
+        "api_token_env"
+      ]
     },
     "RedisProviderConfig": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "endpoint_env": {"$ref": "#/$defs/EnvKey"},
-        "auth_token_env": {"$ref": "#/$defs/EnvKey"},
-        "namespace": {"type": "string"}
+        "endpoint_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "auth_token_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "namespace": {
+          "type": "string"
+        }
       },
-      "required": ["endpoint_env", "auth_token_env"]
+      "required": [
+        "endpoint_env",
+        "auth_token_env"
+      ]
     },
     "PostgresLockScope": {
       "type": "string",
-      "enum": ["transaction", "session"]
+      "enum": [
+        "transaction",
+        "session"
+      ]
     },
     "PostgresProviderConfig": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "database_url_env": {"$ref": "#/$defs/EnvKey"},
-        "scope": {"$ref": "#/$defs/PostgresLockScope"}
+        "database_url_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "scope": {
+          "$ref": "#/$defs/PostgresLockScope"
+        }
       },
-      "required": ["database_url_env", "scope"]
+      "required": [
+        "database_url_env",
+        "scope"
+      ]
     },
     "LockProfileConfig": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "profile_id": {"$ref": "#/$defs/LockProfileId"},
-        "wait": {"type": "boolean"},
-        "wait_timeout_ms": {"type": "integer", "minimum": 0, "maximum": 86400000},
-        "retry_interval_ms": {"type": "integer", "minimum": 0, "maximum": 60000},
+        "profile_id": {
+          "$ref": "#/$defs/LockProfileId"
+        },
+        "wait": {
+          "type": "boolean"
+        },
+        "wait_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000
+        },
+        "retry_interval_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000
+        },
         "ttl_ms": {
           "type": "integer",
           "minimum": 1,
@@ -123,27 +215,91 @@
           "maximum": 43200000,
           "description": "Maintained-lease renewal interval. When present, runtime policy also requires this to be <= ttl_ms / 2."
         },
-        "providers": {"$ref": "#/$defs/ProviderSelection"},
-        "outer_authority": {"$ref": "#/$defs/OuterLeaseAuthority"},
-        "local_file": {"$ref": "#/$defs/LocalFileProviderConfig"},
-        "fiducia": {"$ref": "#/$defs/FiduciaProviderConfig"},
-        "cloudflare_durable_object": {"$ref": "#/$defs/CloudflareDurableObjectProviderConfig"},
-        "redis": {"$ref": "#/$defs/RedisProviderConfig"},
-        "postgres": {"$ref": "#/$defs/PostgresProviderConfig"}
+        "providers": {
+          "$ref": "#/$defs/ProviderSelection"
+        },
+        "outer_authority": {
+          "$ref": "#/$defs/OuterLeaseAuthority"
+        },
+        "local_file": {
+          "$ref": "#/$defs/LocalFileProviderConfig"
+        },
+        "fiducia": {
+          "$ref": "#/$defs/FiduciaProviderConfig"
+        },
+        "cloudflare_durable_object": {
+          "$ref": "#/$defs/CloudflareDurableObjectProviderConfig"
+        },
+        "redis": {
+          "$ref": "#/$defs/RedisProviderConfig"
+        },
+        "postgres": {
+          "$ref": "#/$defs/PostgresProviderConfig"
+        },
+        "beamscale_critical_section": {
+          "$ref": "#/$defs/BeamScaleCriticalSectionProviderConfig"
+        }
       },
-      "required": ["profile_id", "wait", "wait_timeout_ms", "retry_interval_ms", "providers"]
+      "required": [
+        "profile_id",
+        "wait",
+        "wait_timeout_ms",
+        "retry_interval_ms",
+        "providers"
+      ]
     },
     "OresLockConfigV1": {
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
-        "schema_version": {"$ref": "#/$defs/LockConfigSchemaVersion"},
-        "default_profile": {"$ref": "#/$defs/LockProfileId"},
-        "selected_profile_env": {"$ref": "#/$defs/EnvKey"},
-        "env": {"type": "array", "items": {"$ref": "#/$defs/EnvBinding"}},
-        "profiles": {"type": "array", "items": {"$ref": "#/$defs/LockProfileConfig"}}
+        "schema_version": {
+          "$ref": "#/$defs/LockConfigSchemaVersion"
+        },
+        "default_profile": {
+          "$ref": "#/$defs/LockProfileId"
+        },
+        "selected_profile_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EnvBinding"
+          }
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LockProfileConfig"
+          }
+        }
       },
-      "required": ["schema_version", "default_profile", "env", "profiles"]
+      "required": [
+        "schema_version",
+        "default_profile",
+        "env",
+        "profiles"
+      ]
+    },
+    "BeamScaleCriticalSectionProviderConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "endpoint_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "api_token_env": {
+          "$ref": "#/$defs/EnvKey"
+        },
+        "deployment_id_env": {
+          "$ref": "#/$defs/EnvKey"
+        }
+      },
+      "required": [
+        "endpoint_env",
+        "api_token_env",
+        "deployment_id_env"
+      ]
     }
   }
 }

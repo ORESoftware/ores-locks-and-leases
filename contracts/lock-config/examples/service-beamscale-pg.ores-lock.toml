@@ -1,0 +1,63 @@
+# Service coordination: BeamScale tenant-dedicated critical-section authority
+# plus transaction-scoped PostgreSQL advisory locking.
+schema_version = "ores.lock.config.v1"
+default_profile = "service-beamscale-pg"
+selected_profile_env = "ORES_LOCK_PROFILE"
+
+[[env]]
+key = "ORES_LOCK_PROFILE"
+kind = "string"
+required = false
+secret = false
+purpose = "Select one declared lock profile at process startup."
+
+[[env]]
+key = "BMSCL_API_URL"
+kind = "url"
+required = true
+secret = false
+purpose = "BeamScale public API endpoint."
+
+[[env]]
+key = "BMSCL_TOKEN"
+kind = "string"
+required = true
+secret = true
+purpose = "BeamScale bearer token."
+
+[[env]]
+key = "BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID"
+kind = "string"
+required = true
+secret = false
+purpose = "Environment-specific BeamScale critical-section deployment id."
+
+[[env]]
+key = "DATABASE_URL"
+kind = "string"
+required = true
+secret = true
+purpose = "PostgreSQL connection string."
+
+[[profiles]]
+profile_id = "service-beamscale-pg"
+wait = true
+wait_timeout_ms = 30000
+retry_interval_ms = 250
+ttl_ms = 60000
+renew_interval_ms = 20000
+outer_authority = "beamscale_critical_section"
+
+[profiles.providers]
+local_file = false
+fiducia = true
+pg_advisory = true
+
+[profiles.beamscale_critical_section]
+endpoint_env = "BMSCL_API_URL"
+api_token_env = "BMSCL_TOKEN"
+deployment_id_env = "BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID"
+
+[profiles.postgres]
+database_url_env = "DATABASE_URL"
+scope = "transaction"

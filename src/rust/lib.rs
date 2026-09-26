@@ -66,6 +66,7 @@
 //! distributed: lease.acquire -> pg.begin -> pg_advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
 //! ```
 
+pub mod beamscale;
 pub mod error;
 pub mod fence;
 pub mod key;
@@ -93,13 +94,18 @@ pub mod coordinated;
 #[cfg(all(feature = "pg", any(feature = "fiducia", feature = "maintained")))]
 pub mod maintained;
 
+pub use beamscale::{
+    BeamScaleAcquireResult, BeamScaleCriticalSectionGrant, BeamScaleCriticalSectionLease,
+    BeamScaleCriticalSectionToken, BeamScaleCriticalSectionTransport, BeamScaleRenewResult,
+};
 #[cfg(feature = "config")]
 pub use config::{
-    CloudflareDurableObjectProviderConfig, EnvBinding, EnvKind, FiduciaProviderConfig,
-    LOCK_CONFIG_SCHEMA_V1, LocalFileProviderConfig, LockConfigError, LockProfileConfig,
-    MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES, MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS,
-    MAX_WAIT_TIMEOUT_MS, OresLockConfigV1, OuterLeaseAuthority, PostgresLockScope,
-    PostgresProviderConfig, ProviderSelection, RedisProviderConfig,
+    BeamScaleCriticalSectionProviderConfig, CloudflareDurableObjectProviderConfig, EnvBinding,
+    EnvKind, FiduciaProviderConfig, LOCK_CONFIG_SCHEMA_V1, LocalFileProviderConfig,
+    LockConfigError, LockProfileConfig, MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES,
+    MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS, MAX_WAIT_TIMEOUT_MS,
+    OresLockConfigV1, OuterLeaseAuthority, PostgresLockScope, PostgresProviderConfig,
+    ProviderSelection, RedisProviderConfig,
 };
 pub use error::{LockError, LockErrorKind};
 pub use fence::{

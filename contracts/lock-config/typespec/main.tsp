@@ -24,6 +24,7 @@ enum EnvKind {
 enum OuterLeaseAuthority {
   fiducia: "fiducia",
   cloudflare_durable_object: "cloudflare_durable_object",
+  beamscale_critical_section: "beamscale_critical_section",
   redis: "redis",
 }
 
@@ -67,6 +68,12 @@ model FiduciaProviderConfig {
 model CloudflareDurableObjectProviderConfig {
   endpoint_env: EnvKey;
   api_token_env: EnvKey;
+}
+
+model BeamScaleCriticalSectionProviderConfig {
+  endpoint_env: EnvKey;
+  api_token_env: EnvKey;
+  deployment_id_env: EnvKey;
 }
 
 model RedisProviderConfig {
@@ -113,6 +120,7 @@ model LockProfileConfig {
   local_file?: LocalFileProviderConfig;
   fiducia?: FiduciaProviderConfig;
   cloudflare_durable_object?: CloudflareDurableObjectProviderConfig;
+  beamscale_critical_section?: BeamScaleCriticalSectionProviderConfig;
   redis?: RedisProviderConfig;
   postgres?: PostgresProviderConfig;
 }

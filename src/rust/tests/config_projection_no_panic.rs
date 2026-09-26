@@ -23,6 +23,7 @@ fn mutated_fiducia_profile_without_ttl_fails_closed_without_panicking() {
             auth_token_env: "FIDUCIA_AUTH_TOKEN".to_owned(),
         }),
         cloudflare_durable_object: None,
+        beamscale_critical_section: None,
         redis: None,
         postgres: None,
     };

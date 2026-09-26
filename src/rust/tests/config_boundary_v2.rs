@@ -36,6 +36,7 @@ fn local_config() -> OresLockConfigV1 {
             }),
             fiducia: None,
             cloudflare_durable_object: None,
+            beamscale_critical_section: None,
             redis: None,
             postgres: None,
         }],
