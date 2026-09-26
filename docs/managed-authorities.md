@@ -272,3 +272,40 @@ mutation. For Redis-resident protected state use `persistence/redis/fenced-write
 Never interpret a network error as contention or successful release. A
 transport failure means ownership is unknown. Renewal refusal is `lost_lease`;
 the guarded operation must stop and must not commit.
+
+## BeamScale Durable Objects / critical sections
+
+`BeamScaleCriticalSectionLease` is the TypeScript adapter for a critical-section
+deployment created by `bmscl durable-objects deploy`.
+
+BeamScale's runtime authority token contains three fields:
+
+```text
+(runtime_epoch, owner_epoch, sequence)
+```
+
+The adapter retains that complete token privately for renew/release. The shared
+`LeaseGrant.fencingToken` is `BigInt(sequence)`: the BeamScale runtime persists
+`sequence` with critical-section state and advances it on every new grant, so it
+remains the scalar monotonic watermark expected by the existing datastore
+fencing contracts.
+
+```ts
+import { BeamScaleCriticalSectionLease } from "@oresoftware/locks-and-leases";
+
+const authority = new BeamScaleCriticalSectionLease({
+  baseUrl: process.env.BMSCL_API_URL!,
+  apiToken: process.env.BMSCL_TOKEN!,
+  deploymentId: "orders-critical-sections",
+});
+```
+
+Durable Object deployments are tenant-dedicated: one tenant per BEAM OS
+process. This is separate from BeamScale Lambda pricing, where the free tier may
+multiplex tenants and the pro tier is tenant-dedicated.
+
+Acquire transport errors are deliberately not retried. BeamScale does not yet
+publish a request-id replay contract for critical-section acquisition, so a
+connection failure after sending the request means ownership is unknown and
+maps to `transport`, not contention. A future request-id contract can add safe
+idempotent replay without changing the `Lease` interface.
