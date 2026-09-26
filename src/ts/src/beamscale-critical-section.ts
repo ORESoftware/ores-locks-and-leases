@@ -187,6 +187,12 @@ export class BeamScaleCriticalSectionLease implements Lease {
         const fencingToken = this.#remember(key, holder, token);
         return Object.freeze({ key, holder, fencingToken, ttlMs: opts.ttlMs, leaseExpiresMs });
       }
+      if (body.error_code === "fencing_exhausted") {
+        throw LockError.invalidPlan(
+          key,
+          "beamscale: critical-section fencing sequence is exhausted",
+        );
+      }
       if (status === 409 && body.error_code === "busy") {
         if (!wait) throw LockError.contention(key, "fiducia.try_acquire");
         const waited = Date.now() - started;
