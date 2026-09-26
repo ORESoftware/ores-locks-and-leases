@@ -94,6 +94,10 @@ pub mod coordinated;
 #[cfg(all(feature = "pg", any(feature = "fiducia", feature = "maintained")))]
 pub mod maintained;
 
+pub use beamscale::{
+    BeamScaleAcquireResult, BeamScaleCriticalSectionGrant, BeamScaleCriticalSectionLease,
+    BeamScaleCriticalSectionToken, BeamScaleCriticalSectionTransport, BeamScaleRenewResult,
+};
 #[cfg(feature = "config")]
 pub use config::{
     CloudflareDurableObjectProviderConfig, EnvBinding, EnvKind, FiduciaProviderConfig,
@@ -101,10 +105,6 @@ pub use config::{
     MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES, MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS,
     MAX_WAIT_TIMEOUT_MS, OresLockConfigV1, OuterLeaseAuthority, PostgresLockScope,
     PostgresProviderConfig, ProviderSelection, RedisProviderConfig,
-};
-pub use beamscale::{
-    BeamScaleAcquireResult, BeamScaleCriticalSectionGrant, BeamScaleCriticalSectionLease,
-    BeamScaleCriticalSectionToken, BeamScaleCriticalSectionTransport, BeamScaleRenewResult,
 };
 pub use error::{LockError, LockErrorKind};
 pub use fence::{
