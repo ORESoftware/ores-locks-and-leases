@@ -4,20 +4,57 @@
     "local_file": {
       "distributed": false,
       "requires_fencing": false,
-      "languages": ["rust", "go", "typescript", "gleam"],
-      "required_corpora": ["local-file-lock.json", "local-file-lock-invalid.json"]
+      "languages": [
+        "rust",
+        "go",
+        "typescript",
+        "gleam"
+      ],
+      "required_corpora": [
+        "local-file-lock.json",
+        "local-file-lock-invalid.json"
+      ]
     },
     "fiducia": {
       "distributed": true,
       "requires_fencing": true,
-      "languages": ["rust", "go", "typescript", "dart", "gleam"],
-      "required_corpora": ["fence-decision.json", "renewal-decision.json", "cancellation-race.json"]
+      "languages": [
+        "rust",
+        "go",
+        "typescript",
+        "dart",
+        "gleam"
+      ],
+      "required_corpora": [
+        "fence-decision.json",
+        "renewal-decision.json",
+        "cancellation-race.json"
+      ]
     },
     "cloudflare_durable_object": {
       "distributed": true,
       "requires_fencing": true,
-      "languages": ["rust", "typescript"],
-      "required_corpora": ["fence-decision.json", "renewal-decision.json", "cancellation-race.json"]
+      "languages": [
+        "rust",
+        "typescript"
+      ],
+      "required_corpora": [
+        "fence-decision.json",
+        "renewal-decision.json",
+        "cancellation-race.json"
+      ]
+    },
+    "beamscale_critical_section": {
+      "distributed": true,
+      "requires_fencing": true,
+      "languages": [
+        "typescript"
+      ],
+      "required_corpora": [
+        "fence-decision.json",
+        "renewal-decision.json",
+        "cancellation-race.json"
+      ]
     }
   }
 }
