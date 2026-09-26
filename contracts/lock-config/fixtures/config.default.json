@@ -3,13 +3,76 @@
   "default_profile": "local-install",
   "selected_profile_env": "ORES_LOCK_PROFILE",
   "env": [
-    {"key": "ORES_LOCK_PROFILE", "kind": "string", "required": false, "secret": false, "purpose": "Select one declared lock profile at process startup."},
-    {"key": "ORES_LOCK_ROOT", "kind": "path", "required": false, "secret": false, "purpose": "Local-file lock rendezvous root, typically under application-private state."},
-    {"key": "FIDUCIA_BASE_URL", "kind": "url", "required": false, "secret": false, "purpose": "Fiducia lease authority endpoint."},
-    {"key": "FIDUCIA_AUTH_TOKEN", "kind": "string", "required": false, "secret": true, "purpose": "Credential for the Fiducia lease authority."},
-    {"key": "ORES_LOCKS_CF_URL", "kind": "url", "required": false, "secret": false, "purpose": "Cloudflare Durable Object Worker endpoint."},
-    {"key": "ORES_LOCKS_CF_TOKEN", "kind": "string", "required": false, "secret": true, "purpose": "Credential for the Cloudflare Durable Object lease authority."},
-    {"key": "DATABASE_URL", "kind": "string", "required": false, "secret": true, "purpose": "PostgreSQL connection string used by the advisory-lock provider."}
+    {
+      "key": "ORES_LOCK_PROFILE",
+      "kind": "string",
+      "required": false,
+      "secret": false,
+      "purpose": "Select one declared lock profile at process startup."
+    },
+    {
+      "key": "ORES_LOCK_ROOT",
+      "kind": "path",
+      "required": false,
+      "secret": false,
+      "purpose": "Local-file lock rendezvous root, typically under application-private state."
+    },
+    {
+      "key": "FIDUCIA_BASE_URL",
+      "kind": "url",
+      "required": false,
+      "secret": false,
+      "purpose": "Fiducia lease authority endpoint."
+    },
+    {
+      "key": "FIDUCIA_AUTH_TOKEN",
+      "kind": "string",
+      "required": false,
+      "secret": true,
+      "purpose": "Credential for the Fiducia lease authority."
+    },
+    {
+      "key": "ORES_LOCKS_CF_URL",
+      "kind": "url",
+      "required": false,
+      "secret": false,
+      "purpose": "Cloudflare Durable Object Worker endpoint."
+    },
+    {
+      "key": "ORES_LOCKS_CF_TOKEN",
+      "kind": "string",
+      "required": false,
+      "secret": true,
+      "purpose": "Credential for the Cloudflare Durable Object lease authority."
+    },
+    {
+      "key": "BMSCL_API_URL",
+      "kind": "url",
+      "required": false,
+      "secret": false,
+      "purpose": "BeamScale public API endpoint for the critical-section authority."
+    },
+    {
+      "key": "BMSCL_TOKEN",
+      "kind": "string",
+      "required": false,
+      "secret": true,
+      "purpose": "Credential for the BeamScale critical-section authority."
+    },
+    {
+      "key": "BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID",
+      "kind": "string",
+      "required": false,
+      "secret": false,
+      "purpose": "BeamScale critical-section deployment id selected for this environment."
+    },
+    {
+      "key": "DATABASE_URL",
+      "kind": "string",
+      "required": false,
+      "secret": true,
+      "purpose": "PostgreSQL connection string used by the advisory-lock provider."
+    }
   ],
   "profiles": [
     {
@@ -17,8 +80,15 @@
       "wait": true,
       "wait_timeout_ms": 30000,
       "retry_interval_ms": 50,
-      "providers": {"local_file": true, "fiducia": false, "pg_advisory": false},
-      "local_file": {"root_env": "ORES_LOCK_ROOT", "require_existing_root": false}
+      "providers": {
+        "local_file": true,
+        "fiducia": false,
+        "pg_advisory": false
+      },
+      "local_file": {
+        "root_env": "ORES_LOCK_ROOT",
+        "require_existing_root": false
+      }
     },
     {
       "profile_id": "service-composed",
@@ -27,9 +97,19 @@
       "retry_interval_ms": 50,
       "ttl_ms": 30000,
       "renew_interval_ms": 10000,
-      "providers": {"local_file": false, "fiducia": true, "pg_advisory": true},
-      "fiducia": {"endpoint_env": "FIDUCIA_BASE_URL", "auth_token_env": "FIDUCIA_AUTH_TOKEN"},
-      "postgres": {"database_url_env": "DATABASE_URL", "scope": "transaction"}
+      "providers": {
+        "local_file": false,
+        "fiducia": true,
+        "pg_advisory": true
+      },
+      "fiducia": {
+        "endpoint_env": "FIDUCIA_BASE_URL",
+        "auth_token_env": "FIDUCIA_AUTH_TOKEN"
+      },
+      "postgres": {
+        "database_url_env": "DATABASE_URL",
+        "scope": "transaction"
+      }
     },
     {
       "profile_id": "service-cloudflare-pg",
@@ -39,9 +119,42 @@
       "ttl_ms": 60000,
       "renew_interval_ms": 20000,
       "outer_authority": "cloudflare_durable_object",
-      "providers": {"local_file": false, "fiducia": true, "pg_advisory": true},
-      "cloudflare_durable_object": {"endpoint_env": "ORES_LOCKS_CF_URL", "api_token_env": "ORES_LOCKS_CF_TOKEN"},
-      "postgres": {"database_url_env": "DATABASE_URL", "scope": "transaction"}
+      "providers": {
+        "local_file": false,
+        "fiducia": true,
+        "pg_advisory": true
+      },
+      "cloudflare_durable_object": {
+        "endpoint_env": "ORES_LOCKS_CF_URL",
+        "api_token_env": "ORES_LOCKS_CF_TOKEN"
+      },
+      "postgres": {
+        "database_url_env": "DATABASE_URL",
+        "scope": "transaction"
+      }
+    },
+    {
+      "profile_id": "service-beamscale-pg",
+      "wait": true,
+      "wait_timeout_ms": 30000,
+      "retry_interval_ms": 250,
+      "ttl_ms": 60000,
+      "renew_interval_ms": 20000,
+      "outer_authority": "beamscale_critical_section",
+      "providers": {
+        "local_file": false,
+        "fiducia": true,
+        "pg_advisory": true
+      },
+      "beamscale_critical_section": {
+        "endpoint_env": "BMSCL_API_URL",
+        "api_token_env": "BMSCL_TOKEN",
+        "deployment_id_env": "BMSCL_CRITICAL_SECTION_DEPLOYMENT_ID"
+      },
+      "postgres": {
+        "database_url_env": "DATABASE_URL",
+        "scope": "transaction"
+      }
     }
   ]
 }
