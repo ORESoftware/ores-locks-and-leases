@@ -39,6 +39,7 @@ pub enum EnvKind {
 pub enum OuterLeaseAuthority {
     Fiducia,
     CloudflareDurableObject,
+    #[serde(rename = "beamscale_critical_section")]
     BeamScaleCriticalSection,
     Redis,
 }
