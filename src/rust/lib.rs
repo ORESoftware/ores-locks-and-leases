@@ -66,6 +66,7 @@
 //! distributed: lease.acquire -> pg.begin -> pg_advisory_xact_lock -> work/renew* -> lease.renew -> pg.commit -> lease.release
 //! ```
 
+pub mod beamscale;
 pub mod error;
 pub mod fence;
 pub mod key;
@@ -100,6 +101,10 @@ pub use config::{
     MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES, MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS,
     MAX_WAIT_TIMEOUT_MS, OresLockConfigV1, OuterLeaseAuthority, PostgresLockScope,
     PostgresProviderConfig, ProviderSelection, RedisProviderConfig,
+};
+pub use beamscale::{
+    BeamScaleAcquireResult, BeamScaleCriticalSectionGrant, BeamScaleCriticalSectionLease,
+    BeamScaleCriticalSectionToken, BeamScaleCriticalSectionTransport, BeamScaleRenewResult,
 };
 pub use error::{LockError, LockErrorKind};
 pub use fence::{
