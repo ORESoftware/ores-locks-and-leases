@@ -14,7 +14,6 @@ import {
 } from "./src/http-boundary.js";
 
 const MAX_SAFE_FENCING_TOKEN = "9007199254740991";
-const MAX_U64_FENCING_TOKEN = "18446744073709551615";
 const ABOVE_MAX_U64_FENCING_TOKEN = "18446744073709551616";
 
 function rows(items = []) {
