@@ -189,7 +189,7 @@ where
                 .await
             {
                 Ok(result) => result,
-                Err(message) if ambiguous_retries == 0 => {
+                Err(_message) if ambiguous_retries == 0 => {
                     ambiguous_retries = 1;
                     continue;
                 }
