@@ -1,7 +1,7 @@
 import { LockError } from "./errors.js";
 import type { LockKey } from "./key.js";
 import type { AcquireOptions, Lease, LeaseGrant } from "./lease.js";
-import { generatedHolder, type FetchLike } from "./fiducia.js";
+import { generatedHolder, generatedRequestId, type FetchLike } from "./fiducia.js";
 
 export interface BeamScaleCriticalSectionLeaseOptions {
   readonly baseUrl: string;
