@@ -823,6 +823,24 @@ mod tests {
         assert_eq!(options.ttl, Duration::from_millis(60_000));
         assert_eq!(options.wait_timeout, Duration::from_millis(30_000));
         assert_eq!(options.retry_interval, Duration::from_millis(250));
+
+        let beamscale = config
+            .profile("service-beamscale-pg")
+            .expect("BeamScale service profile");
+        assert_eq!(beamscale.layers(), LockLayers::BOTH);
+        assert_eq!(
+            beamscale.outer_authority(),
+            Some(OuterLeaseAuthority::BeamScaleCriticalSection)
+        );
+        assert_eq!(beamscale.pg_scope(), Some(PgScope::Transaction));
+        let (options, wait) = beamscale
+            .lease_acquire_options()
+            .expect("BeamScale projection")
+            .expect("lease options");
+        assert!(wait);
+        assert_eq!(options.ttl, Duration::from_millis(60_000));
+        assert_eq!(options.wait_timeout, Duration::from_millis(30_000));
+        assert_eq!(options.retry_interval, Duration::from_millis(250));
     }
 
     #[test]
