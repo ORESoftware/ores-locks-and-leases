@@ -25,6 +25,9 @@ const sourcePaths = {
     rust: 'src/rust/managed.rs',
     typescript: 'src/ts/src/cloudflare-do-rpc.ts',
   },
+  beamscale_critical_section: {
+    typescript: 'src/ts/src/beamscale-critical-section.ts',
+  },
 };
 
 for (const [providerName, provider] of Object.entries(matrix.providers)) {
@@ -44,7 +47,7 @@ for (const [providerName, provider] of Object.entries(matrix.providers)) {
   }
 }
 
-for (const distributed of ['fiducia', 'cloudflare_durable_object']) {
+for (const distributed of ['fiducia', 'cloudflare_durable_object', 'beamscale_critical_section']) {
   const corpora = new Set(matrix.providers[distributed].required_corpora);
   for (const required of ['fence-decision.json', 'renewal-decision.json', 'cancellation-race.json']) {
     assert.ok(corpora.has(required), `${distributed}: missing required distributed semantics ${required}`);
