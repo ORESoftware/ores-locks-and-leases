@@ -469,6 +469,23 @@ mod tests {
     }
 
     #[test]
+    fn fencing_exhaustion_is_terminal_invalid_plan() {
+        let transport = FakeTransport::default();
+        transport
+            .acquire_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleAcquireResult::FencingExhausted));
+
+        let lease = BeamScaleCriticalSectionLease::new(transport);
+        let error =
+            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), false))
+                .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
     fn changed_token_on_renewal_is_lost_lease() {
         let transport = FakeTransport::default();
         transport
