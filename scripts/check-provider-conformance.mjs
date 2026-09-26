@@ -26,6 +26,7 @@ const sourcePaths = {
     typescript: 'src/ts/src/cloudflare-do-rpc.ts',
   },
   beamscale_critical_section: {
+    rust: 'src/rust/beamscale.rs',
     typescript: 'src/ts/src/beamscale-critical-section.ts',
   },
 };
