@@ -100,7 +100,8 @@ pub use beamscale::{
 };
 #[cfg(feature = "config")]
 pub use config::{
-    CloudflareDurableObjectProviderConfig, EnvBinding, EnvKind, FiduciaProviderConfig,
+    BeamScaleCriticalSectionProviderConfig, CloudflareDurableObjectProviderConfig, EnvBinding,
+    EnvKind, FiduciaProviderConfig,
     LOCK_CONFIG_SCHEMA_V1, LocalFileProviderConfig, LockConfigError, LockProfileConfig,
     MAX_CONFIG_ENVS, MAX_CONFIG_PROFILES, MAX_RENEW_INTERVAL_MS, MAX_RETRY_INTERVAL_MS, MAX_TTL_MS,
     MAX_WAIT_TIMEOUT_MS, OresLockConfigV1, OuterLeaseAuthority, PostgresLockScope,
