@@ -37,6 +37,7 @@ pub struct BeamScaleCriticalSectionGrant {
 pub enum BeamScaleAcquireResult {
     Acquired(BeamScaleCriticalSectionGrant),
     Contended,
+    FencingExhausted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +210,12 @@ where
                         lease_expires_ms: Some(native.lease_expires_ms),
                         ttl_ms,
                     });
+                }
+                BeamScaleAcquireResult::FencingExhausted => {
+                    return Err(LockError::invalid_plan(
+                        key,
+                        "beamscale: critical-section fencing sequence is exhausted",
+                    ));
                 }
                 BeamScaleAcquireResult::Contended if !wait => {
                     return Err(LockError::contention(key, LockStep::FiduciaTryAcquire));
