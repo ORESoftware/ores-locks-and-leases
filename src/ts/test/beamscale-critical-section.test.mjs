@@ -196,3 +196,29 @@ test("BeamScale release stale result is a committed no-op", async () => {
   const grant = await lease.acquire(lockKey("orders/released"), opts, false);
   assert.equal(await lease.release({ ...grant }), false);
 });
+
+
+test("BeamScale fencing exhaustion is terminal invalid_plan", async () => {
+  const lease = new BeamScaleCriticalSectionLease({
+    baseUrl: "https://api.beamscale.test",
+    apiToken: "secret",
+    deploymentId: "orders-critical",
+    fetch: async () => response({
+      op: "critical_section_result",
+      operation: "acquire",
+      ok: false,
+      error_code: "fencing_exhausted",
+    }, 502),
+  });
+  await assert.rejects(
+    () => lease.acquire(
+      lockKey("orders/exhausted"),
+      { ...opts, requestId: "request-exhausted" },
+      false,
+    ),
+    (error) =>
+      error instanceof LockError
+      && error.kind === "invalid_plan"
+      && error.retryable === false,
+  );
+});
