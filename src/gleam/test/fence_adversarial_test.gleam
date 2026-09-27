@@ -257,12 +257,9 @@ pub fn generated_adversarial_corpus_test() {
   })
 }
 
-
 pub fn runtime_lifecycle_fencing_corpus_test() {
   let assert Ok(text) =
-    simplifile.read(
-      "../../conformance/cases/runtime-lifecycle-fencing.json",
-    )
+    simplifile.read("../../conformance/cases/runtime-lifecycle-fencing.json")
   let decoder = {
     use cases <- decode.field("cases", decode.list(case_decoder()))
     decode.success(cases)
