@@ -72,7 +72,7 @@ export class CloudflareDurableObjectRpcLease implements Lease {
 
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
-    const requestId = this.#generateRequestId();
+    const requestId = opts.requestId ?? this.#generateRequestId();
     const started = Date.now();
     const step: LockStep = wait ? "fiducia.acquire" : "fiducia.try_acquire";
 
