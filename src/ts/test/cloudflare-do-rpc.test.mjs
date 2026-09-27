@@ -49,7 +49,7 @@ test("Durable Object RPC adapter calls typed stub methods without an HTTP hop", 
   });
   const key = lockKey("zed-pkg/registry/rpc");
 
-  const grant = await lease.acquire(key, opts, false);
+  const grant = await lease.acquire(key, { ...opts, requestId: "caller-rpc-attempt" }, false);
   assert.equal(grant.fencingToken, 7n);
   assert.equal(grant.leaseExpiresMs, 2_000_000_060_000);
   const renewed = await lease.renew(grant, 30_000);
@@ -58,7 +58,7 @@ test("Durable Object RPC adapter calls typed stub methods without an HTTP hop", 
 
   assert.deepEqual(names, [key, key, key]);
   assert.deepEqual(calls, [
-    ["acquire", { holder: "worker-a", ttl_ms: 60_000, request_id: "attempt-rpc-1" }],
+    ["acquire", { holder: "worker-a", ttl_ms: 60_000, request_id: "caller-rpc-attempt" }],
     ["renew", { holder: "worker-a", fencing_token: "7", ttl_ms: 30_000 }],
     ["release", { holder: "worker-a", fencing_token: "7" }],
   ]);
