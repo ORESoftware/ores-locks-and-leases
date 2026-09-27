@@ -128,7 +128,11 @@ Properties:
   state mutation;
 - renew and release match both holder and fencing token;
 - the public HTTP Worker fails closed if `ORES_LOCKS_API_TOKEN` is absent unless
-  `ALLOW_UNAUTHENTICATED=true` is explicitly configured for development.
+  `ALLOW_UNAUTHENTICATED=true` is explicitly configured for development;
+- production HTTP deployments also require `ORES_LOCKS_API_POLICY_JSON`, a
+  non-secret server-side policy that binds that bearer credential to explicit
+  key prefixes, lease verbs, and a maximum TTL. Scope denial happens before
+  Durable Object lookup and returns only a generic `forbidden` response.
 
 Deploy from the repository root:
 
@@ -137,6 +141,25 @@ cd managed/cloudflare-do
 npx wrangler secret put ORES_LOCKS_API_TOKEN
 npx wrangler deploy
 ```
+
+For a BeamScale production lifecycle authority, configure the Worker with a
+policy such as:
+
+```json
+{
+  "key_prefixes": ["beamscale/runtime-lifecycle/prod/"],
+  "operations": ["acquire", "renew", "release"],
+  "max_ttl_ms": 60000
+}
+```
+
+Set that JSON as `ORES_LOCKS_API_POLICY_JSON` and set
+`ORES_LOCKS_ENVIRONMENT=production`. Prefixes must end in `/`; this makes the
+authorization boundary component-safe, so a credential scoped to
+`.../prod/` cannot reach `.../prod-shadow/`. Production refuses to serve
+lease mutations if the scope policy is absent or malformed. Run separate
+Worker deployments/credentials for BeamScale, Scintilla, environments, or
+other trust domains rather than sharing one fleet-wide bearer token.
 
 ### Direct Workers RPC
 
