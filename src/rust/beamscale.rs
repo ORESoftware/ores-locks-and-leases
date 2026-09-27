@@ -461,13 +461,15 @@ mod tests {
             .push_back(Ok(BeamScaleAcquireResult::Acquired(native(17, 100_000))));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
-        let grant = block_on(lease.acquire(
-            &key(),
-            &AcquireOptions::default()
-                .holder("worker-a")
-                .request_id("caller-stable-attempt"),
-            true,
-        ))
+        let grant = block_on(
+            lease.acquire(
+                &key(),
+                &AcquireOptions::default()
+                    .holder("worker-a")
+                    .request_id("caller-stable-attempt"),
+                true,
+            ),
+        )
         .unwrap();
         assert_eq!(grant.fencing_token, 17);
 
