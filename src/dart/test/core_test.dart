@@ -107,7 +107,8 @@ void main() {
     }
   });
 
-  test('lock keys are length-bounded in bytes', () {
+  test('lock keys are non-empty and length-bounded in bytes', () {
+    expect(() => LockKey(''), throwsArgumentError);
     expect(LockKey('a' * 512).value, hasLength(512));
     expect(() => LockKey('é' * 300), throwsArgumentError);
   });
