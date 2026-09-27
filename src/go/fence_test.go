@@ -18,9 +18,9 @@ type fenceCorpus struct {
 	InvalidTokens []string `json:"invalidTokens"`
 }
 
-func loadFenceCorpus(t *testing.T) fenceCorpus {
+func loadFenceCorpus(t *testing.T, name string) fenceCorpus {
 	t.Helper()
-	path := filepath.Join("..", "..", "conformance", "cases", "fence-decision.json")
+	path := filepath.Join("..", "..", "conformance", "cases", name+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -32,9 +32,10 @@ func loadFenceCorpus(t *testing.T) fenceCorpus {
 	return corpus
 }
 
-func TestFenceDecisionsMatchSharedCorpus(t *testing.T) {
-	for _, tc := range loadFenceCorpus(t).Cases {
-		t.Run(tc.Name, func(t *testing.T) {
+func TestFenceDecisionsMatchSharedCorpora(t *testing.T) {
+	for _, corpusName := range []string{"fence-decision", "runtime-lifecycle-fencing"} {
+		for _, tc := range loadFenceCorpus(t, corpusName).Cases {
+			t.Run(corpusName+"/"+tc.Name, func(t *testing.T) {
 			decision, err := EvaluateFence(tc.Current, tc.Incoming)
 			if tc.ExpectedError != "" {
 				if err == nil {
@@ -64,12 +65,13 @@ func TestFenceDecisionsMatchSharedCorpus(t *testing.T) {
 			case *decision.PreviousToken != *tc.Expected.PreviousToken:
 				t.Fatalf("previous token = %q, want %q", decision.PreviousToken.String(), tc.Expected.PreviousToken.String())
 			}
-		})
+			})
+		}
 	}
 }
 
 func TestInvalidFenceTokensFailClosed(t *testing.T) {
-	for _, value := range loadFenceCorpus(t).InvalidTokens {
+	for _, value := range loadFenceCorpus(t, "fence-decision").InvalidTokens {
 		if _, err := ParseFencingTokenText(value); err == nil {
 			t.Errorf("invalid token unexpectedly accepted: %q", value)
 		}
