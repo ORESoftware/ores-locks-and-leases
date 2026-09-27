@@ -1,0 +1,254 @@
+{
+  "$comment": "Runtime lifecycle fencing profile for BeamScale/Scintilla hibernate/resume. The lifecycle record is a fenced mutation consumer; local PID/runtime epoch never override the distributed fencing watermark.",
+  "schema": "ores.locks-and-leases.runtime-lifecycle-fencing-corpus/v1",
+  "profile": {
+    "leaseKeyShape": "<product>/runtime-lifecycle/<environment>/<region>/<runtime-id>",
+    "states": [
+      "hot",
+      "warm_idle",
+      "hibernating",
+      "hibernated",
+      "resuming",
+      "draining",
+      "terminated"
+    ],
+    "rules": [
+      "holder identity and logical request identity are distinct",
+      "checkpoint/restore must retain the fencing token and runtime epoch",
+      "only a strictly newer fencing token may advance a different lifecycle mutation",
+      "same token plus same operation and payload is an idempotent replay",
+      "same token plus different operation or payload is token reuse and must fail closed",
+      "an older token is stale even when local PID and runtime epoch still match"
+    ]
+  },
+  "cases": [
+    {
+      "name": "fresh hibernate transition advances absent lifecycle watermark",
+      "context": {
+        "transition": "hibernate",
+        "runtimeEpoch": 7,
+        "pid": 4242,
+        "checkpointDigest": "sha256:checkpoint-a"
+      },
+      "current": null,
+      "incoming": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "hibernate:epoch-7:checkpoint-a",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "holder": "host-a",
+        "leaseId": "request-hibernate-41"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "41",
+        "currentToken": "41",
+        "previousToken": null
+      },
+      "expectedLifecycleDisposition": "apply"
+    },
+    {
+      "name": "duplicate hibernate receipt is an idempotent replay",
+      "context": {
+        "transition": "hibernate",
+        "runtimeEpoch": 7,
+        "pid": 4242,
+        "checkpointDigest": "sha256:checkpoint-a"
+      },
+      "current": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "hibernate:epoch-7:checkpoint-a",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "holder": "host-a",
+        "leaseId": "request-hibernate-41"
+      },
+      "incoming": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "hibernate:epoch-7:checkpoint-a",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "holder": "host-a-retry",
+        "leaseId": "request-hibernate-41"
+      },
+      "expected": {
+        "kind": "replay",
+        "shouldApply": false,
+        "incomingToken": "41",
+        "currentToken": "41",
+        "previousToken": "41"
+      },
+      "expectedLifecycleDisposition": "idempotent_noop"
+    },
+    {
+      "name": "same token cannot switch from hibernate to resume",
+      "context": {
+        "transition": "resume",
+        "runtimeEpoch": 7,
+        "pid": 4242,
+        "checkpointDigest": "sha256:checkpoint-a"
+      },
+      "current": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "hibernate:epoch-7:checkpoint-a",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "incoming": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "resume:epoch-7:checkpoint-a",
+        "payloadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": {
+        "kind": "token_reuse",
+        "shouldApply": false,
+        "incomingToken": "41",
+        "currentToken": "41",
+        "previousToken": "41"
+      },
+      "expectedLifecycleDisposition": "reject_token_reuse"
+    },
+    {
+      "name": "replacement owner advances lifecycle watermark before old runtime resumes",
+      "context": {
+        "transition": "replacement",
+        "runtimeEpoch": 7,
+        "pid": 5151,
+        "checkpointDigest": "sha256:replacement"
+      },
+      "current": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "hibernate:epoch-7:checkpoint-a",
+        "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "incoming": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "42",
+        "operationId": "replacement:epoch-7",
+        "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "holder": "host-b",
+        "leaseId": "request-replacement-42"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "42",
+        "currentToken": "42",
+        "previousToken": "41"
+      },
+      "expectedLifecycleDisposition": "apply"
+    },
+    {
+      "name": "stale resume is rejected even when local pid and runtime epoch still match",
+      "context": {
+        "transition": "resume",
+        "runtimeEpoch": 7,
+        "pid": 4242,
+        "sameLocalPidAsCheckpoint": true,
+        "sameLocalRuntimeEpochAsCheckpoint": true,
+        "checkpointDigest": "sha256:checkpoint-a"
+      },
+      "current": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "42",
+        "operationId": "replacement:epoch-7",
+        "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "holder": "host-b",
+        "leaseId": "request-replacement-42"
+      },
+      "incoming": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "41",
+        "operationId": "resume:epoch-7:checkpoint-a",
+        "payloadSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "holder": "host-a",
+        "leaseId": "request-resume-stale-41"
+      },
+      "expected": {
+        "kind": "stale",
+        "shouldApply": false,
+        "incomingToken": "41",
+        "currentToken": "42",
+        "previousToken": "42"
+      },
+      "expectedLifecycleDisposition": "reject_stale"
+    },
+    {
+      "name": "fresh resume with a newer lease advances after replacement",
+      "context": {
+        "transition": "resume",
+        "runtimeEpoch": 8,
+        "pid": 6161,
+        "checkpointDigest": "sha256:checkpoint-a"
+      },
+      "current": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "42",
+        "operationId": "replacement:epoch-7",
+        "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "incoming": {
+        "tenantScope": "beamscale/prod/us-east-1",
+        "resourceKey": "beamscale/runtime-lifecycle/prod/us-east-1/runtime-42",
+        "fencingToken": "43",
+        "operationId": "resume:epoch-8:checkpoint-a",
+        "payloadSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "holder": "host-c",
+        "leaseId": "request-resume-43"
+      },
+      "expected": {
+        "kind": "advanced",
+        "shouldApply": true,
+        "incomingToken": "43",
+        "currentToken": "43",
+        "previousToken": "42"
+      },
+      "expectedLifecycleDisposition": "apply"
+    },
+    {
+      "name": "older checkpoint receipt cannot overwrite a newer hot lifecycle record",
+      "context": {
+        "transition": "hibernate",
+        "runtimeEpoch": 8,
+        "pid": 6161,
+        "checkpointDigest": "sha256:checkpoint-old"
+      },
+      "current": {
+        "tenantScope": "scintilla/prod/us-east-1",
+        "resourceKey": "scintilla/runtime-lifecycle/prod/us-east-1/runtime-9",
+        "fencingToken": "44",
+        "operationId": "hot:epoch-8",
+        "payloadSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "incoming": {
+        "tenantScope": "scintilla/prod/us-east-1",
+        "resourceKey": "scintilla/runtime-lifecycle/prod/us-east-1/runtime-9",
+        "fencingToken": "43",
+        "operationId": "hibernate:epoch-8:checkpoint-old",
+        "payloadSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expected": {
+        "kind": "stale",
+        "shouldApply": false,
+        "incomingToken": "43",
+        "currentToken": "44",
+        "previousToken": "44"
+      },
+      "expectedLifecycleDisposition": "reject_stale"
+    }
+  ],
+  "invalidTokens": []
+}

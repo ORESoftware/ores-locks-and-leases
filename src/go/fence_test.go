@@ -18,9 +18,9 @@ type fenceCorpus struct {
 	InvalidTokens []string `json:"invalidTokens"`
 }
 
-func loadFenceCorpus(t *testing.T) fenceCorpus {
+func loadFenceCorpus(t *testing.T, name string) fenceCorpus {
 	t.Helper()
-	path := filepath.Join("..", "..", "conformance", "cases", "fence-decision.json")
+	path := filepath.Join("..", "..", "conformance", "cases", name+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -32,44 +32,46 @@ func loadFenceCorpus(t *testing.T) fenceCorpus {
 	return corpus
 }
 
-func TestFenceDecisionsMatchSharedCorpus(t *testing.T) {
-	for _, tc := range loadFenceCorpus(t).Cases {
-		t.Run(tc.Name, func(t *testing.T) {
-			decision, err := EvaluateFence(tc.Current, tc.Incoming)
-			if tc.ExpectedError != "" {
-				if err == nil {
-					t.Fatalf("expected validation error %q", tc.ExpectedError)
+func TestFenceDecisionsMatchSharedCorpora(t *testing.T) {
+	for _, corpusName := range []string{"fence-decision", "runtime-lifecycle-fencing"} {
+		for _, tc := range loadFenceCorpus(t, corpusName).Cases {
+			t.Run(corpusName+"/"+tc.Name, func(t *testing.T) {
+				decision, err := EvaluateFence(tc.Current, tc.Incoming)
+				if tc.ExpectedError != "" {
+					if err == nil {
+						t.Fatalf("expected validation error %q", tc.ExpectedError)
+					}
+					if got := FenceValidationCode(err); got != tc.ExpectedError {
+						t.Fatalf("validation code = %q, want %q: %v", got, tc.ExpectedError, err)
+					}
+					return
 				}
-				if got := FenceValidationCode(err); got != tc.ExpectedError {
-					t.Fatalf("validation code = %q, want %q: %v", got, tc.ExpectedError, err)
+				if err != nil {
+					t.Fatal(err)
 				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.Expected == nil {
-				t.Fatal("missing expected decision")
-			}
-			if decision.Kind != tc.Expected.Kind ||
-				decision.ShouldApply != tc.Expected.ShouldApply ||
-				decision.IncomingToken != tc.Expected.IncomingToken ||
-				decision.CurrentToken != tc.Expected.CurrentToken {
-				t.Fatalf("decision = %#v, want %#v", decision, *tc.Expected)
-			}
-			switch {
-			case decision.PreviousToken == nil && tc.Expected.PreviousToken == nil:
-			case decision.PreviousToken == nil || tc.Expected.PreviousToken == nil:
-				t.Fatalf("previous token = %#v, want %#v", decision.PreviousToken, tc.Expected.PreviousToken)
-			case *decision.PreviousToken != *tc.Expected.PreviousToken:
-				t.Fatalf("previous token = %q, want %q", decision.PreviousToken.String(), tc.Expected.PreviousToken.String())
-			}
-		})
+				if tc.Expected == nil {
+					t.Fatal("missing expected decision")
+				}
+				if decision.Kind != tc.Expected.Kind ||
+					decision.ShouldApply != tc.Expected.ShouldApply ||
+					decision.IncomingToken != tc.Expected.IncomingToken ||
+					decision.CurrentToken != tc.Expected.CurrentToken {
+					t.Fatalf("decision = %#v, want %#v", decision, *tc.Expected)
+				}
+				switch {
+				case decision.PreviousToken == nil && tc.Expected.PreviousToken == nil:
+				case decision.PreviousToken == nil || tc.Expected.PreviousToken == nil:
+					t.Fatalf("previous token = %#v, want %#v", decision.PreviousToken, tc.Expected.PreviousToken)
+				case *decision.PreviousToken != *tc.Expected.PreviousToken:
+					t.Fatalf("previous token = %q, want %q", decision.PreviousToken.String(), tc.Expected.PreviousToken.String())
+				}
+			})
+		}
 	}
 }
 
 func TestInvalidFenceTokensFailClosed(t *testing.T) {
-	for _, value := range loadFenceCorpus(t).InvalidTokens {
+	for _, value := range loadFenceCorpus(t, "fence-decision").InvalidTokens {
 		if _, err := ParseFencingTokenText(value); err == nil {
 			t.Errorf("invalid token unexpectedly accepted: %q", value)
 		}

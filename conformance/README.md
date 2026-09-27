@@ -17,6 +17,11 @@ slice that disagrees fails.
   acquisition: preserve the exact request identity, distinguish a committed
   cancellation from a raced grant, release a raced grant with its fencing token,
   and surface transport or cleanup uncertainty as a non-retryable safety error.
+- `cases/runtime-lifecycle-fencing.json` — BeamScale/Scintilla hibernate/resume
+  projection over the shared fencing state machine. It pins exact replay,
+  same-token transition reuse, newer-owner takeover, stale resume, and the case
+  where local PID/runtime epoch still match even though the distributed token is
+  stale.
 
 The adversarial workflow generates a larger deterministic fencing corpus into
 `target/adversarial/`, then temporarily projects it onto
@@ -38,6 +43,7 @@ node scripts/generate-fence-adversarial.mjs \
   --check
 node scripts/check-renewal-corpus.mjs
 node scripts/check-cancellation-corpus.mjs
+node scripts/check-runtime-lifecycle-corpus.mjs
 ```
 
 Generate the larger scheduled corpus:

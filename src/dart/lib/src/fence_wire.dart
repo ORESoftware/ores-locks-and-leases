@@ -99,6 +99,14 @@ FencedWriteRequest fencedWriteRequestFromJsonValue(Object? value) {
   final holder = _optionalString(fields, 'holder');
   final leaseId = _optionalString(fields, 'leaseId');
 
+  if (resourceKeyText.isEmpty) {
+    throw const FenceValidationException(
+      'empty_field',
+      'resourceKey must not be empty',
+      field: 'resourceKey',
+    );
+  }
+
   final resourceBytes = utf8.encode(resourceKeyText).length;
   if (resourceBytes > maxLockKeyBytes) {
     throw FenceValidationException(
