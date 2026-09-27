@@ -65,6 +65,87 @@ export function productionMode(env) {
   return mode === "production" || mode === "prod";
 }
 
+const PUBLIC_OPERATION = {
+  "/v1/leases/acquire": "acquire",
+  "/v1/leases/renew": "renew",
+  "/v1/leases/release": "release",
+};
+const SCOPE_POLICY_FIELDS = new Set(["key_prefixes", "operations", "max_ttl_ms"]);
+const SCOPE_OPERATIONS = new Set(Object.values(PUBLIC_OPERATION));
+const MAX_SCOPE_PREFIXES = 32;
+const MAX_TTL_MS = 86_400_000;
+
+function validScopePrefix(prefix) {
+  if (!validIdentity(prefix, MAX_LOCK_KEY_BYTES) || !prefix.endsWith("/") || prefix.includes("\\")) {
+    return false;
+  }
+  const components = prefix.slice(0, -1).split("/");
+  return (
+    components.length > 0 &&
+    components.every((component) => component.length > 0 && component !== "." && component !== "..")
+  );
+}
+
+/**
+ * Parse the non-secret authorization policy attached to the one public bearer
+ * credential. Production requires a configured policy; development may omit it.
+ */
+export function parsePublicScopePolicy(raw) {
+  if (raw === undefined || raw === null || raw === "") {
+    return { configured: false, policy: null };
+  }
+  if (typeof raw !== "string") return { configured: true, error: "invalid_scope_policy" };
+
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { configured: true, error: "invalid_scope_policy" };
+  }
+  if (!isPlainObject(value) || !hasOnlyFields(value, SCOPE_POLICY_FIELDS)) {
+    return { configured: true, error: "invalid_scope_policy" };
+  }
+
+  const prefixes = value.key_prefixes;
+  const operations = value.operations;
+  const maxTtlMs = value.max_ttl_ms;
+  if (
+    !Array.isArray(prefixes) ||
+    prefixes.length === 0 ||
+    prefixes.length > MAX_SCOPE_PREFIXES ||
+    !prefixes.every(validScopePrefix) ||
+    new Set(prefixes).size !== prefixes.length ||
+    !Array.isArray(operations) ||
+    operations.length === 0 ||
+    !operations.every((operation) => typeof operation === "string" && SCOPE_OPERATIONS.has(operation)) ||
+    new Set(operations).size !== operations.length ||
+    !Number.isSafeInteger(maxTtlMs) ||
+    maxTtlMs <= 0 ||
+    maxTtlMs > MAX_TTL_MS
+  ) {
+    return { configured: true, error: "invalid_scope_policy" };
+  }
+
+  return {
+    configured: true,
+    policy: {
+      keyPrefixes: prefixes,
+      operations,
+      maxTtlMs,
+    },
+  };
+}
+
+/** Return a stable denial code without consulting lease state. */
+export function authorizePublicOperation(policy, path, body) {
+  if (policy === null) return null;
+  const operation = PUBLIC_OPERATION[path];
+  if (!operation || !policy.operations.includes(operation)) return "operation_not_allowed";
+  if (!policy.keyPrefixes.some((prefix) => body.key.startsWith(prefix))) return "key_not_allowed";
+  if (path !== "/v1/leases/release" && body.ttl_ms > policy.maxTtlMs) return "ttl_exceeds_scope";
+  return null;
+}
+
 function parseBearer(request) {
   const auth = request.headers.get("authorization") ?? "";
   const match = /^Bearer[ ]+(.+)$/i.exec(auth);
