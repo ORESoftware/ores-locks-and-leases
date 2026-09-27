@@ -40,7 +40,7 @@ test("Cloudflare Durable Object client preserves the largest exact JSON fencing 
   });
   const key = lockKey("zed-pkg/registry/publish");
 
-  const grant = await lease.acquire(key, opts, false);
+  const grant = await lease.acquire(key, { ...opts, requestId: "http-logical-attempt" }, false);
   assert.equal(grant.fencingToken, BigInt(MAX_SAFE_FENCING_TOKEN));
   assert.equal(grant.holder, "worker-a");
 
@@ -55,6 +55,7 @@ test("Cloudflare Durable Object client preserves the largest exact JSON fencing 
     "/v1/leases/release",
   ]);
   assert.equal(calls[0].init.headers.authorization, "Bearer secret");
+  assert.match(calls[0].init.body, /"request_id":"http-logical-attempt"/);
   assert.match(calls[1].init.body, new RegExp(MAX_SAFE_FENCING_TOKEN));
 });
 
