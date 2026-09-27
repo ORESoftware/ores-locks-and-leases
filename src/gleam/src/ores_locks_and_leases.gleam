@@ -377,6 +377,9 @@ pub type AcquireOptions {
     /// Caller identity for the fiducia layer; also the release key. `None`
     /// lets the adapter generate an unguessable id.
     holder: Option(String),
+    /// Stable logical acquisition identity reused across every acquire poll.
+    /// `None` lets the adapter generate one once per logical acquisition.
+    request_id: Option(String),
   )
 }
 
@@ -387,6 +390,7 @@ pub fn default_acquire_options() -> AcquireOptions {
     wait_timeout_ms: 30_000,
     retry_interval_ms: 250,
     holder: None,
+    request_id: None,
   )
 }
 
