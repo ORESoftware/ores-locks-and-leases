@@ -22,9 +22,12 @@ function requireKeyString(key: unknown): asserts key is string {
   }
 }
 
-/** Validate the contract's runtime type and length bound, then brand the key. */
+/** Validate the contract's runtime type, non-empty invariant, and length bound. */
 export function lockKey(key: string): LockKey {
   requireKeyString(key);
+  if (key.length === 0) {
+    throw new RangeError("lock key must not be empty");
+  }
   const bytes = encoder.encode(key).length;
   if (bytes > MAX_LOCK_KEY_BYTES) {
     throw new RangeError(`lock key is ${bytes} bytes; the contract allows at most ${MAX_LOCK_KEY_BYTES}`);
