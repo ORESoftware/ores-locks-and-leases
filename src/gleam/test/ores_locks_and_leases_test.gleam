@@ -71,7 +71,8 @@ pub fn lock_plan_matrix_test() {
   })
 }
 
-pub fn key_length_is_bounded_test() {
+pub fn key_is_non_empty_and_length_bounded_test() {
+  let assert Error(_) = locks.lock_key("")
   let assert Ok(_) = locks.lock_key(string_repeat("x", 512))
   let assert Error(_) = locks.lock_key(string_repeat("x", 513))
 }
