@@ -97,17 +97,20 @@ test("renew and release reject malformed, non-positive, or out-of-domain token a
   }
 });
 
-test("renew and release preserve full-width decimal token authority", async (t) => {
+test("renew and release can retire a historical full-width decimal token", async (t) => {
   const originalNow = Date.now;
   let now = 10_000;
   Date.now = () => now;
   t.after(() => { Date.now = originalNow; });
 
   const {storage, authority} = makeAuthority();
-  storage.sql.state.next_token = "9007199254740991";
-
-  const grant = await authority.acquire({holder: "wide", request_id: "wide-1", ttl_ms: 1000});
-  assert.equal(grant.fencing_token, "9007199254740992");
+  Object.assign(storage.sql.state, {
+    holder: "wide",
+    token: "9007199254740992",
+    expires_ms: 11_000,
+    next_token: "9007199254740992",
+    request_id: "wide-1",
+  });
 
   now = 10_100;
   assert.deepEqual(

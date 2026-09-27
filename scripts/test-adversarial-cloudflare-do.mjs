@@ -14,7 +14,6 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_MINUS_ONE = MAX_SAFE - 1n;
 const MAX_PLUS_ONE = MAX_SAFE + 1n;
 const MAX_U64 = 18_446_744_073_709_551_615n;
-const MAX_U64_MINUS_ONE = MAX_U64 - 1n;
 
 function parseArgs(argv) {
   const options = {
@@ -288,52 +287,45 @@ async function runTokenBoundaryScenario() {
     fencing_token: max.fencing_token,
   }), { released: true });
 
-  // Crossing JavaScript's Number safe-integer ceiling is valid because the
-  // authority persists and transports fencing tokens as canonical decimal text.
-  const maxPlusOne = await restart(storage).acquire({
-    holder: "worker-json-unsafe",
-    request_id: "boundary-max-plus-one",
-    ttl_ms: 1_000,
-  });
-  assert.equal(maxPlusOne.acquired, true);
-  assert.equal(maxPlusOne.fencing_token, MAX_PLUS_ONE.toString());
-  assert.deepEqual(await restart(storage).release({
-    holder: "worker-json-unsafe",
-    fencing_token: maxPlusOne.fencing_token,
-  }), { released: true });
-
-  // Jump near the actual authority ceiling and prove the last two uint64 epochs
-  // are usable while the following acquire fails closed without mutating state.
-  storage.sql.state.next_token = (MAX_U64 - 2n).toString();
-
-  const u64MinusOne = await restart(storage).acquire({
-    holder: "worker-u64-minus-one",
-    request_id: "boundary-u64-minus-one",
-    ttl_ms: 1_000,
-  });
-  assert.equal(u64MinusOne.fencing_token, MAX_U64_MINUS_ONE.toString());
-  assert.deepEqual(await restart(storage).release({
-    holder: "worker-u64-minus-one",
-    fencing_token: u64MinusOne.fencing_token,
-  }), { released: true });
-
-  const u64Max = await restart(storage).acquire({
-    holder: "worker-u64-max",
-    request_id: "boundary-u64-max",
-    ttl_ms: 1_000,
-  });
-  assert.equal(u64Max.fencing_token, MAX_U64.toString());
-  assert.deepEqual(await restart(storage).release({
-    holder: "worker-u64-max",
-    fencing_token: u64Max.fencing_token,
-  }), { released: true });
-
+  // The next new grant must fail closed rather than mint an integer that JSON
+  // clients cannot represent exactly.
   const overflow = await restart(storage).acquire({
     holder: "worker-overflow",
-    request_id: "boundary-u64-overflow",
+    request_id: "boundary-safe-overflow",
     ttl_ms: 1_000,
   });
   assert.deepEqual(overflow, { acquired: false, error: "fencing_token_exhausted" });
+  assert.equal(storage.sql.state.next_token, MAX_SAFE.toString());
+  assert.equal(storage.sql.state.holder, null);
+
+  // Preserve cleanup compatibility for a historical full-width decimal grant
+  // that may exist during rolling migration. It can renew/release by exact text,
+  // but it cannot cause another wide grant to be minted.
+  Object.assign(storage.sql.state, {
+    holder: "worker-historical",
+    token: MAX_U64.toString(),
+    expires_ms: Date.now() + 1_000,
+    next_token: MAX_U64.toString(),
+    request_id: "historical-wide",
+  });
+  const historicalRenew = await restart(storage).renew({
+    holder: "worker-historical",
+    fencing_token: MAX_U64.toString(),
+    ttl_ms: 1_000,
+  });
+  assert.equal(historicalRenew.renewed, true);
+  assert.deepEqual(await restart(storage).release({
+    holder: "worker-historical",
+    fencing_token: MAX_U64.toString(),
+  }), { released: true });
+  assert.deepEqual(
+    await restart(storage).acquire({
+      holder: "worker-after-historical",
+      request_id: "after-historical",
+      ttl_ms: 1_000,
+    }),
+    { acquired: false, error: "fencing_token_exhausted" },
+  );
   assert.equal(storage.sql.state.next_token, MAX_U64.toString());
   assert.equal(storage.sql.state.holder, null);
 
@@ -342,9 +334,8 @@ async function runTokenBoundaryScenario() {
     fixtures: {
       maxMinusOne: MAX_MINUS_ONE.toString(),
       maxSafe: MAX_SAFE.toString(),
-      firstJsonUnsafe: MAX_PLUS_ONE.toString(),
-      u64MinusOne: MAX_U64_MINUS_ONE.toString(),
-      u64Max: MAX_U64.toString(),
+      mintedCeiling: MAX_SAFE.toString(),
+      historicalU64Max: MAX_U64.toString(),
     },
     overflowDecision: "fencing_token_exhausted",
   };

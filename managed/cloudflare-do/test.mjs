@@ -14,7 +14,6 @@ import {
 } from "./src/http-boundary.js";
 
 const MAX_SAFE_FENCING_TOKEN = "9007199254740991";
-const MAX_U64_FENCING_TOKEN = "18446744073709551615";
 const ABOVE_MAX_U64_FENCING_TOKEN = "18446744073709551616";
 
 function rows(items = []) {
@@ -158,26 +157,30 @@ test("Durable Object authority replays without extending and renews only by toke
   assert.equal(second.fencing_token, "2");
 });
 
-test("Durable Object authority advances beyond the JSON safe-integer ceiling and fails closed at uint64", async (t) => {
+test("Durable Object authority mints the exact-integer ceiling then fails closed", async (t) => {
   const originalNow = Date.now;
   Date.now = () => 10_000;
   t.after(() => { Date.now = originalNow; });
 
-  const { authority: wideLeases, storage: wideStorage } = authority();
-  wideStorage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
-  const wide = await wideLeases.acquire({ holder: "worker-wide", request_id: "wide", ttl_ms: 1_000 });
-  assert.equal(wide.acquired, true);
-  assert.equal(wide.fencing_token, "9007199254740992");
-  assert.equal(wideStorage.sql.state.next_token, "9007199254740992");
+  const { authority: finalLeases, storage: finalStorage } = authority();
+  finalStorage.sql.state.next_token = "9007199254740990";
+  const finalGrant = await finalLeases.acquire({
+    holder: "worker-final",
+    request_id: "final",
+    ttl_ms: 1_000,
+  });
+  assert.equal(finalGrant.acquired, true);
+  assert.equal(finalGrant.fencing_token, MAX_SAFE_FENCING_TOKEN);
+  assert.equal(finalStorage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
 
   const { authority: exhaustedLeases, storage: exhaustedStorage } = authority();
-  exhaustedStorage.sql.state.next_token = MAX_U64_FENCING_TOKEN;
+  exhaustedStorage.sql.state.next_token = MAX_SAFE_FENCING_TOKEN;
   assert.deepEqual(
     await exhaustedLeases.acquire({ holder: "worker-overflow", request_id: "overflow", ttl_ms: 1_000 }),
     { acquired: false, error: "fencing_token_exhausted" },
   );
   assert.equal(exhaustedStorage.sql.state.holder, null);
-  assert.equal(exhaustedStorage.sql.state.next_token, MAX_U64_FENCING_TOKEN);
+  assert.equal(exhaustedStorage.sql.state.next_token, MAX_SAFE_FENCING_TOKEN);
 });
 
 test("HTTP boundary rejects unknown fields and invalid operation values", () => {
