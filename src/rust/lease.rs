@@ -68,7 +68,7 @@ impl AcquireOptions {
     }
     pub fn request_id(mut self, request_id: impl Into<String>) -> Self {
         self.request_id = Some(request_id.into());
-        return self;
+        self
     }
     pub fn ttl_ms(&self) -> u64 {
         duration_ms(self.ttl)
