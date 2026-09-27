@@ -32,6 +32,9 @@ pub struct AcquireOptions {
     /// Caller identity for the fiducia layer; also the release key. `None`
     /// lets the adapter generate an unguessable id.
     pub holder: Option<String>,
+    /// Stable identity for one logical acquisition attempt. Adapters that
+    /// support idempotent acquire recovery reuse this value across retries.
+    pub request_id: Option<String>,
 }
 
 impl Default for AcquireOptions {
@@ -41,6 +44,7 @@ impl Default for AcquireOptions {
             wait_timeout: Duration::from_secs(30),
             retry_interval: Duration::from_millis(250),
             holder: None,
+            request_id: None,
         }
     }
 }
@@ -61,6 +65,10 @@ impl AcquireOptions {
     pub fn holder(mut self, holder: impl Into<String>) -> Self {
         self.holder = Some(holder.into());
         self
+    }
+    pub fn request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        return self;
     }
     pub fn ttl_ms(&self) -> u64 {
         duration_ms(self.ttl)
