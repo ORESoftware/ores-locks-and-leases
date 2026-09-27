@@ -213,7 +213,8 @@ pub fn acquire(
   wait: Bool,
 ) -> Result(core.LeaseGrant, core.LockError) {
   let holder = core.holder_or(opts, config.generate_holder)
-  poll_acquire(config, key, opts, wait, holder, now_ms())
+  let request_id = option.unwrap(opts.request_id, generated_holder())
+  poll_acquire(config, key, opts, wait, holder, request_id, now_ms())
 }
 
 fn poll_acquire(
@@ -222,6 +223,7 @@ fn poll_acquire(
   opts: core.AcquireOptions,
   wait: Bool,
   holder: String,
+  request_id: String,
   started_ms: Int,
 ) -> Result(core.LeaseGrant, core.LockError) {
   let body =
@@ -229,6 +231,7 @@ fn poll_acquire(
       #("key", json.string(core.key_to_string(key))),
       #("holder", json.string(holder)),
       #("ttl_ms", json.int(opts.ttl_ms)),
+      #("request_id", json.string(request_id)),
     ])
   use output <- result.try(
     post(config, "/v1/locks/acquire", body)
@@ -257,7 +260,15 @@ fn poll_acquire(
             True -> Error(core.timeout(key, core.FiduciaAcquire, waited))
             False -> {
               process.sleep(opts.retry_interval_ms)
-              poll_acquire(config, key, opts, wait, holder, started_ms)
+              poll_acquire(
+                config,
+                key,
+                opts,
+                wait,
+                holder,
+                request_id,
+                started_ms,
+              )
             }
           }
         }

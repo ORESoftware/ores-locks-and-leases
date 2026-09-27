@@ -72,6 +72,7 @@ pub trait ManagedLeaseTransport: Sync {
         backend: ManagedLeaseBackend,
         key: &LockKey,
         holder: &str,
+        request_id: &str,
         ttl_ms: u64,
     ) -> impl Future<Output = Result<ManagedAcquireResult, String>> + Send;
 
@@ -162,6 +163,7 @@ where
         wait: bool,
     ) -> Result<LeaseGrant, LockError> {
         let holder = opts.holder.clone().unwrap_or_else(generated_holder);
+        let request_id = opts.request_id.clone().unwrap_or_else(generated_holder);
         let ttl_ms = opts.ttl_ms();
         if ttl_ms == 0 {
             return Err(LockError::invalid_plan(
@@ -174,7 +176,7 @@ where
         loop {
             match self
                 .transport
-                .acquire(self.backend, key, &holder, ttl_ms)
+                .acquire(self.backend, key, &holder, &request_id, ttl_ms)
                 .await
                 .map_err(|message| transport_error(self.backend, key, message))?
             {
@@ -292,6 +294,7 @@ mod tests {
     struct FakeTransport {
         next_token: Mutex<u64>,
         held: Mutex<Option<(String, String, u64)>>,
+        request_ids: Mutex<Vec<String>>,
     }
 
     impl ManagedLeaseTransport for FakeTransport {
@@ -300,8 +303,10 @@ mod tests {
             _backend: ManagedLeaseBackend,
             key: &LockKey,
             holder: &str,
+            request_id: &str,
             _ttl_ms: u64,
         ) -> Result<ManagedAcquireResult, String> {
+            self.request_ids.lock().unwrap().push(request_id.to_owned());
             let mut held = self.held.lock().unwrap();
             if held.is_some() {
                 return Ok(ManagedAcquireResult::Contended);
@@ -381,8 +386,14 @@ mod tests {
                 }
                 ManagedLeaseBackend::Redis => ManagedLease::redis(FakeTransport::default()),
             };
-            let opts = AcquireOptions::default().holder("worker-a");
+            let opts = AcquireOptions::default()
+                .holder("worker-a")
+                .request_id("logical-attempt-1");
             let grant = block_on(lease.acquire(&key(), &opts, false)).unwrap();
+            assert_eq!(
+                lease.transport().request_ids.lock().unwrap().as_slice(),
+                ["logical-attempt-1"]
+            );
             assert_eq!(grant.fencing_token, 1);
             assert_eq!(grant.lease_expires_ms, Some(123_456));
 
