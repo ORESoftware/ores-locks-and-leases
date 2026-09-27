@@ -175,7 +175,10 @@ where
             .holder
             .clone()
             .unwrap_or_else(|| generated_identity("ores-holder"));
-        let request_id = generated_identity("ores-request");
+        let request_id = opts
+            .request_id
+            .clone()
+            .unwrap_or_else(|| generated_identity("ores-request"));
         let ttl_ms = opts.ttl_ms();
         if ttl_ms == 0 {
             return Err(LockError::invalid_plan(
@@ -458,13 +461,19 @@ mod tests {
             .push_back(Ok(BeamScaleAcquireResult::Acquired(native(17, 100_000))));
 
         let lease = BeamScaleCriticalSectionLease::new(transport);
-        let grant =
-            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), true))
-                .unwrap();
+        let grant = block_on(lease.acquire(
+            &key(),
+            &AcquireOptions::default()
+                .holder("worker-a")
+                .request_id("caller-stable-attempt"),
+            true,
+        ))
+        .unwrap();
         assert_eq!(grant.fencing_token, 17);
 
         let calls = lease.transport().acquires.lock().unwrap();
         assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].2, "caller-stable-attempt");
         assert_eq!(calls[0].2, calls[1].2);
     }
 
