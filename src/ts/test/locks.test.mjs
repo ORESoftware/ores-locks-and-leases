@@ -44,7 +44,8 @@ test("lock-plan matrix", () => {
   }
 });
 
-test("lock keys are length-bounded in bytes", () => {
+test("lock keys are non-empty and length-bounded in bytes", () => {
+  assert.throws(() => lockKey(""), RangeError);
   assert.equal(lockKey("a".repeat(512)), "a".repeat(512));
   assert.throws(() => lockKey("é".repeat(300)), RangeError);
 });
