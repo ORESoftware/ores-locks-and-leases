@@ -1,5 +1,5 @@
 const MAX_HOLDER_BYTES = 512;
-const MAX_REQUEST_ID_BYTES = 128;
+const MAX_REQUEST_ID_BYTES = 256;
 const MAX_TTL_MS = 86_400_000;
 // New grants use the public cross-runtime exact-integer domain. Historical
 // decimal-text watermarks and token-bound cleanup may still carry wider uint64

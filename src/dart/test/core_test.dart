@@ -126,6 +126,7 @@ void main() {
           expect(request.headers['authorization'], 'Bearer test-key');
           final body = jsonDecode(request.body) as Map<String, dynamic>;
           expect(body['holder'], 'test-holder');
+          expect(body['request_id'], 'test-request');
           return http.Response(
             jsonEncode({
               'result': {
@@ -144,6 +145,7 @@ void main() {
           apiKey: 'test-key',
           client: client,
           generateHolder: () => 'test-holder',
+          generateRequestId: () => 'test-request',
         );
 
         final grant = await lease.acquire(

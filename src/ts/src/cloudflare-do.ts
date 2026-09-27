@@ -1,7 +1,7 @@
 import { LockError } from "./errors.js";
 import type { LockKey } from "./key.js";
 import type { AcquireOptions, Lease, LeaseGrant } from "./lease.js";
-import { generatedHolder, type FetchLike } from "./fiducia.js";
+import { generatedHolder, generatedRequestId, type FetchLike } from "./fiducia.js";
 
 export interface CloudflareDurableObjectLeaseOptions {
   /** Public URL of the Worker that fronts the Durable Object namespace. */
@@ -12,6 +12,8 @@ export interface CloudflareDurableObjectLeaseOptions {
   readonly fetch?: FetchLike;
   /** Source of holder ids when `AcquireOptions.holder` is absent. */
   readonly generateHolder?: () => string;
+  /** Source of stable logical acquisition ids when `AcquireOptions.requestId` is absent. */
+  readonly generateRequestId?: () => string;
 }
 
 const MAX_FENCING_TOKEN = BigInt(Number.MAX_SAFE_INTEGER);
@@ -56,6 +58,7 @@ export class CloudflareDurableObjectLease implements Lease {
   readonly #headers: Record<string, string>;
   readonly #fetch: FetchLike;
   readonly #generateHolder: () => string;
+  readonly #generateRequestId: () => string;
 
   constructor(options: CloudflareDurableObjectLeaseOptions) {
     this.#base = options.baseUrl.replace(/\/+$/, "");
@@ -65,6 +68,7 @@ export class CloudflareDurableObjectLease implements Lease {
     };
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#generateHolder = options.generateHolder ?? generatedHolder;
+    this.#generateRequestId = options.generateRequestId ?? generatedRequestId;
   }
 
   async #post(path: string, key: LockKey, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -96,9 +100,15 @@ export class CloudflareDurableObjectLease implements Lease {
 
   async acquire(key: LockKey, opts: AcquireOptions, wait: boolean): Promise<LeaseGrant> {
     const holder = opts.holder ?? this.#generateHolder();
+    const requestId = opts.requestId ?? this.#generateRequestId();
     const started = Date.now();
     for (;;) {
-      const out = await this.#post("/v1/leases/acquire", key, { key, holder, ttl_ms: opts.ttlMs });
+      const out = await this.#post("/v1/leases/acquire", key, {
+        key,
+        holder,
+        ttl_ms: opts.ttlMs,
+        request_id: requestId,
+      });
       if (out["acquired"] === true) {
         const fencingToken = asBigInt(out["fencing_token"]);
         if (fencingToken === undefined) {

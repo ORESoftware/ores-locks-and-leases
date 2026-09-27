@@ -17,12 +17,17 @@ final class AcquireOptions {
   /// the adapter generate an unguessable id.
   final String? holder;
 
+  /// Stable identity for one logical acquisition attempt. Null lets the
+  /// adapter generate one once and reuse it across every poll.
+  final String? requestId;
+
   /// Mirrors the official fiducia clients: 60s lease, 30s wait budget, 250ms poll.
   const AcquireOptions({
     this.ttl = const Duration(seconds: 60),
     this.waitTimeout = const Duration(seconds: 30),
     this.retryInterval = const Duration(milliseconds: 250),
     this.holder,
+    this.requestId,
   });
 
   AcquireOptions copyWith({
@@ -30,12 +35,14 @@ final class AcquireOptions {
     Duration? waitTimeout,
     Duration? retryInterval,
     String? holder,
+    String? requestId,
   }) =>
       AcquireOptions(
         ttl: ttl ?? this.ttl,
         waitTimeout: waitTimeout ?? this.waitTimeout,
         retryInterval: retryInterval ?? this.retryInterval,
         holder: holder ?? this.holder,
+        requestId: requestId ?? this.requestId,
       );
 }
 
