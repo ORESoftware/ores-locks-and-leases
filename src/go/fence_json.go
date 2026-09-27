@@ -141,6 +141,13 @@ func DecodeFencedWriteRequestJSON(data []byte) (FencedWriteRequest, error) {
 		return FencedWriteRequest{}, err
 	}
 
+	if resourceKeyText == "" {
+		return FencedWriteRequest{}, FenceValidationError{
+			Code:    FenceValidationEmptyField,
+			Field:   "resourceKey",
+			Message: "resourceKey must not be empty",
+		}
+	}
 	if len(resourceKeyText) > MaxLockKeyBytes {
 		return FencedWriteRequest{}, FenceValidationError{
 			Code:  FenceValidationTooLong,
