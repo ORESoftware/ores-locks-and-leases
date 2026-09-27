@@ -10,12 +10,17 @@ import {
   fencingTokenText,
 } from "../dist/index.js";
 
-const corpus = JSON.parse(
-  await readFile(
-    new URL("../../../conformance/cases/fence-decision.json", import.meta.url),
-    "utf8",
-  ),
-);
+async function loadCorpus(name) {
+  return JSON.parse(
+    await readFile(
+      new URL(`../../../conformance/cases/${name}.json`, import.meta.url),
+      "utf8",
+    ),
+  );
+}
+
+const corpus = await loadCorpus("fence-decision");
+const lifecycleCorpus = await loadCorpus("runtime-lifecycle-fencing");
 const digest = "a".repeat(64);
 const validInput = Object.freeze({
   tenantScope: "tenant/acme",
@@ -32,7 +37,7 @@ function throwsFenceCode(callback, code) {
   );
 }
 
-for (const fixture of corpus.cases) {
+for (const fixture of [...corpus.cases, ...lifecycleCorpus.cases]) {
   test(`fence conformance: ${fixture.name}`, () => {
     const incoming = fencedWriteRequest(fixture.incoming);
     const current =
