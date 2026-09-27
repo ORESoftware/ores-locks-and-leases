@@ -256,3 +256,48 @@ pub fn generated_adversarial_corpus_test() {
     |> should.equal(fixture.expected_error)
   })
 }
+
+
+pub fn runtime_lifecycle_fencing_corpus_test() {
+  let assert Ok(text) =
+    simplifile.read(
+      "../../conformance/cases/runtime-lifecycle-fencing.json",
+    )
+  let decoder = {
+    use cases <- decode.field("cases", decode.list(case_decoder()))
+    decode.success(cases)
+  }
+  let assert Ok(cases) = json.parse(text, decoder)
+
+  list.each(cases, fn(fixture) {
+    let current = case fixture.current {
+      None -> None
+      Some(value) -> Some(build_watermark(value))
+    }
+    let incoming = build_request(fixture.incoming)
+
+    case fixture.expected_error, fixture.expected {
+      Some(code), _ -> {
+        let assert Error(error) = fence.evaluate_fence(current, incoming)
+        fence.fence_validation_error_code(error)
+        |> should.equal(code)
+      }
+      None, Some(expected) -> {
+        let assert Ok(decision) = fence.evaluate_fence(current, incoming)
+        fence.fence_decision_kind_to_string(decision.kind)
+        |> should.equal(expected.kind)
+        decision.should_apply |> should.equal(expected.should_apply)
+        fence.fencing_token_to_string(decision.incoming_token)
+        |> should.equal(expected.incoming_token)
+        fence.fencing_token_to_string(decision.current_token)
+        |> should.equal(expected.current_token)
+        let previous_token = case decision.previous_token {
+          None -> None
+          Some(token) -> Some(fence.fencing_token_to_string(token))
+        }
+        previous_token |> should.equal(expected.previous_token)
+      }
+      _, _ -> panic as "fixture has neither expected decision nor error"
+    }
+  })
+}
