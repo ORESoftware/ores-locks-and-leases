@@ -25,6 +25,7 @@ final class FiduciaLease implements Lease {
   final http.Client _client;
   final String? _refusal;
   final String Function() _generateHolder;
+  final String Function() _generateRequestId;
 
   FiduciaLease._(
     this._base,
@@ -32,6 +33,7 @@ final class FiduciaLease implements Lease {
     this._client,
     this._refusal,
     this._generateHolder,
+    this._generateRequestId,
   );
 
   /// The trusted internal hop straight to a fiducia-node.
@@ -42,6 +44,7 @@ final class FiduciaLease implements Lease {
     http.Client? client,
     bool allowCleartextInternal = false,
     String Function()? generateHolder,
+    String Function()? generateRequestId,
   }) {
     return FiduciaLease._(
       _parseBase(baseUrl),
@@ -57,6 +60,7 @@ final class FiduciaLease implements Lease {
         allow: allowCleartextInternal,
       ),
       generateHolder ?? generatedHolder,
+      generateRequestId ?? generatedHolder,
     );
   }
 
@@ -67,6 +71,7 @@ final class FiduciaLease implements Lease {
     http.Client? client,
     bool allowCleartextInternal = false,
     String Function()? generateHolder,
+    String Function()? generateRequestId,
   }) {
     return FiduciaLease._(
       _parseBase(baseUrl),
@@ -78,6 +83,7 @@ final class FiduciaLease implements Lease {
         allow: allowCleartextInternal,
       ),
       generateHolder ?? generatedHolder,
+      generateRequestId ?? generatedHolder,
     );
   }
 
@@ -162,6 +168,7 @@ final class FiduciaLease implements Lease {
     required bool wait,
   }) async {
     final holder = opts.holder ?? _generateHolder();
+    final requestId = opts.requestId ?? _generateRequestId();
     final started = DateTime.now();
     for (;;) {
       final Map<String, Object?> out;
@@ -170,6 +177,7 @@ final class FiduciaLease implements Lease {
           'key': key.value,
           'holder': holder,
           'ttl_ms': opts.ttl.inMilliseconds,
+          'request_id': requestId,
         });
       } catch (cause) {
         throw LockError.transport(key, cause);
