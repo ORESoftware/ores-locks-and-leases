@@ -175,9 +175,10 @@ fn invalid_field_code(fixture: InvalidFieldFixture) -> String {
     "leaseId" -> Some(fixture.value)
     _ -> Some("lease-a")
   }
-  case locks.lock_key(resource) {
-    Error(_) -> "too_long"
-    Ok(key) -> {
+  case resource == "", locks.lock_key(resource) {
+    True, _ -> "empty_field"
+    _, Error(_) -> "too_long"
+    False, Ok(key) -> {
       let assert Ok(token) = fence.fencing_token_text("1")
       let assert Error(error) =
         fence.new_fenced_write_request(
