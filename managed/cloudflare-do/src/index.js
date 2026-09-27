@@ -3,8 +3,10 @@ import { DurableObject } from "cloudflare:workers";
 import { LockLeaseAuthority } from "./authority.js";
 import {
   bearerMatches,
+  authorizePublicOperation,
   internalBody,
   knownLeasePath,
+  parsePublicScopePolicy,
   productionMode,
   readBoundedJson,
   validateInternalOperation,
@@ -89,7 +91,11 @@ export default {
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
     const allowUnauthenticated = env.ALLOW_UNAUTHENTICATED === "true";
-    if (productionMode(env) && allowUnauthenticated) {
+    const scope = parsePublicScopePolicy(env.ORES_LOCKS_API_POLICY_JSON);
+    if (
+      scope.error ||
+      (productionMode(env) && (!scope.configured || allowUnauthenticated))
+    ) {
       return json({ error: "unsafe_configuration" }, 503);
     }
     if (!env.ORES_LOCKS_API_TOKEN && !allowUnauthenticated) {
@@ -105,6 +111,9 @@ export default {
 
     const validationError = validatePublicOperation(url.pathname, decoded.body);
     if (validationError) return json({ error: validationError }, 400);
+
+    const authorizationError = authorizePublicOperation(scope.policy, url.pathname, decoded.body);
+    if (authorizationError) return json({ error: "forbidden" }, 403);
 
     const stub = env.LOCKS.getByName(decoded.body.key);
     try {
