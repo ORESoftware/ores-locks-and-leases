@@ -26,8 +26,17 @@ void main() {
       File('../../conformance/cases/fence-decision.json').readAsStringSync(),
     ),
   );
+  final lifecycleCorpus = _map(
+    jsonDecode(
+      File('../../conformance/cases/runtime-lifecycle-fencing.json')
+          .readAsStringSync(),
+    ),
+  );
 
-  for (final rawCase in corpus['cases'] as List<dynamic>) {
+  for (final rawCase in <dynamic>[
+    ...(corpus['cases'] as List<dynamic>),
+    ...(lifecycleCorpus['cases'] as List<dynamic>),
+  ]) {
     final fixture = _map(rawCase);
     test('fence conformance: ${fixture['name']}', () {
       final incoming = _request(_map(fixture['incoming']));
