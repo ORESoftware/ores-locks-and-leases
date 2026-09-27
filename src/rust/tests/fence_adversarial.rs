@@ -38,6 +38,9 @@ fn classify_field(field: &str, value: &str) -> &'static str {
         Some("lease-a".to_owned())
     };
 
+    if resource.is_empty() {
+        return "empty_field";
+    }
     let key = match LockKey::new(resource) {
         Ok(key) => key,
         Err(_) => return "too_long",
