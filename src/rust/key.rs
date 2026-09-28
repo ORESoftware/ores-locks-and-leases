@@ -17,6 +17,12 @@ impl LockKey {
         if key.is_empty() {
             return Err(InvalidLockKey::Empty);
         }
+        if key.trim() != key {
+            return Err(InvalidLockKey::SurroundingWhitespace);
+        }
+        if key.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(InvalidLockKey::AsciiControl);
+        }
         if key.len() > MAX_LOCK_KEY_BYTES {
             return Err(InvalidLockKey::TooLong {
                 bytes: key.len(),
@@ -66,6 +72,8 @@ impl TryFrom<String> for LockKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidLockKey {
     Empty,
+    SurroundingWhitespace,
+    AsciiControl,
     TooLong { bytes: usize, max: usize },
 }
 
@@ -73,6 +81,10 @@ impl fmt::Display for InvalidLockKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => f.write_str("lock key must not be empty"),
+            Self::SurroundingWhitespace => {
+                f.write_str("lock key must not have leading or trailing whitespace")
+            }
+            Self::AsciiControl => f.write_str("lock key must not contain ASCII control bytes"),
             Self::TooLong { bytes, max } => {
                 write!(
                     f,
@@ -134,6 +146,18 @@ mod tests {
     #[test]
     fn key_is_non_empty_and_length_bounded() {
         assert!(matches!(LockKey::new(""), Err(InvalidLockKey::Empty)));
+        assert!(matches!(
+            LockKey::new("   "),
+            Err(InvalidLockKey::SurroundingWhitespace)
+        ));
+        assert!(matches!(
+            LockKey::new(" key"),
+            Err(InvalidLockKey::SurroundingWhitespace)
+        ));
+        assert!(matches!(
+            LockKey::new("key\nother"),
+            Err(InvalidLockKey::AsciiControl)
+        ));
         assert!(LockKey::new("x".repeat(MAX_LOCK_KEY_BYTES)).is_ok());
         assert!(matches!(
             LockKey::new("x".repeat(MAX_LOCK_KEY_BYTES + 1)),
