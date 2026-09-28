@@ -15,6 +15,20 @@ final class LockKey {
     if (key.isEmpty) {
       throw ArgumentError.value(key, 'key', 'lock key must not be empty');
     }
+    if (key.trim() != key) {
+      throw ArgumentError.value(
+        key,
+        'key',
+        'lock key must not have leading or trailing whitespace',
+      );
+    }
+    if (key.codeUnits.any((unit) => unit <= 0x1f || unit == 0x7f)) {
+      throw ArgumentError.value(
+        key,
+        'key',
+        'lock key must not contain ASCII control bytes',
+      );
+    }
     final bytes = utf8.encode(key).length;
     if (bytes > maxLockKeyBytes) {
       throw ArgumentError.value(
