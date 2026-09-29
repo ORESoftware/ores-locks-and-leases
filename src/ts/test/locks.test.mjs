@@ -46,6 +46,9 @@ test("lock-plan matrix", () => {
 
 test("lock keys are non-empty and length-bounded in bytes", () => {
   assert.throws(() => lockKey(""), RangeError);
+  for (const invalid of [" ", " key", "key ", "key\nother", "key\u0000other", "key\u007fother"]) {
+    assert.throws(() => lockKey(invalid), RangeError, invalid);
+  }
   assert.equal(lockKey("a".repeat(512)), "a".repeat(512));
   assert.throws(() => lockKey("é".repeat(300)), RangeError);
 });

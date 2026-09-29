@@ -11,6 +11,7 @@ package oreslocks
 import (
 	"fmt"
 	"hash/fnv"
+	"strings"
 )
 
 // MaxLockKeyBytes is the longest key the contract admits.
@@ -23,6 +24,14 @@ type LockKey string
 func NewLockKey(key string) (LockKey, error) {
 	if key == "" {
 		return "", fmt.Errorf("lock key must not be empty")
+	}
+	if strings.TrimSpace(key) != key {
+		return "", fmt.Errorf("lock key must not have leading or trailing whitespace")
+	}
+	for _, b := range []byte(key) {
+		if b <= 0x1f || b == 0x7f {
+			return "", fmt.Errorf("lock key must not contain ASCII control bytes")
+		}
 	}
 	if len(key) > MaxLockKeyBytes {
 		return "", fmt.Errorf("lock key is %d bytes; the contract allows at most %d", len(key), MaxLockKeyBytes)
