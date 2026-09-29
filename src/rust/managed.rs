@@ -254,7 +254,6 @@ where
 // runtime-specific transports may still choose `wait=false` and own retries
 // when they need a higher-throughput scheduler.
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
