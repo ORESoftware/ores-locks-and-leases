@@ -76,6 +76,7 @@ pub mod local_file_recovery;
 pub mod local_file_scoped;
 pub mod managed;
 pub mod plan;
+mod portable_sleep;
 pub mod redlock;
 pub mod renewal;
 
