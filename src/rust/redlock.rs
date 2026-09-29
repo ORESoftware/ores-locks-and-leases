@@ -141,7 +141,6 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-
 impl<R, F> Lease for FencedRedlockLease<R, F>
 where
     R: RedlockClient + Sync,
