@@ -185,7 +185,7 @@ where
                         ));
                     }
                     let remaining = opts.wait_timeout.saturating_sub(waited);
-                    portable_sleep(opts.retry_interval.min(remaining)).await;
+                    crate::portable_sleep::sleep(opts.retry_interval.min(remaining)).await;
                     continue;
                 }
             };
