@@ -232,7 +232,7 @@ where
                             duration_ms(waited),
                         ));
                     }
-                    portable_sleep(opts.retry_interval).await;
+                    crate::portable_sleep::sleep(opts.retry_interval).await;
                 }
             }
         }
@@ -289,37 +289,6 @@ where
         self.forget(grant);
         Ok(released)
     }
-}
-
-async fn portable_sleep(duration: Duration) {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    use std::task::{Poll, Waker};
-
-    let state = Arc::new((AtomicBool::new(false), Mutex::new(None::<Waker>)));
-    let sleeper = Arc::clone(&state);
-    std::thread::spawn(move || {
-        std::thread::sleep(duration);
-        sleeper.0.store(true, Ordering::Release);
-        if let Some(waker) = sleeper.1.lock().unwrap().take() {
-            waker.wake();
-        }
-    });
-
-    std::future::poll_fn(move |cx| {
-        if state.0.load(Ordering::Acquire) {
-            return Poll::Ready(());
-        }
-        *state.1.lock().unwrap() = Some(cx.waker().clone());
-        if state.0.load(Ordering::Acquire) {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
-    })
-    .await;
 }
 
 #[cfg(test)]
