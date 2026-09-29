@@ -1,6 +1,9 @@
 package oreslocks
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLockKeyIsNonEmptyAndLengthBounded(t *testing.T) {
 	if _, err := NewLockKey(""); err == nil {
@@ -11,7 +14,7 @@ func TestLockKeyIsNonEmptyAndLengthBounded(t *testing.T) {
 			t.Fatalf("invalid lock key %q unexpectedly accepted", invalid)
 		}
 	}
-	if _, err := NewLockKey(string(make([]byte, MaxLockKeyBytes))); err != nil {
+	if _, err := NewLockKey(strings.Repeat("a", MaxLockKeyBytes)); err != nil {
 		t.Fatalf("maximum-size lock key rejected: %v", err)
 	}
 	if _, err := NewLockKey(string(make([]byte, MaxLockKeyBytes+1))); err == nil {
