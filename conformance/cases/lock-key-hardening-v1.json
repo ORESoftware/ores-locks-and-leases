@@ -1,0 +1,20 @@
+{
+  "schema": "ores.locks.lock-key-hardening/v1",
+  "issue": 121,
+  "key_policy": {
+    "non_empty": true,
+    "reject_whitespace_only": true,
+    "reject_ascii_control": true,
+    "max_utf8_bytes": 512,
+    "reject_trim_changing_input": true
+  },
+  "valid": ["tenant:42:resource:alpha", "lock-01", "unicode-π"],
+  "invalid": ["", "   ", " leading", "trailing ", "line\nbreak"],
+  "contention_policy": {
+    "one_os_thread_per_delay": false,
+    "bounded_outstanding_waiters": true,
+    "cancellable_wait": true,
+    "backoff": "exponential_with_jitter",
+    "metrics": ["waiter_count", "wait_duration", "contention", "cancellation"]
+  }
+}
