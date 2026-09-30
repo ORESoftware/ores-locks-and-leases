@@ -1,0 +1,17 @@
+{
+  "schema": "ores.locks.lock-key-hardening-adversarial/v1",
+  "max_utf8_bytes": 512,
+  "cases": [
+    {"id": "ordinary", "key": "package/install/example", "expected": "accept"},
+    {"id": "empty", "key": "", "expected": "reject_empty"},
+    {"id": "whitespace-only", "key": "   ", "expected": "reject_whitespace_only"},
+    {"id": "leading-whitespace", "key": " package/install/example", "expected": "reject_ambiguous_whitespace"},
+    {"id": "trailing-whitespace", "key": "package/install/example ", "expected": "reject_ambiguous_whitespace"},
+    {"id": "ascii-control", "key": "package\u0007install", "expected": "reject_control_character"},
+    {"id": "nul", "key": "package\u0000install", "expected": "reject_control_character"},
+    {"id": "exact-512-ascii-bytes", "key_repeat": {"value": "a", "count": 512}, "expected": "accept"},
+    {"id": "513-ascii-bytes", "key_repeat": {"value": "a", "count": 513}, "expected": "reject_too_long"},
+    {"id": "utf8-byte-not-scalar-limit", "key_repeat": {"value": "é", "count": 257}, "expected": "reject_too_long"},
+    {"id": "lifecycle-component-separator-alias", "components": ["tenant/a", "job:b"], "expected": "require_canonical_component_encoding"}
+  ]
+}
