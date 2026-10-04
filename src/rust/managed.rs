@@ -15,7 +15,10 @@ use std::time::{Duration, Instant};
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant, duration_ms};
+use crate::lease::{
+    AcquireOptions, Lease, LeaseGrant, duration_ms, retry_delay, retry_sleep,
+    validate_minted_fencing_token,
+};
 
 /// Production authority selected behind the generic [`Lease`] seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -171,8 +174,15 @@ where
                 "managed lease ttl must be positive",
             ));
         }
+        if wait && opts.retry_interval.is_zero() {
+            return Err(LockError::invalid_plan(
+                key,
+                "managed lease retry interval must be positive when waiting",
+            ));
+        }
 
         let started = Instant::now();
+        let mut retry_attempt = 0u32;
         loop {
             match self
                 .transport
@@ -181,6 +191,14 @@ where
                 .map_err(|message| transport_error(self.backend, key, message))?
             {
                 ManagedAcquireResult::Acquired(grant) => {
+                    validate_minted_fencing_token(key, self.backend.as_str(), grant.fencing_token)?;
+                    if grant.lease_expires_ms == Some(0) {
+                        return Err(transport_error(
+                            self.backend,
+                            key,
+                            "authority returned zero lease expiry".to_owned(),
+                        ));
+                    }
                     return Ok(LeaseGrant {
                         key: key.clone(),
                         holder,
@@ -197,14 +215,23 @@ where
                 }
                 ManagedAcquireResult::Contended => {
                     let waited = started.elapsed();
-                    if waited + opts.retry_interval > opts.wait_timeout {
+                    let remaining = opts.wait_timeout.saturating_sub(waited);
+                    if remaining.is_zero() {
                         return Err(LockError::timeout(
                             key,
                             crate::plan::LockStep::FiduciaAcquire,
                             duration_ms(waited),
                         ));
                     }
-                    crate::portable_sleep::sleep(opts.retry_interval).await;
+                    let delay = retry_delay(
+                        key,
+                        &request_id,
+                        opts.retry_interval,
+                        retry_attempt,
+                        remaining,
+                    );
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    retry_sleep(key, crate::plan::LockStep::FiduciaAcquire, delay).await?;
                 }
             }
         }
@@ -248,11 +275,9 @@ where
     }
 }
 
-// Keep the dependency-free core independent of a particular async runtime
-// without blocking the caller's executor thread during contention. Each retry
-// interval uses one short-lived sleeper thread which wakes the future. Native
-// runtime-specific transports may still choose `wait=false` and own retries
-// when they need a higher-throughput scheduler.
+// The dependency-free core uses the process-wide runtime-neutral retry
+// scheduler. Waiters are bounded and cancellable; contention backoff is
+// exponential with deterministic per-request jitter.
 
 #[cfg(test)]
 mod tests {
