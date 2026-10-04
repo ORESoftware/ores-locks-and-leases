@@ -107,6 +107,20 @@ void main() {
     }
   });
 
+  test('structured lock-key components use the shared injective encoding', () {
+    final vectors = cases('lock-key-hardening-adversarial-v1.json');
+    final structured = vectors.cast<Map>().firstWhere(
+      (c) => c['id'] == 'lifecycle-component-separator-alias',
+    );
+    final components = (structured['components'] as List).cast<String>();
+    final key = LockKey.fromComponents(components);
+    expect(key.value, structured['expected_key']);
+    expect(
+      key,
+      isNot(equals(LockKey.fromComponents(['tenant', 'a', 'job:b']))),
+    );
+    expect(() => LockKey.fromComponents(const []), throwsArgumentError);
+  });
   test('lock keys enforce the shared hardened UTF-8 policy', () {
     expect(() => LockKey(''), throwsArgumentError);
     for (final invalid in [
