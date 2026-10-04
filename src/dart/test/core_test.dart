@@ -107,13 +107,22 @@ void main() {
     }
   });
 
-  test('lock keys are non-empty and length-bounded in bytes', () {
+  test('lock keys enforce the shared hardened UTF-8 policy', () {
     expect(() => LockKey(''), throwsArgumentError);
-    for (final invalid in [' ', ' key', 'key ', 'key\nother']) {
+    for (final invalid in [
+      ' ',
+      ' key',
+      'key ',
+      'key\nother',
+      'key\u0000other',
+      'key\u007fother',
+    ]) {
       expect(() => LockKey(invalid), throwsArgumentError, reason: invalid);
     }
+    expect(LockKey('unicode-π').value, 'unicode-π');
     expect(LockKey('a' * 512).value, hasLength(512));
-    expect(() => LockKey('é' * 300), throwsArgumentError);
+    expect(() => LockKey('a' * 513), throwsArgumentError);
+    expect(() => LockKey('é' * 257), throwsArgumentError);
   });
 
   group('FiduciaLease', () {
