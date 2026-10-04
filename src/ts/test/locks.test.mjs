@@ -49,8 +49,10 @@ test("lock keys are non-empty and length-bounded in bytes", () => {
   for (const invalid of [" ", " key", "key ", "key\nother", "key\u0000other", "key\u007fother"]) {
     assert.throws(() => lockKey(invalid), RangeError, invalid);
   }
+  assert.equal(lockKey("unicode-π"), "unicode-π");
   assert.equal(lockKey("a".repeat(512)), "a".repeat(512));
-  assert.throws(() => lockKey("é".repeat(300)), RangeError);
+  assert.throws(() => lockKey("a".repeat(513)), RangeError);
+  assert.throws(() => lockKey("é".repeat(257)), RangeError);
 });
 
 // --- fakes ------------------------------------------------------------------
