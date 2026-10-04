@@ -71,6 +71,22 @@ pub fn lock_key(key: String) -> Result(LockKey, String) {
   }
 }
 
+/// Compose structured identity components without separator aliasing.
+///
+/// Each component is encoded as `<utf8-byte-length>:<raw-component>`; the
+/// final value still passes through the ordinary lock-key policy.
+pub fn lock_key_from_components(
+  components: List(String),
+) -> Result(LockKey, String) {
+  components
+  |> list.fold("", fn(encoded, component) {
+    encoded
+    <> int.to_string(bit_array.byte_size(bit_array.from_string(component)))
+    <> ":"
+    <> component
+  })
+  |> lock_key
+}
 pub fn key_to_string(key: LockKey) -> String {
   let LockKey(s) = key
   s
