@@ -73,8 +73,15 @@ pub fn lock_plan_matrix_test() {
 
 pub fn key_is_non_empty_and_length_bounded_test() {
   let assert Error(_) = locks.lock_key("")
+  let assert Error(_) = locks.lock_key("   ")
+  let assert Error(_) = locks.lock_key(" leading")
+  let assert Error(_) = locks.lock_key("trailing ")
+  let assert Error(_) = locks.lock_key("line\nbreak")
+  let assert Error(_) = locks.lock_key("nul\u{0000}byte")
+  let assert Ok(_) = locks.lock_key("unicode-π")
   let assert Ok(_) = locks.lock_key(string_repeat("x", 512))
   let assert Error(_) = locks.lock_key(string_repeat("x", 513))
+  let assert Error(_) = locks.lock_key(string_repeat("é", 257))
 }
 
 fn string_repeat(s: String, n: Int) -> String {
