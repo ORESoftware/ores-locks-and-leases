@@ -158,9 +158,14 @@ mod tests {
             LockKey::new("key\nother"),
             Err(InvalidLockKey::AsciiControl)
         ));
+        assert!(LockKey::new("unicode-π").is_ok());
         assert!(LockKey::new("x".repeat(MAX_LOCK_KEY_BYTES)).is_ok());
         assert!(matches!(
             LockKey::new("x".repeat(MAX_LOCK_KEY_BYTES + 1)),
+            Err(InvalidLockKey::TooLong { .. })
+        ));
+        assert!(matches!(
+            LockKey::new("é".repeat(257)),
             Err(InvalidLockKey::TooLong { .. })
         ));
     }
