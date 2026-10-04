@@ -39,6 +39,17 @@ func NewLockKey(key string) (LockKey, error) {
 	return LockKey(key), nil
 }
 
+// NewLockKeyFromComponents composes structured identity components without
+// separator aliasing. Each component is encoded as
+// <utf8-byte-length>:<raw-component>; the final value is validated by
+// NewLockKey, so the ordinary control-byte/whitespace/size policy still applies.
+func NewLockKeyFromComponents(components ...string) (LockKey, error) {
+	var encoded strings.Builder
+	for _, component := range components {
+		_, _ = fmt.Fprintf(&encoded, "%d:%s", len([]byte(component)), component)
+	}
+	return NewLockKey(encoded.String())
+}
 // AdvisoryKey is the bigint a Postgres advisory-lock function receives.
 type AdvisoryKey = int64
 
