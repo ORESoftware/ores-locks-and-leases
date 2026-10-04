@@ -2,16 +2,15 @@
 //!
 //! High-contention lease waits must not create one OS thread per retry interval.
 //! This module keeps one process-wide scheduler thread, bounds the number of
-//! parked sleepers, and releases cancelled registrations promptly.
+//! parked sleepers, and removes cancelled registrations by key.
 
-use std::cmp::Ordering as CmpOrdering;
-use std::collections::BinaryHeap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
     Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     mpsc,
 };
 use std::task::{Context, Poll, Waker};
@@ -22,12 +21,15 @@ use std::time::{Duration, Instant};
 const MAX_PENDING_SLEEPERS: usize = 16_384;
 
 static ACTIVE_SLEEPERS: AtomicUsize = AtomicUsize::new(0);
+static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static SCHEDULER: OnceLock<Option<mpsc::Sender<SchedulerMessage>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SleepError {
     Saturated,
     SchedulerUnavailable,
+    DeadlineOverflow,
+    SequenceExhausted,
 }
 
 impl fmt::Display for SleepError {
@@ -38,6 +40,8 @@ impl fmt::Display for SleepError {
                 "retry scheduler is saturated at {MAX_PENDING_SLEEPERS} pending sleepers"
             ),
             Self::SchedulerUnavailable => f.write_str("retry scheduler is unavailable"),
+            Self::DeadlineOverflow => f.write_str("retry deadline exceeds monotonic clock range"),
+            Self::SequenceExhausted => f.write_str("retry scheduler sequence space exhausted"),
         }
     }
 }
@@ -57,48 +61,24 @@ impl SleepState {
     }
 }
 
-struct SleepRequest {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SleepKey {
     deadline: Instant,
+    sequence: u64,
+}
+
+struct SleepRequest {
+    key: SleepKey,
     state: Arc<SleepState>,
 }
 
 enum SchedulerMessage {
     Sleep(SleepRequest),
-    Wake,
-}
-
-struct HeapEntry {
-    deadline: Instant,
-    sequence: u64,
-    state: Arc<SleepState>,
-}
-
-impl PartialEq for HeapEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.deadline == other.deadline && self.sequence == other.sequence
-    }
-}
-
-impl Eq for HeapEntry {}
-
-impl PartialOrd for HeapEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for HeapEntry {
-    fn cmp(&self, other: &Self) -> CmpOrdering {
-        // BinaryHeap is a max-heap; reverse ordering gives the earliest
-        // deadline priority.
-        other
-            .deadline
-            .cmp(&self.deadline)
-            .then_with(|| other.sequence.cmp(&self.sequence))
-    }
+    Cancel(SleepKey),
 }
 
 struct SleepFuture {
+    key: SleepKey,
     state: Arc<SleepState>,
     scheduler: mpsc::Sender<SchedulerMessage>,
 }
@@ -132,12 +112,22 @@ impl Future for SleepFuture {
 
 impl Drop for SleepFuture {
     fn drop(&mut self) {
-        if !self.state.ready.load(Ordering::Acquire) {
-            self.state.cancelled.store(true, Ordering::Release);
+        if self.state.ready.load(Ordering::Acquire) {
+            return;
+        }
+
+        self.state.cancelled.store(true, Ordering::Release);
+        // Keep the registration counted until the scheduler acknowledges
+        // removal. This prevents cancellation churn from bypassing the global
+        // waiter cap and growing the message queue without bound.
+        if self
+            .scheduler
+            .send(SchedulerMessage::Cancel(self.key))
+            .is_err()
+        {
+            // The scheduler is permanently gone, so no background owner can
+            // release the registration for us.
             self.state.release_slot();
-            // Wake the scheduler so a cancelled long-deadline registration can
-            // be removed immediately rather than retained until its deadline.
-            let _ = self.scheduler.send(SchedulerMessage::Wake);
         }
     }
 }
@@ -166,95 +156,89 @@ fn reserve_slot() -> Result<(), SleepError> {
         .map_err(|_| SleepError::Saturated)
 }
 
-fn prune_cancelled(pending: &mut BinaryHeap<HeapEntry>) {
-    if !pending
-        .iter()
-        .any(|entry| entry.state.cancelled.load(Ordering::Acquire))
-    {
-        return;
-    }
-
-    let mut retained = BinaryHeap::with_capacity(pending.len());
-    while let Some(entry) = pending.pop() {
-        if entry.state.cancelled.load(Ordering::Acquire) {
-            entry.state.release_slot();
-        } else {
-            retained.push(entry);
-        }
-    }
-    *pending = retained;
+fn next_sequence() -> Result<u64, SleepError> {
+    NEXT_SEQUENCE
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| SleepError::SequenceExhausted)
 }
 
-fn complete_due(pending: &mut BinaryHeap<HeapEntry>) {
+fn complete_due(pending: &mut BTreeMap<SleepKey, Arc<SleepState>>) {
     let now = Instant::now();
-    while pending
-        .peek()
-        .is_some_and(|entry| entry.deadline <= now)
-    {
-        let entry = pending.pop().expect("peeked entry exists");
-        if entry.state.cancelled.load(Ordering::Acquire) {
-            entry.state.release_slot();
-            continue;
+    loop {
+        let Some((&key, _)) = pending.first_key_value() else {
+            return;
+        };
+        if key.deadline > now {
+            return;
         }
-        entry.state.ready.store(true, Ordering::Release);
-        entry.state.release_slot();
-        if let Some(waker) = entry
-            .state
-            .waker
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            waker.wake();
+        let Some((_key, state)) = pending.pop_first() else {
+            return;
+        };
+        if !state.cancelled.load(Ordering::Acquire) {
+            state.ready.store(true, Ordering::Release);
+            if let Some(waker) = state
+                .waker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                waker.wake();
+            }
+        }
+        state.release_slot();
+    }
+}
+
+fn accept_message(
+    pending: &mut BTreeMap<SleepKey, Arc<SleepState>>,
+    message: SchedulerMessage,
+) {
+    match message {
+        SchedulerMessage::Sleep(request) => {
+            if request.state.cancelled.load(Ordering::Acquire) {
+                request.state.release_slot();
+            } else {
+                pending.insert(request.key, request.state);
+            }
+        }
+        SchedulerMessage::Cancel(key) => {
+            if let Some(state) = pending.remove(&key) {
+                state.release_slot();
+            }
+            // If the matching Sleep message has not been handled yet, FIFO
+            // order from this sender guarantees it will be observed first.
+            // If the registration was already completed, release_slot is
+            // intentionally idempotent.
         }
     }
 }
 
 fn run_scheduler(rx: mpsc::Receiver<SchedulerMessage>) {
-    let mut pending = BinaryHeap::<HeapEntry>::new();
-    let mut sequence = 0u64;
+    let mut pending = BTreeMap::<SleepKey, Arc<SleepState>>::new();
 
     loop {
-        prune_cancelled(&mut pending);
         complete_due(&mut pending);
 
         let wait = pending
-            .peek()
-            .map(|entry| entry.deadline.saturating_duration_since(Instant::now()));
+            .first_key_value()
+            .map(|(key, _)| key.deadline.saturating_duration_since(Instant::now()));
 
         let received = match wait {
-            Some(duration) => rx.recv_timeout(duration),
-            None => match rx.recv() {
-                Ok(message) => {
-                    match message {
-                        SchedulerMessage::Sleep(request) => {
-                            sequence = sequence.wrapping_add(1);
-                            pending.push(HeapEntry {
-                                deadline: request.deadline,
-                                sequence,
-                                state: request.state,
-                            });
-                        }
-                        SchedulerMessage::Wake => {}
-                    }
-                    continue;
-                }
-                Err(_) => return,
-            },
+            Some(duration) => rx.recv_timeout(duration).map_err(Some),
+            None => rx.recv().map_err(|_| None),
         };
 
         match received {
-            Ok(SchedulerMessage::Sleep(request)) => {
-                sequence = sequence.wrapping_add(1);
-                pending.push(HeapEntry {
-                    deadline: request.deadline,
-                    sequence,
-                    state: request.state,
-                });
+            Ok(message) => accept_message(&mut pending, message),
+            Err(Some(mpsc::RecvTimeoutError::Timeout)) => {}
+            Err(Some(mpsc::RecvTimeoutError::Disconnected)) | Err(None) => {
+                for state in pending.into_values() {
+                    state.release_slot();
+                }
+                return;
             }
-            Ok(SchedulerMessage::Wake) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
     }
 }
@@ -269,6 +253,22 @@ pub(crate) async fn sleep(duration: Duration) -> Result<(), SleepError> {
         .ok_or(SleepError::SchedulerUnavailable)?;
 
     reserve_slot()?;
+
+    let deadline = match Instant::now().checked_add(duration) {
+        Some(deadline) => deadline,
+        None => {
+            ACTIVE_SLEEPERS.fetch_sub(1, Ordering::AcqRel);
+            return Err(SleepError::DeadlineOverflow);
+        }
+    };
+    let sequence = match next_sequence() {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            ACTIVE_SLEEPERS.fetch_sub(1, Ordering::AcqRel);
+            return Err(error);
+        }
+    };
+    let key = SleepKey { deadline, sequence };
     let state = Arc::new(SleepState {
         ready: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
@@ -278,7 +278,7 @@ pub(crate) async fn sleep(duration: Duration) -> Result<(), SleepError> {
 
     if scheduler
         .send(SchedulerMessage::Sleep(SleepRequest {
-            deadline: Instant::now() + duration,
+            key,
             state: Arc::clone(&state),
         }))
         .is_err()
@@ -287,7 +287,12 @@ pub(crate) async fn sleep(duration: Duration) -> Result<(), SleepError> {
         return Err(SleepError::SchedulerUnavailable);
     }
 
-    SleepFuture { state, scheduler }.await
+    SleepFuture {
+        key,
+        state,
+        scheduler,
+    }
+    .await
 }
 
 #[cfg(test)]
@@ -303,6 +308,14 @@ mod tests {
             }
             std::thread::yield_now();
         }
+    }
+
+    fn wait_for_active(expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while ACTIVE_SLEEPERS.load(Ordering::Acquire) != expected && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(ACTIVE_SLEEPERS.load(Ordering::Acquire), expected);
     }
 
     #[test]
@@ -324,13 +337,13 @@ mod tests {
     }
 
     #[test]
-    fn dropping_sleep_releases_capacity_immediately() {
+    fn dropping_sleep_cancels_and_releases_capacity() {
         let before = ACTIVE_SLEEPERS.load(Ordering::Acquire);
         let mut future = Box::pin(sleep(Duration::from_secs(60)));
         let mut cx = Context::from_waker(Waker::noop());
         assert!(matches!(future.as_mut().poll(&mut cx), Poll::Pending));
         assert_eq!(ACTIVE_SLEEPERS.load(Ordering::Acquire), before + 1);
         drop(future);
-        assert_eq!(ACTIVE_SLEEPERS.load(Ordering::Acquire), before);
+        wait_for_active(before);
     }
 }
