@@ -40,6 +40,20 @@ final class LockKey {
     return LockKey._(key);
   }
 
+  /// Compose structured identity components without separator aliasing.
+  ///
+  /// Each component is encoded as `<utf8-byte-length>:<raw-component>`.
+  /// The final string still passes through the ordinary [LockKey] policy.
+  factory LockKey.fromComponents(Iterable<String> components) {
+    final encoded = StringBuffer();
+    for (final component in components) {
+      encoded
+        ..write(utf8.encode(component).length)
+        ..write(':')
+        ..write(component);
+    }
+    return LockKey(encoded.toString());
+  }
   /// The Postgres `bigint` this key locks. See [advisoryKey].
   BigInt get advisory => advisoryKey(value);
 

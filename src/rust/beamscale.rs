@@ -11,7 +11,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant, duration_ms};
+use crate::lease::{
+    AcquireOptions, Lease, LeaseGrant, duration_ms, retry_delay, retry_sleep,
+    validate_minted_fencing_token,
+};
 use crate::plan::LockStep;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -125,6 +128,7 @@ impl<T> BeamScaleCriticalSectionLease<T> {
             return Err(transport_error(key, "invalid BeamScale grant"));
         }
         let fencing_token = grant.token.sequence;
+        validate_minted_fencing_token(key, "beamscale critical-section authority", fencing_token)?;
         self.tokens.lock().unwrap().insert(
             (key.as_str().to_owned(), holder.to_owned(), fencing_token),
             grant.token,
@@ -187,8 +191,16 @@ where
             ));
         }
 
+        if wait && opts.retry_interval.is_zero() {
+            return Err(LockError::invalid_plan(
+                key,
+                "BeamScale retry interval must be positive when waiting",
+            ));
+        }
+
         let started = Instant::now();
         let mut ambiguous_retries = 0u8;
+        let mut retry_attempt = 0u32;
         loop {
             let result = match self
                 .transport
@@ -225,14 +237,23 @@ where
                 }
                 BeamScaleAcquireResult::Contended => {
                     let waited = started.elapsed();
-                    if waited + opts.retry_interval > opts.wait_timeout {
+                    let remaining = opts.wait_timeout.saturating_sub(waited);
+                    if remaining.is_zero() {
                         return Err(LockError::timeout(
                             key,
                             LockStep::FiduciaAcquire,
                             duration_ms(waited),
                         ));
                     }
-                    crate::portable_sleep::sleep(opts.retry_interval).await;
+                    let delay = retry_delay(
+                        key,
+                        &request_id,
+                        opts.retry_interval,
+                        retry_attempt,
+                        remaining,
+                    );
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    retry_sleep(key, LockStep::FiduciaAcquire, delay).await?;
                 }
             }
         }
@@ -446,6 +467,38 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].2, "caller-stable-attempt");
         assert_eq!(calls[0].2, calls[1].2);
+    }
+
+    #[test]
+    fn out_of_domain_sequence_is_rejected_before_exposure() {
+        let transport = FakeTransport::default();
+        transport
+            .acquire_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleAcquireResult::Acquired(native(
+                crate::lease::MAX_FENCING_TOKEN + 1,
+                100_000,
+            ))));
+
+        let lease = BeamScaleCriticalSectionLease::new(transport);
+        let error =
+            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), false))
+                .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::Transport);
+    }
+
+    #[test]
+    fn beamscale_wait_rejects_zero_retry_interval() {
+        let lease = BeamScaleCriticalSectionLease::new(FakeTransport::default());
+        let error = block_on(lease.acquire(
+            &key(),
+            &AcquireOptions::default().retry_interval(Duration::ZERO),
+            true,
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
+        assert!(lease.transport().acquires.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -71,10 +71,25 @@ pub fn lock_plan_matrix_test() {
   })
 }
 
+pub fn structured_lock_key_components_are_injective_test() {
+  let assert Ok(key) = locks.lock_key_from_components(["tenant/a", "job:b"])
+  locks.key_to_string(key) |> should.equal("8:tenant/a5:job:b")
+  let assert Ok(other) =
+    locks.lock_key_from_components(["tenant", "a", "job:b"])
+  should.be_true(locks.key_to_string(key) != locks.key_to_string(other))
+  let assert Error(_) = locks.lock_key_from_components([])
+}
 pub fn key_is_non_empty_and_length_bounded_test() {
   let assert Error(_) = locks.lock_key("")
+  let assert Error(_) = locks.lock_key("   ")
+  let assert Error(_) = locks.lock_key(" leading")
+  let assert Error(_) = locks.lock_key("trailing ")
+  let assert Error(_) = locks.lock_key("line\nbreak")
+  let assert Error(_) = locks.lock_key("nul\u{0000}byte")
+  let assert Ok(_) = locks.lock_key("unicode-π")
   let assert Ok(_) = locks.lock_key(string_repeat("x", 512))
   let assert Error(_) = locks.lock_key(string_repeat("x", 513))
+  let assert Error(_) = locks.lock_key(string_repeat("é", 257))
 }
 
 fn string_repeat(s: String, n: Int) -> String {

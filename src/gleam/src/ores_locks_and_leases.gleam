@@ -19,6 +19,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 
 // --- keys -------------------------------------------------------------------
 
@@ -30,22 +31,62 @@ pub opaque type LockKey {
   LockKey(String)
 }
 
-/// Validate the contract's non-empty and length bounds.
-pub fn lock_key(key: String) -> Result(LockKey, String) {
-  let bytes = bit_array.byte_size(bit_array.from_string(key))
-  case bytes == 0, bytes > max_lock_key_bytes {
-    True, _ -> Error("lock key must not be empty")
-    _, True ->
-      Error(
-        "lock key is "
-        <> int.to_string(bytes)
-        <> " bytes; the contract allows at most "
-        <> int.to_string(max_lock_key_bytes),
-      )
-    False, False -> Ok(LockKey(key))
+fn has_ascii_control(bytes: BitArray) -> Bool {
+  case bytes {
+    <<byte:int, rest:bits>> ->
+      case byte <= 31 || byte == 127 {
+        True -> True
+        False -> has_ascii_control(rest)
+      }
+    _ -> False
   }
 }
 
+/// Validate the shared lock-key policy: non-empty, no surrounding whitespace,
+/// no ASCII control bytes, and at most 512 UTF-8 bytes.
+pub fn lock_key(key: String) -> Result(LockKey, String) {
+  let encoded = bit_array.from_string(key)
+  let bytes = bit_array.byte_size(encoded)
+  case bytes == 0 {
+    True -> Error("lock key must not be empty")
+    False ->
+      case string.trim(key) != key {
+        True -> Error("lock key must not have leading or trailing whitespace")
+        False ->
+          case has_ascii_control(encoded) {
+            True -> Error("lock key must not contain ASCII control bytes")
+            False ->
+              case bytes > max_lock_key_bytes {
+                True ->
+                  Error(
+                    "lock key is "
+                    <> int.to_string(bytes)
+                    <> " bytes; the contract allows at most "
+                    <> int.to_string(max_lock_key_bytes),
+                  )
+                False -> Ok(LockKey(key))
+              }
+          }
+      }
+  }
+}
+
+/// Compose structured identity components without separator aliasing.
+///
+/// Each component is encoded as `<utf8-byte-length>:<raw-component>`; the
+/// final value still passes through the ordinary lock-key policy.
+pub fn lock_key_from_components(
+  components: List(String),
+) -> Result(LockKey, String) {
+  components
+  |> list.fold("", fn(encoded, component) {
+    encoded
+    <> int.to_string(bit_array.byte_size(bit_array.from_string(component)))
+    <> ":"
+    <> component
+  })
+  |> lock_key
+}
 pub fn key_to_string(key: LockKey) -> String {
   let LockKey(s) = key
   s

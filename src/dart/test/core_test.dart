@@ -107,13 +107,36 @@ void main() {
     }
   });
 
-  test('lock keys are non-empty and length-bounded in bytes', () {
+  test('structured lock-key components use the shared injective encoding', () {
+    final vectors = cases('lock-key-hardening-adversarial-v1.json');
+    final structured = vectors.cast<Map>().firstWhere(
+      (c) => c['id'] == 'lifecycle-component-separator-alias',
+    );
+    final components = (structured['components'] as List).cast<String>();
+    final key = LockKey.fromComponents(components);
+    expect(key.value, structured['expected_key']);
+    expect(
+      key,
+      isNot(equals(LockKey.fromComponents(['tenant', 'a', 'job:b']))),
+    );
+    expect(() => LockKey.fromComponents(const []), throwsArgumentError);
+  });
+  test('lock keys enforce the shared hardened UTF-8 policy', () {
     expect(() => LockKey(''), throwsArgumentError);
-    for (final invalid in [' ', ' key', 'key ', 'key\nother']) {
+    for (final invalid in [
+      ' ',
+      ' key',
+      'key ',
+      'key\nother',
+      'key\u0000other',
+      'key\u007fother',
+    ]) {
       expect(() => LockKey(invalid), throwsArgumentError, reason: invalid);
     }
+    expect(LockKey('unicode-π').value, 'unicode-π');
     expect(LockKey('a' * 512).value, hasLength(512));
-    expect(() => LockKey('é' * 300), throwsArgumentError);
+    expect(() => LockKey('a' * 513), throwsArgumentError);
+    expect(() => LockKey('é' * 257), throwsArgumentError);
   });
 
   group('FiduciaLease', () {

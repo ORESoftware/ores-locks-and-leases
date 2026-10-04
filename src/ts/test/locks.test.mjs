@@ -16,6 +16,7 @@ import {
   cleartextRefusal,
   fnv1a64,
   lockKey,
+  lockKeyFromComponents,
   plan,
   withLease,
   withSessionLock,
@@ -44,13 +45,24 @@ test("lock-plan matrix", () => {
   }
 });
 
+test("structured lock-key components use the shared injective encoding", () => {
+  const vectors = cases("lock-key-hardening-adversarial-v1.json");
+  const structured = vectors.find((c) => c.id === "lifecycle-component-separator-alias");
+  assert.ok(structured);
+  const composed = lockKeyFromComponents(structured.components);
+  assert.equal(composed, structured.expected_key);
+  assert.notEqual(composed, lockKeyFromComponents(["tenant", "a", "job:b"]));
+  assert.throws(() => lockKeyFromComponents([]), RangeError);
+});
 test("lock keys are non-empty and length-bounded in bytes", () => {
   assert.throws(() => lockKey(""), RangeError);
   for (const invalid of [" ", " key", "key ", "key\nother", "key\u0000other", "key\u007fother"]) {
     assert.throws(() => lockKey(invalid), RangeError, invalid);
   }
+  assert.equal(lockKey("unicode-π"), "unicode-π");
   assert.equal(lockKey("a".repeat(512)), "a".repeat(512));
-  assert.throws(() => lockKey("é".repeat(300)), RangeError);
+  assert.throws(() => lockKey("a".repeat(513)), RangeError);
+  assert.throws(() => lockKey("é".repeat(257)), RangeError);
 });
 
 // --- fakes ------------------------------------------------------------------

@@ -13,7 +13,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant};
+use crate::lease::{
+    AcquireOptions, Lease, LeaseGrant, retry_delay, retry_sleep, validate_minted_fencing_token,
+};
 use crate::plan::LockStep;
 
 pub type RedlockFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -157,8 +159,17 @@ where
             return Err(LockError::invalid_plan(key, "Redlock ttl must be positive"));
         }
 
+        if wait && opts.retry_interval.is_zero() {
+            return Err(LockError::invalid_plan(
+                key,
+                "Redlock retry interval must be positive when waiting",
+            ));
+        }
+
         let holder = opts.holder.clone().unwrap_or_else(generated_holder);
+        let retry_identity = opts.request_id.as_deref().unwrap_or(&holder);
         let started = Instant::now();
+        let mut retry_attempt = 0u32;
 
         loop {
             let mut handle = match self.redlock.acquire(key, ttl_ms).await {
@@ -185,7 +196,15 @@ where
                         ));
                     }
                     let remaining = opts.wait_timeout.saturating_sub(waited);
-                    crate::portable_sleep::sleep(opts.retry_interval.min(remaining)).await;
+                    let delay = retry_delay(
+                        key,
+                        retry_identity,
+                        opts.retry_interval,
+                        retry_attempt,
+                        remaining,
+                    );
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    retry_sleep(key, LockStep::FiduciaAcquire, delay).await?;
                     continue;
                 }
             };
@@ -200,15 +219,14 @@ where
             }
 
             let fencing_token = match self.fencing.next_fencing_token(key, &holder).await {
-                Ok(token) if token > 0 => token,
-                Ok(_) => {
-                    let _ = handle.release().await;
-                    return Err(LockError::new(
-                        LockErrorKind::Transport,
-                        key,
-                        "fencing authority returned a non-positive token",
-                    )
-                    .at(LockStep::FiduciaAcquire));
+                Ok(token) => {
+                    if let Err(error) =
+                        validate_minted_fencing_token(key, "Redlock fencing authority", token)
+                    {
+                        let _ = handle.release().await;
+                        return Err(error.at(LockStep::FiduciaAcquire));
+                    }
+                    token
                 }
                 Err(message) => {
                     let _ = handle.release().await;
@@ -373,6 +391,47 @@ mod tests {
         ) -> RedlockFuture<'a, Result<u64, String>> {
             Box::pin(async { Ok(self.0.fetch_add(1, Ordering::SeqCst) + 1) })
         }
+    }
+
+    struct FixedFence(u64);
+
+    impl FencingTokenAuthority for FixedFence {
+        fn next_fencing_token<'a>(
+            &'a self,
+            _key: &'a LockKey,
+            _holder: &'a str,
+        ) -> RedlockFuture<'a, Result<u64, String>> {
+            Box::pin(async move { Ok(self.0) })
+        }
+    }
+
+    #[tokio::test]
+    async fn redlock_rejects_out_of_domain_fencing_tokens() {
+        for token in [0, crate::lease::MAX_FENCING_TOKEN + 1] {
+            let lease = FencedRedlockLease::new(FakeRedlock, FixedFence(token));
+            let key = LockKey::new("redlock/invalid-fence").unwrap();
+            let error = lease
+                .acquire(&key, &AcquireOptions::default().holder("worker-a"), false)
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, LockErrorKind::Transport);
+            assert_eq!(error.step, Some(LockStep::FiduciaAcquire));
+        }
+    }
+
+    #[tokio::test]
+    async fn redlock_wait_rejects_zero_retry_interval() {
+        let lease = FencedRedlockLease::new(FakeRedlock, FakeFence::default());
+        let key = LockKey::new("redlock/zero-retry").unwrap();
+        let error = lease
+            .acquire(
+                &key,
+                &AcquireOptions::default().retry_interval(Duration::ZERO),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
     }
 
     #[tokio::test]

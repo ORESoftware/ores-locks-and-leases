@@ -18,6 +18,11 @@ use crate::plan::LockStep;
 /// lapsed cannot overwrite a newer holder's work.
 pub type FencingToken = u64;
 
+/// Largest token minted by new authorities. This is the exact-integer ceiling
+/// shared with JavaScript/browser clients; historical persisted watermarks may
+/// still use the wider unsigned-64 decimal-text representation.
+pub const MAX_FENCING_TOKEN: FencingToken = 9_007_199_254_740_991;
+
 /// Acquisition tuning shared by every layer. Contract model `AcquireOptions`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcquireOptions {
@@ -83,6 +88,66 @@ impl AcquireOptions {
 
 pub(crate) fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+pub(crate) fn validate_minted_fencing_token(
+    key: &LockKey,
+    authority: &str,
+    token: FencingToken,
+) -> Result<(), LockError> {
+    if token == 0 || token > MAX_FENCING_TOKEN {
+        return Err(LockError::new(
+            LockErrorKind::Transport,
+            key,
+            format!(
+                "{authority} returned fencing token {token}; new grants must be in 1..={MAX_FENCING_TOKEN}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Exponential retry delay with deterministic per-contender jitter. The caller
+/// supplies a stable holder/request identity so contenders for one key do not
+/// wake in lockstep. Growth is capped at 16x the configured base interval and
+/// always clamped to the remaining wait budget.
+pub(crate) fn retry_delay(
+    key: &LockKey,
+    identity: &str,
+    base: Duration,
+    attempt: u32,
+    remaining: Duration,
+) -> Duration {
+    if base.is_zero() || remaining.is_zero() {
+        return Duration::ZERO;
+    }
+
+    let multiplier = 1u32 << attempt.min(4);
+    let ceiling = base.saturating_mul(multiplier).min(remaining);
+    let entropy = crate::key::fnv1a64(&format!("{}:{identity}:{attempt}", key.as_str()));
+    // 75.0%..100.0% of the exponential ceiling.
+    let permille = 750u128 + u128::from(entropy % 251);
+    let nanos = ceiling
+        .as_nanos()
+        .saturating_mul(permille)
+        .saturating_div(1_000);
+    let nanos = nanos.max(1).min(u128::from(u64::MAX));
+    Duration::from_nanos(nanos as u64).min(remaining)
+}
+
+pub(crate) async fn retry_sleep(
+    key: &LockKey,
+    step: LockStep,
+    delay: Duration,
+) -> Result<(), LockError> {
+    crate::portable_sleep::sleep(delay).await.map_err(|error| {
+        LockError::new(
+            LockErrorKind::Transport,
+            key,
+            format!("retry scheduler failure: {error}"),
+        )
+        .at(step)
+    })
 }
 
 /// A held grant. Contract model `LeaseGrant`.
@@ -351,6 +416,42 @@ mod tests {
                 return value;
             }
         }
+    }
+
+    #[test]
+    fn retry_backoff_is_bounded_and_spreads_contenders() {
+        let key = key();
+        let base = Duration::from_millis(100);
+        let remaining = Duration::from_secs(10);
+        let a0 = retry_delay(&key, "holder-a", base, 0, remaining);
+        let a4 = retry_delay(&key, "holder-a", base, 4, remaining);
+        let b4 = retry_delay(&key, "holder-b", base, 4, remaining);
+        assert!(a0 <= base);
+        assert!(a4 <= base.saturating_mul(16));
+        assert!(a4 > a0);
+        assert_ne!(a4, b4);
+        let bounded = retry_delay(&key, "holder-a", base, 4, Duration::from_millis(1));
+        assert!(!bounded.is_zero());
+        assert!(bounded <= Duration::from_millis(1));
+    }
+
+    #[test]
+    fn minted_fencing_token_contract_fails_closed() {
+        let key = key();
+        assert!(validate_minted_fencing_token(&key, "test", 1).is_ok());
+        assert!(validate_minted_fencing_token(&key, "test", MAX_FENCING_TOKEN).is_ok());
+        assert_eq!(
+            validate_minted_fencing_token(&key, "test", 0)
+                .unwrap_err()
+                .kind,
+            LockErrorKind::Transport
+        );
+        assert_eq!(
+            validate_minted_fencing_token(&key, "test", MAX_FENCING_TOKEN + 1)
+                .unwrap_err()
+                .kind,
+            LockErrorKind::Transport
+        );
     }
 
     #[test]

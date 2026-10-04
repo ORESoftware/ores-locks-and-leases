@@ -15,7 +15,10 @@ use std::time::{Duration, Instant};
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant, duration_ms};
+use crate::lease::{
+    AcquireOptions, Lease, LeaseGrant, duration_ms, retry_delay, retry_sleep,
+    validate_minted_fencing_token,
+};
 
 /// Production authority selected behind the generic [`Lease`] seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -171,8 +174,15 @@ where
                 "managed lease ttl must be positive",
             ));
         }
+        if wait && opts.retry_interval.is_zero() {
+            return Err(LockError::invalid_plan(
+                key,
+                "managed lease retry interval must be positive when waiting",
+            ));
+        }
 
         let started = Instant::now();
+        let mut retry_attempt = 0u32;
         loop {
             match self
                 .transport
@@ -181,6 +191,14 @@ where
                 .map_err(|message| transport_error(self.backend, key, message))?
             {
                 ManagedAcquireResult::Acquired(grant) => {
+                    validate_minted_fencing_token(key, self.backend.as_str(), grant.fencing_token)?;
+                    if grant.lease_expires_ms == Some(0) {
+                        return Err(transport_error(
+                            self.backend,
+                            key,
+                            "authority returned zero lease expiry".to_owned(),
+                        ));
+                    }
                     return Ok(LeaseGrant {
                         key: key.clone(),
                         holder,
@@ -197,14 +215,23 @@ where
                 }
                 ManagedAcquireResult::Contended => {
                     let waited = started.elapsed();
-                    if waited + opts.retry_interval > opts.wait_timeout {
+                    let remaining = opts.wait_timeout.saturating_sub(waited);
+                    if remaining.is_zero() {
                         return Err(LockError::timeout(
                             key,
                             crate::plan::LockStep::FiduciaAcquire,
                             duration_ms(waited),
                         ));
                     }
-                    crate::portable_sleep::sleep(opts.retry_interval).await;
+                    let delay = retry_delay(
+                        key,
+                        &request_id,
+                        opts.retry_interval,
+                        retry_attempt,
+                        remaining,
+                    );
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    retry_sleep(key, crate::plan::LockStep::FiduciaAcquire, delay).await?;
                 }
             }
         }
@@ -248,11 +275,9 @@ where
     }
 }
 
-// Keep the dependency-free core independent of a particular async runtime
-// without blocking the caller's executor thread during contention. Each retry
-// interval uses one short-lived sleeper thread which wakes the future. Native
-// runtime-specific transports may still choose `wait=false` and own retries
-// when they need a higher-throughput scheduler.
+// The dependency-free core uses the process-wide runtime-neutral retry
+// scheduler. Waiters are bounded and cancellable; contention backoff is
+// exponential with deterministic per-request jitter.
 
 #[cfg(test)]
 mod tests {
@@ -373,6 +398,67 @@ mod tests {
             assert!(block_on(lease.release(&renewed)).unwrap());
             assert!(!block_on(lease.release(&renewed)).unwrap());
         }
+    }
+
+    struct FixedGrantTransport {
+        token: u64,
+        expiry: Option<u64>,
+    }
+
+    impl ManagedLeaseTransport for FixedGrantTransport {
+        async fn acquire(
+            &self,
+            _backend: ManagedLeaseBackend,
+            _key: &LockKey,
+            _holder: &str,
+            _request_id: &str,
+            _ttl_ms: u64,
+        ) -> Result<ManagedAcquireResult, String> {
+            Ok(ManagedAcquireResult::Acquired(ManagedGrant {
+                fencing_token: self.token,
+                lease_expires_ms: self.expiry,
+            }))
+        }
+
+        async fn renew(
+            &self,
+            _backend: ManagedLeaseBackend,
+            _grant: &LeaseGrant,
+            _ttl_ms: u64,
+        ) -> Result<ManagedRenewResult, String> {
+            Ok(ManagedRenewResult::Lost)
+        }
+
+        async fn release(
+            &self,
+            _backend: ManagedLeaseBackend,
+            _grant: &LeaseGrant,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn malformed_managed_grants_fail_closed_at_adapter_boundary() {
+        for (token, expiry) in [
+            (0, Some(123_456)),
+            (crate::lease::MAX_FENCING_TOKEN + 1, Some(123_456)),
+            (1, Some(0)),
+        ] {
+            let lease = ManagedLease::cloudflare(FixedGrantTransport { token, expiry });
+            let error =
+                block_on(lease.acquire(&key(), &AcquireOptions::default(), false)).unwrap_err();
+            assert_eq!(error.kind, LockErrorKind::Transport);
+        }
+    }
+
+    #[test]
+    fn waiting_rejects_zero_retry_interval_before_polling() {
+        let lease = ManagedLease::redis(FakeTransport::default());
+        let options = AcquireOptions::default().retry_interval(Duration::ZERO);
+        let error = block_on(lease.acquire(&key(), &options, true)).unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
+        assert!(lease.transport().request_ids.lock().unwrap().is_empty());
     }
 
     #[test]
