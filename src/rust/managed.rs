@@ -400,6 +400,67 @@ mod tests {
         }
     }
 
+    struct FixedGrantTransport {
+        token: u64,
+        expiry: Option<u64>,
+    }
+
+    impl ManagedLeaseTransport for FixedGrantTransport {
+        async fn acquire(
+            &self,
+            _backend: ManagedLeaseBackend,
+            _key: &LockKey,
+            _holder: &str,
+            _request_id: &str,
+            _ttl_ms: u64,
+        ) -> Result<ManagedAcquireResult, String> {
+            Ok(ManagedAcquireResult::Acquired(ManagedGrant {
+                fencing_token: self.token,
+                lease_expires_ms: self.expiry,
+            }))
+        }
+
+        async fn renew(
+            &self,
+            _backend: ManagedLeaseBackend,
+            _grant: &LeaseGrant,
+            _ttl_ms: u64,
+        ) -> Result<ManagedRenewResult, String> {
+            Ok(ManagedRenewResult::Lost)
+        }
+
+        async fn release(
+            &self,
+            _backend: ManagedLeaseBackend,
+            _grant: &LeaseGrant,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn malformed_managed_grants_fail_closed_at_adapter_boundary() {
+        for (token, expiry) in [
+            (0, Some(123_456)),
+            (crate::lease::MAX_FENCING_TOKEN + 1, Some(123_456)),
+            (1, Some(0)),
+        ] {
+            let lease = ManagedLease::cloudflare(FixedGrantTransport { token, expiry });
+            let error = block_on(lease.acquire(&key(), &AcquireOptions::default(), false))
+                .unwrap_err();
+            assert_eq!(error.kind, LockErrorKind::Transport);
+        }
+    }
+
+    #[test]
+    fn waiting_rejects_zero_retry_interval_before_polling() {
+        let lease = ManagedLease::redis(FakeTransport::default());
+        let options = AcquireOptions::default().retry_interval(Duration::ZERO);
+        let error = block_on(lease.acquire(&key(), &options, true)).unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
+        assert!(lease.transport().request_ids.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn wrong_grant_cannot_renew_or_release() {
         let lease = ManagedLease::redis(FakeTransport::default());
