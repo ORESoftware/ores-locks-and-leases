@@ -393,6 +393,47 @@ mod tests {
         }
     }
 
+    struct FixedFence(u64);
+
+    impl FencingTokenAuthority for FixedFence {
+        fn next_fencing_token<'a>(
+            &'a self,
+            _key: &'a LockKey,
+            _holder: &'a str,
+        ) -> RedlockFuture<'a, Result<u64, String>> {
+            Box::pin(async move { Ok(self.0) })
+        }
+    }
+
+    #[tokio::test]
+    async fn redlock_rejects_out_of_domain_fencing_tokens() {
+        for token in [0, crate::lease::MAX_FENCING_TOKEN + 1] {
+            let lease = FencedRedlockLease::new(FakeRedlock, FixedFence(token));
+            let key = LockKey::new("redlock/invalid-fence").unwrap();
+            let error = lease
+                .acquire(&key, &AcquireOptions::default().holder("worker-a"), false)
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, LockErrorKind::Transport);
+            assert_eq!(error.step, Some(LockStep::FiduciaAcquire));
+        }
+    }
+
+    #[tokio::test]
+    async fn redlock_wait_rejects_zero_retry_interval() {
+        let lease = FencedRedlockLease::new(FakeRedlock, FakeFence::default());
+        let key = LockKey::new("redlock/zero-retry").unwrap();
+        let error = lease
+            .acquire(
+                &key,
+                &AcquireOptions::default().retry_interval(Duration::ZERO),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
+    }
+
     #[tokio::test]
     async fn renewal_preserves_fencing_token() {
         let lease = FencedRedlockLease::new(FakeRedlock, FakeFence::default());
