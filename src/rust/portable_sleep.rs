@@ -191,10 +191,7 @@ fn complete_due(pending: &mut BTreeMap<SleepKey, Arc<SleepState>>) {
     }
 }
 
-fn accept_message(
-    pending: &mut BTreeMap<SleepKey, Arc<SleepState>>,
-    message: SchedulerMessage,
-) {
+fn accept_message(pending: &mut BTreeMap<SleepKey, Arc<SleepState>>, message: SchedulerMessage) {
     match message {
         SchedulerMessage::Sleep(request) => {
             if request.state.cancelled.load(Ordering::Acquire) {
