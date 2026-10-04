@@ -90,7 +90,6 @@ pub(crate) fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-
 pub(crate) fn validate_minted_fencing_token(
     key: &LockKey,
     authority: &str,
@@ -125,10 +124,7 @@ pub(crate) fn retry_delay(
 
     let multiplier = 1u32 << attempt.min(4);
     let ceiling = base.saturating_mul(multiplier).min(remaining);
-    let entropy = crate::key::fnv1a64(&format!(
-        "{}:{identity}:{attempt}",
-        key.as_str()
-    ));
+    let entropy = crate::key::fnv1a64(&format!("{}:{identity}:{attempt}", key.as_str()));
     // 75.0%..100.0% of the exponential ceiling.
     let permille = 750u128 + u128::from(entropy % 251);
     let nanos = ceiling
@@ -434,13 +430,7 @@ mod tests {
         assert!(a4 <= base.saturating_mul(16));
         assert!(a4 > a0);
         assert_ne!(a4, b4);
-        let bounded = retry_delay(
-            &key,
-            "holder-a",
-            base,
-            4,
-            Duration::from_millis(1),
-        );
+        let bounded = retry_delay(&key, "holder-a", base, 4, Duration::from_millis(1));
         assert!(!bounded.is_zero());
         assert!(bounded <= Duration::from_millis(1));
     }
