@@ -446,8 +446,8 @@ mod tests {
             (1, Some(0)),
         ] {
             let lease = ManagedLease::cloudflare(FixedGrantTransport { token, expiry });
-            let error = block_on(lease.acquire(&key(), &AcquireOptions::default(), false))
-                .unwrap_err();
+            let error =
+                block_on(lease.acquire(&key(), &AcquireOptions::default(), false)).unwrap_err();
             assert_eq!(error.kind, LockErrorKind::Transport);
         }
     }
