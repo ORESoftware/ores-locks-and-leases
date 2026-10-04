@@ -27,3 +27,23 @@ func TestLockKeyIsNonEmptyAndLengthBounded(t *testing.T) {
 		t.Fatal("UTF-8 byte overflow unexpectedly accepted")
 	}
 }
+
+func TestLockKeyComponentsAreInjective(t *testing.T) {
+	key, err := NewLockKeyFromComponents("tenant/a", "job:b")
+	if err != nil {
+		t.Fatalf("compose structured lock key: %v", err)
+	}
+	if got, want := key.String(), "8:tenant/a5:job:b"; got != want {
+		t.Fatalf("composed key = %q, want %q", got, want)
+	}
+	other, err := NewLockKeyFromComponents("tenant", "a", "job:b")
+	if err != nil {
+		t.Fatalf("compose comparison key: %v", err)
+	}
+	if key == other {
+		t.Fatal("distinct component sequences aliased")
+	}
+	if _, err := NewLockKeyFromComponents(); err == nil {
+		t.Fatal("empty component sequence unexpectedly accepted")
+	}
+}
