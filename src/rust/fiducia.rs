@@ -2,9 +2,9 @@
 //!
 //! The fiducia node never holds a request open: `acquire` returns at once
 //! with `acquired: false` when the key is held, so the *client* owns the
-//! wait. This adapter polls at `opts.retry_interval` until the grant arrives
-//! or `opts.wait_timeout` elapses — the same cadence the official sync
-//! client's `must_lock` uses.
+//! wait. This adapter retries with bounded exponential jitter derived from
+//! `opts.retry_interval`, clamps every delay to the remaining wait budget,
+//! and stops once `opts.wait_timeout` elapses.
 
 use std::time::{Duration, Instant};
 
