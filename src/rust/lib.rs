@@ -114,7 +114,7 @@ pub use fence::{
     FencingTokenText, MAX_FENCE_METADATA_BYTES, MAX_FENCING_TOKEN_TEXT, MAX_OPERATION_ID_BYTES,
     MAX_TENANT_SCOPE_BYTES, evaluate_fence,
 };
-pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64};
+pub use key::{AdvisoryKey, LockKey, advisory_key, fnv1a64, lock_key_from_components};
 pub use lease::{AcquireOptions, FencingToken, Lease, LeaseGrant, NoLease, WorkFuture, with_lease};
 pub use local_file::{
     LocalFileLock, LocalFileLockError, LocalFileLockErrorKind, LocalFileLockOptions,
