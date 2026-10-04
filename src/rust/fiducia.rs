@@ -12,7 +12,9 @@ use fiducia_client::AsyncFiduciaClient;
 
 use crate::error::{LockError, LockErrorKind};
 use crate::key::LockKey;
-use crate::lease::{AcquireOptions, Lease, LeaseGrant, duration_ms};
+use crate::lease::{
+    AcquireOptions, Lease, LeaseGrant, duration_ms, retry_delay, validate_minted_fencing_token,
+};
 use crate::plan::LockStep;
 
 /// A fiducia-cloud lease authority.
@@ -74,7 +76,22 @@ impl Lease for FiduciaLease {
     ) -> Result<LeaseGrant, LockError> {
         let holder = opts.holder.clone().unwrap_or_else(generated_holder);
         let ttl_ms = opts.ttl_ms();
+        if ttl_ms == 0 {
+            return Err(LockError::invalid_plan(
+                key,
+                "Fiducia lease ttl must be positive",
+            ));
+        }
+        if wait && opts.retry_interval.is_zero() {
+            return Err(LockError::invalid_plan(
+                key,
+                "Fiducia retry interval must be positive when waiting",
+            ));
+        }
+
+        let retry_identity = opts.request_id.as_deref().unwrap_or(&holder);
         let started = Instant::now();
+        let mut retry_attempt = 0u32;
         loop {
             let granted = self
                 .client
@@ -82,6 +99,8 @@ impl Lease for FiduciaLease {
                 .await
                 .map_err(|err| transport(key, err))?;
             if let Some(fencing_token) = granted {
+                validate_minted_fencing_token(key, "Fiducia authority", fencing_token)
+                    .map_err(|error| error.at(LockStep::FiduciaAcquire))?;
                 return Ok(LeaseGrant {
                     key: key.clone(),
                     holder,
@@ -94,14 +113,23 @@ impl Lease for FiduciaLease {
                 return Err(LockError::contention(key, LockStep::FiduciaTryAcquire));
             }
             let waited = started.elapsed();
-            if waited + opts.retry_interval > opts.wait_timeout {
+            let remaining = opts.wait_timeout.saturating_sub(waited);
+            if remaining.is_zero() {
                 return Err(LockError::timeout(
                     key,
                     LockStep::FiduciaAcquire,
                     duration_ms(waited),
                 ));
             }
-            tokio::time::sleep(opts.retry_interval).await;
+            let delay = retry_delay(
+                key,
+                retry_identity,
+                opts.retry_interval,
+                retry_attempt,
+                remaining,
+            );
+            retry_attempt = retry_attempt.saturating_add(1);
+            tokio::time::sleep(delay).await;
         }
     }
 
