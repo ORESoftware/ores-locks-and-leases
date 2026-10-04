@@ -470,6 +470,38 @@ mod tests {
     }
 
     #[test]
+    fn out_of_domain_sequence_is_rejected_before_exposure() {
+        let transport = FakeTransport::default();
+        transport
+            .acquire_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(BeamScaleAcquireResult::Acquired(native(
+                crate::lease::MAX_FENCING_TOKEN + 1,
+                100_000,
+            ))));
+
+        let lease = BeamScaleCriticalSectionLease::new(transport);
+        let error =
+            block_on(lease.acquire(&key(), &AcquireOptions::default().holder("worker-a"), false))
+                .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::Transport);
+    }
+
+    #[test]
+    fn beamscale_wait_rejects_zero_retry_interval() {
+        let lease = BeamScaleCriticalSectionLease::new(FakeTransport::default());
+        let error = block_on(lease.acquire(
+            &key(),
+            &AcquireOptions::default().retry_interval(Duration::ZERO),
+            true,
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, LockErrorKind::InvalidPlan);
+        assert!(lease.transport().acquires.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn fencing_exhaustion_is_terminal_invalid_plan() {
         let transport = FakeTransport::default();
         transport
