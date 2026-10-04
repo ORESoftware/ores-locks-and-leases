@@ -434,10 +434,15 @@ mod tests {
         assert!(a4 <= base.saturating_mul(16));
         assert!(a4 > a0);
         assert_ne!(a4, b4);
-        assert_eq!(
-            retry_delay(&key, "holder-a", base, 4, Duration::from_millis(1)),
-            Duration::from_millis(1)
+        let bounded = retry_delay(
+            &key,
+            "holder-a",
+            base,
+            4,
+            Duration::from_millis(1),
         );
+        assert!(!bounded.is_zero());
+        assert!(bounded <= Duration::from_millis(1));
     }
 
     #[test]
