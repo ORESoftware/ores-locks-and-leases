@@ -139,7 +139,8 @@ pub fn inspect_local_file_lock(
         }
         Err(error) => return Err(io_error(path, "inspect local lock owner token", error)),
     };
-    if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
+    if !owner_metadata.is_file()
+        || metadata_is_alias(&owner_metadata) {
         return Ok(compromised(
             LocalFileLockInspectionReason::OwnerNotRegularFile,
             "owner token is not an unaliased regular file",
@@ -294,7 +295,11 @@ pub fn recover_local_file_lock(
     let dir_before = fs::symlink_metadata(path)
         .map_err(|err| io_error(path, "inspect directory before recovery claim", err))?;
     if !dir_before.is_dir() || metadata_is_alias(&dir_before) {
-        return Err(error(LocalFileLockErrorKind::Compromised, path, "lock directory changed before recovery claim"));
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "lock directory changed before recovery claim",
+        ));
     }
     let owner_path = path.join(OWNER_FILE);
     let recovering_path = path.join(OWNER_RECOVERING_FILE);
@@ -302,7 +307,11 @@ pub fn recover_local_file_lock(
     // A rename is not a portable atomic compare-and-swap (notably on
     // Windows). Use the same exclusive O_EXCL claim as Go and Erlang. Leave
     // ambiguous crash states in place for explicit operator inspection.
-    match OpenOptions::new().write(true).create_new(true).open(&recovering_path) {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&recovering_path)
+    {
         Ok(claim) => drop(claim),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -311,10 +320,15 @@ pub fn recover_local_file_lock(
 
     let dir_after = fs::symlink_metadata(path)
         .map_err(|err| io_error(path, "inspect directory after recovery claim", err))?;
-    if !dir_after.is_dir() || metadata_is_alias(&dir_after)
+    if !dir_after.is_dir()
+        || metadata_is_alias(&dir_after)
         || !same_file_identity(&dir_before, &dir_after)
     {
-        return Err(error(LocalFileLockErrorKind::Compromised, path, "lock directory identity changed during recovery claim"));
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "lock directory identity changed during recovery claim",
+        ));
     }
 
     let owner_metadata = fs::symlink_metadata(&owner_path)
@@ -323,18 +337,28 @@ pub fn recover_local_file_lock(
         || metadata_has_multiple_links(&owner_metadata)
         || owner_metadata.len() > OWNER_MAX_UTF8_BYTES as u64
     {
-        return Err(error(LocalFileLockErrorKind::Compromised, path, "owner metadata changed after recovery claim"));
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "owner metadata changed after recovery claim",
+        ));
     }
     let mut file = File::open(&owner_path)
         .map_err(|err| io_error(path, "open owner after recovery claim", err))?;
-    let opened = file.metadata()
+    let opened = file
+        .metadata()
         .map_err(|err| io_error(path, "stat opened owner after recovery claim", err))?;
-    if !opened.is_file() || metadata_is_alias(&opened)
+    if !opened.is_file()
+        || metadata_is_alias(&opened)
         || metadata_has_multiple_links(&opened)
         || !same_file_identity(&owner_metadata, &opened)
         || opened.len() > OWNER_MAX_UTF8_BYTES as u64
     {
-        return Err(error(LocalFileLockErrorKind::Compromised, path, "owner file identity changed after recovery claim"));
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "owner file identity changed after recovery claim",
+        ));
     }
     let mut bytes = Vec::with_capacity(OWNER_MAX_UTF8_BYTES + 1);
     file.take((OWNER_MAX_UTF8_BYTES + 1) as u64)
@@ -343,7 +367,11 @@ pub fn recover_local_file_lock(
     if bytes.len() > OWNER_MAX_UTF8_BYTES
         || String::from_utf8(bytes).ok().as_deref() != Some(expected_owner)
     {
-        return Err(error(LocalFileLockErrorKind::Compromised, path, "owner token changed after recovery claim; refusing deletion"));
+        return Err(error(
+            LocalFileLockErrorKind::Compromised,
+            path,
+            "owner token changed after recovery claim; refusing deletion",
+        ));
     }
 
     fs::remove_file(&owner_path)
