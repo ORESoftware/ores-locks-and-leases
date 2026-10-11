@@ -74,3 +74,30 @@ func TestLocalFileLockConcurrentExactOwnerRecoveryHasOneWinner(t *testing.T) {
 		t.Fatalf("absent recovery must be false/no-op: recovered=%v err=%v", recovered, err)
 	}
 }
+
+func TestLocalFileLockRecoveryClaimWithPublishedOwnerFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claimed-state.lock")
+	lock, acquired, err := TryAcquireLocalFileLock(path, "owner-a")
+	if err != nil || !acquired || lock == nil {
+		t.Fatalf("acquire: lock=%v acquired=%v err=%v", lock, acquired, err)
+	}
+	claimPath := filepath.Join(path, localFileOwnerRecoveringName)
+	claim, err := os.OpenFile(claimPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claim.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := InspectLocalFileLock(path)
+	if err != nil || inspection.State != LocalFileLockIncomplete || inspection.Owner != "" {
+		t.Fatalf("a concurrent or crashed recovery claim must inspect incomplete: %+v err=%v", inspection, err)
+	}
+	recovered, err := RecoverLocalFileLock(path, "owner-a", true)
+	if recovered || err == nil {
+		t.Fatalf("claim conflict must not delete the lock: recovered=%v err=%v", recovered, err)
+	}
+	if _, err := os.Stat(filepath.Join(path, localFileOwnerName)); err != nil {
+		t.Fatalf("original owner marker was unexpectedly removed: %v", err)
+	}
+}
