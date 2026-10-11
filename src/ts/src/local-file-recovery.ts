@@ -1,4 +1,4 @@
-import { lstat, rename, rmdir, unlink } from "node:fs/promises";
+import { lstat, open, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import { maybe_inject_local_file_test_fault } from "./local-file-test-faults.js";
@@ -81,6 +81,15 @@ export async function inspect_local_file_lock(path: string): Promise<LocalFileLo
   if (entries.length === 1 && entries[0] === LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE) {
     return incomplete(
       "owner recovery is in progress; recovery claim is not reusable ownership authority",
+    );
+  }
+  if (
+    entries.length === 2 &&
+    entries.includes(LOCAL_FILE_LOCK_OWNER_FILE) &&
+    entries.includes(LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE)
+  ) {
+    return incomplete(
+      "recovery claim exists alongside the published owner; recovery is in progress or crashed",
     );
   }
   if (entries.length !== 1 || entries[0] !== LOCAL_FILE_LOCK_OWNER_FILE) {
@@ -171,36 +180,58 @@ export async function recover_local_file_lock(
 
   const ownerPath = join(path, LOCAL_FILE_LOCK_OWNER_FILE);
   const recoveringPath = join(path, LOCAL_FILE_LOCK_OWNER_RECOVERING_FILE);
+  const directoryBefore = await lstat(path).catch((error: unknown) => {
+    if (error_code(error) === "ENOENT") return null;
+    throw io_error(path, "inspect directory before recovery claim", error);
+  });
+  if (directoryBefore === null) return false;
+  if (!directoryBefore.isDirectory() || directoryBefore.isSymbolicLink()) {
+    throw new LocalFileLockError("compromised", path, "lock directory changed before recovery claim");
+  }
+
   try {
     maybe_inject_local_file_test_fault("recovery_claim_failure", "EIO");
-    // This rename is the destructive recovery linearization point. In
-    // particular, Windows may allow more than one concurrent unlink() caller
-    // to report success while deletion is pending. Moving the authenticated
-    // owner marker to one fixed private recovery name gives exactly one caller
-    // the capability to continue; every competing caller loses the source name
-    // and therefore cannot also report destructive success.
-    await rename(ownerPath, recoveringPath);
+    // O_EXCL is the portable single-winner linearization point shared with
+    // the Go/Rust/Erlang implementations. Rename may replace the claim.
+    const claim = await open(recoveringPath, "wx", 0o600);
+    await claim.close();
   } catch (error) {
     const code = error_code(error);
-    if (code === "ENOENT") {
-      const after = await inspect_local_file_lock(path);
-      if (after.state === "absent" || after.state === "incomplete") return false;
-      throw new LocalFileLockError(
-        "compromised",
-        path,
-        "local lock changed while claiming recovery",
-        error,
-      );
-    }
+    if (code === "EEXIST" || code === "ENOENT") return false;
     throw new LocalFileLockError(
-      code === "EEXIST" || code === "ENOTEMPTY" ? "compromised" : "io",
+      "io",
       path,
-      `claim local lock recovery failed: ${describe_error(error)}`,
+      `exclusively claim local lock recovery failed: ${describe_error(error)}`,
       error,
     );
   }
 
+  const directoryAfter = await lstat(path).catch((error: unknown) => {
+    throw io_error(path, "inspect directory after recovery claim", error);
+  });
+  if (
+    !directoryAfter.isDirectory() ||
+    directoryAfter.isSymbolicLink() ||
+    directoryBefore.dev !== directoryAfter.dev ||
+    directoryBefore.ino !== directoryAfter.ino
+  ) {
+    throw new LocalFileLockError(
+      "compromised",
+      path,
+      "lock directory identity changed during recovery claim",
+    );
+  }
+  const owner = await read_bounded_local_file_lock_owner(path, ownerPath);
+  if (owner !== expected_owner) {
+    throw new LocalFileLockError(
+      "compromised",
+      path,
+      "owner token changed after recovery claim; refusing deletion",
+    );
+  }
+
   try {
+    await unlink(ownerPath);
     await unlink(recoveringPath);
     await rmdir(path);
   } catch (error) {

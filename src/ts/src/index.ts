@@ -18,7 +18,7 @@
  * Dart and Gleam slices.
  */
 
-export { MAX_LOCK_KEY_BYTES, advisoryKey, fnv1a64, lockKey, type LockKey } from "./key.js";
+export { MAX_LOCK_KEY_BYTES, advisoryKey, fnv1a64, lockKey, lockKeyFromComponents, type LockKey } from "./key.js";
 export * from "./fence.js";
 export * from "./renewal.js";
 export {

@@ -38,3 +38,25 @@ pub fn exact_owner_recovery_has_one_destructive_success_test() {
   |> should.equal(Ok(False))
   clean(root)
 }
+
+pub fn recovery_claim_with_owner_is_incomplete_and_not_destructive_test() {
+  let root = "./.tmp-local-file-recovery-v11/claimed-held"
+  clean(root)
+  let path = root <> "/install.lock"
+  let assert Ok(Some(_lock)) =
+    local_file.try_acquire(root, "install.lock", "owner-a")
+  let assert Ok(Nil) =
+    simplifile.write(to: path <> "/owner.recovering", contents: "")
+
+  let assert Ok(local_file_recovery.LocalFileLockInspection(
+    local_file_recovery.Incomplete,
+    None,
+    Some(local_file_recovery.OwnerMarkerMissing),
+    _,
+  )) = local_file_recovery.inspect(root, "install.lock")
+  let result =
+    local_file_recovery.recover(root, "install.lock", "owner-a", True)
+  let assert Error(_) = result
+  let assert Ok(_) = simplifile.read(path <> "/owner")
+  clean(root)
+}
