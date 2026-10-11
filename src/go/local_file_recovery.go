@@ -89,6 +89,11 @@ func InspectLocalFileLock(path string) (LocalFileLockInspection, error) {
 	if len(entries) == 1 && entries[0] == localFileOwnerRecoveringName {
 		return incompleteInspection("owner recovery is in progress; recovery claim is not reusable ownership authority"), nil
 	}
+	if len(entries) == 2 &&
+		((entries[0] == localFileOwnerName && entries[1] == localFileOwnerRecoveringName) ||
+			(entries[1] == localFileOwnerName && entries[0] == localFileOwnerRecoveringName)) {
+		return incompleteInspection("recovery claim exists alongside the published owner; recovery is in progress or crashed"), nil
+	}
 	if len(entries) != 1 || entries[0] != localFileOwnerName {
 		return compromisedInspection(LocalFileDirtyDirectory, "lock directory must contain exactly one published owner marker"), nil
 	}
@@ -216,23 +221,55 @@ func RecoverLocalFileLock(path, expectedOwner string, confirmedInactive bool) (b
 		return false, localFileError(LocalFileCompromised, path, "local lock changed during recovery; refusing deletion", nil)
 	}
 
+	// The recovery claim is created exclusively, not obtained by renaming owner.
+	// In particular, a Windows rename/replace operation is not a dependable
+	// compare-and-swap for competing recoverers. The on-disk claim is shared by
+	// all Go processes and survives a crash, so incomplete recovery fails closed.
+	dirBefore, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, localFileError(LocalFileIO, path, "inspect lock directory before recovery claim failed", err)
+	}
+	if !dirBefore.IsDir() || localFileInfoIsAlias(dirBefore) {
+		return false, localFileError(LocalFileCompromised, path, "lock directory changed before recovery claim", nil)
+	}
+
 	ownerPath := filepath.Join(path, localFileOwnerName)
 	recoveringPath := filepath.Join(path, localFileOwnerRecoveringName)
-	if err := os.Rename(ownerPath, recoveringPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			after, inspectErr := InspectLocalFileLock(path)
-			if inspectErr != nil {
-				return false, inspectErr
-			}
-			if after.State == LocalFileLockAbsent || after.State == LocalFileLockIncomplete {
-				return false, nil
-			}
-			return false, localFileError(LocalFileCompromised, path, "local lock changed while claiming recovery", err)
-		}
+	claim, err := os.OpenFile(recoveringPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return false, localFileError(LocalFileCompromised, path, "recovery claim already exists", err)
+			// Another recovery has already claimed this incarnation of the lock.
+			return false, nil
 		}
-		return false, localFileError(LocalFileIO, path, "claim local lock recovery failed", err)
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, localFileError(LocalFileIO, path, "exclusively claim local lock recovery failed", err)
+	}
+	if err := claim.Close(); err != nil {
+		// Keep the claim on disk: on an ambiguous close failure only manual
+		// inspection can safely decide whether this recovery progressed.
+		return false, localFileError(LocalFileIO, path, "close recovery claim failed", err)
+	}
+
+	// Re-validate the directory incarnation and the owner *after* acquiring
+	// the claim. Pre-claim inspection alone is not a deletion authorization.
+	dirAfter, err := os.Lstat(path)
+	if err != nil || !os.SameFile(dirBefore, dirAfter) {
+		return false, localFileError(LocalFileCompromised, path, "lock directory identity changed during recovery claim", err)
+	}
+	owner, err := readBoundedLocalFileLockOwner(path, ownerPath)
+	if err != nil {
+		return false, err
+	}
+	if string(owner) != expectedOwner {
+		return false, localFileError(LocalFileCompromised, path, "owner token changed after recovery claim; refusing deletion", nil)
+	}
+	if err := os.Remove(ownerPath); err != nil {
+		return false, localFileError(LocalFileIO, path, "remove recovered owner marker failed", err)
 	}
 	if err := os.Remove(recoveringPath); err != nil {
 		return false, localFileError(LocalFileIO, path, "remove recovered owner claim failed", err)
