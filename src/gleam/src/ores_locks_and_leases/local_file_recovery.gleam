@@ -230,7 +230,7 @@ fn recover_after_recheck(
   case inspect_path(path) {
     Ok(LocalFileLockInspection(Held, Some(owner), _, _))
       if owner == expected_owner
-    -> claim_and_remove_recovered(path)
+    -> claim_and_remove_recovered(path, expected_owner)
     Error(error) -> Error(error)
     _ ->
       Error(local_file.LocalFileLockError(
@@ -243,23 +243,50 @@ fn recover_after_recheck(
 
 fn claim_and_remove_recovered(
   path: String,
+  expected_owner: String,
 ) -> Result(Bool, local_file.LocalFileLockError) {
   let owner_path = path <> "/" <> owner_file
   let recovering_path = path <> "/" <> owner_recovering_file
   case claim_recovery_status(owner_path, recovering_path) {
-    0 -> remove_recovered_claim(path, recovering_path)
+    0 -> remove_recovered_claim(path, owner_path, recovering_path, expected_owner)
     1 -> Ok(False)
-    2 ->
-      Error(local_file.LocalFileLockError(
-        local_file.Compromised,
-        path,
-        "recovery claim already exists; another recovery may own the destructive transition",
-      ))
-    _ -> Error(io_error(path, "claim local lock recovery failed"))
+    2 -> Ok(False)
+    _ -> Error(io_error(path, "exclusively claim local lock recovery failed"))
   }
 }
 
 fn remove_recovered_claim(
+  path: String,
+  owner_path: String,
+  recovering_path: String,
+  expected_owner: String,
+) -> Result(Bool, local_file.LocalFileLockError) {
+  // The claim is on disk and unique. Inspect the owner again before deletion;
+  // inspection of the entire directory would correctly report Incomplete.
+  case inspect_owner(path) {
+    Ok(LocalFileLockInspection(Held, Some(owner), _, _))
+      if owner == expected_owner
+    ->
+      case simplifile.delete_file(at: owner_path) {
+        Error(error) ->
+          Error(io_error(
+            path,
+            "remove recovered owner marker failed: "
+              <> simplifile.describe_error(error),
+          ))
+        Ok(Nil) -> remove_recovered_claim_file(path, recovering_path)
+      }
+    Error(error) -> Error(error)
+    _ ->
+      Error(local_file.LocalFileLockError(
+        local_file.Compromised,
+        path,
+        "owner token changed after recovery claim; refusing deletion",
+      ))
+  }
+}
+
+fn remove_recovered_claim_file(
   path: String,
   recovering_path: String,
 ) -> Result(Bool, local_file.LocalFileLockError) {
