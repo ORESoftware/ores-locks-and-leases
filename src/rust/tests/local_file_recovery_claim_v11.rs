@@ -62,3 +62,28 @@ fn local_file_lock_concurrent_exact_owner_recovery_has_one_winner() {
     assert_eq!(inspection.state, LocalFileLockInspectionState::Absent);
     assert!(!recover_local_file_lock(path.as_path(), owner, true).expect("idempotent absent"));
 }
+
+#[test]
+fn recovery_claim_with_published_owner_is_incomplete_and_not_destructive() {
+    let path = test_path("claimed-and-held");
+    let lock = LocalFileLock::try_acquire(&path, "owner-a")
+        .expect("acquire")
+        .expect("holder");
+    std::mem::forget(lock);
+
+    let claim = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path.join("owner.recovering"))
+        .expect("create recovery claim");
+    drop(claim);
+    let inspection = inspect_local_file_lock(&path).expect("inspect claimed directory");
+    assert_eq!(inspection.state, LocalFileLockInspectionState::Incomplete);
+    assert_eq!(inspection.owner, None);
+    assert!(recover_local_file_lock(&path, "owner-a", true).is_err());
+    assert!(path.join("owner").exists(), "original owner must survive a claim conflict");
+
+    fs::remove_file(path.join("owner.recovering")).expect("cleanup claim");
+    fs::remove_file(path.join("owner")).expect("cleanup owner");
+    fs::remove_dir(path).expect("cleanup rendezvous");
+}
