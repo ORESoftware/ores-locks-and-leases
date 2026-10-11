@@ -23,3 +23,14 @@ Repository invariant: LockPlan ordering, FNV-1a key vectors, lock error kinds, s
 - [ ] Additional browser target proof after compiler exists
 
 This draft intentionally does not modify existing generated sources or turn on a pass-through runtime target.
+
+## Source-current browser/JS/Wasm alignment (audit baseline 2026-10-11)
+
+- Java/GraalVM reference compiler: `ores-truffle-oreslang/oreslang-source.java@a69035665047b4007ef3058cb4bd59aca8a8b8d1` (verified `main` audit snapshot, not a floating compatibility claim).
+- Wasm infrastructure: `oreslang-wasm@0691ddcb5e66d5c54a73ed5da4e26e554098b980`; browser loader: `oreslang-browser@3944cc8b10c4fd688e3bec9f533090454d810a22`.
+- Target admission and test tools: `oreslang-target-profiles@c0975d7b286eeaa4cc7aab3b0745224130d74a8f`, `oreslang-platform-conformance@b6c5a112a509a8d56479cc802b4c6d72e05fbebf`.
+- These are **separate backends/tools**, not proof of complete source-to-JavaScript transpilation or complete Oreslang source-to-Wasm support. The Wasm runtime/loader and native compiler bridge are partial; execute each real compiler backend and browser host before admission. A Rust-Wasm adapter passing does not certify Oreslang-Wasm.
+- Maintain source-language semantics and behavior across Java/GraalVM and the JS/Wasm targets: typed public ABI, consistent event/error outcomes, owned/borrowed value lifetimes, cancellation, scheduler fairness, byte-exact serialization, resource bounds, and explicit host capability grants. Use the same immutable positive/negative fixtures and contract receipts, and label unsupported operations as hard failures.
+- Neither a browser-target profile nor a WIT/JS stub establishes frontend support. Every release must re-verify the then-current pinned compiler SHA and exact compiled guest artifact hash; never infer it from moving `main`.
+
+Browser/client lane: allow deterministic lock-key composition, FNV-1a routing vectors, lease metadata parsing, and fencing-token validation only. Network lock acquisition, Postgres advisory locks, authoritative fencing-token minting, and physical connection/session ownership must remain explicit server-side host ports. Browser JS Numbers must not silently round unsigned 64-bit tokens: use lossless decimal text or BigInt at the boundary.
