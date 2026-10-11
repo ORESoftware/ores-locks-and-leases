@@ -128,3 +128,30 @@ test("absent recovery is idempotent and dirty recovery never recursively deletes
     assert.equal((await inspect_local_file_lock(path)).state, "compromised");
   });
 });
+
+test("owner plus exclusive recovery claim is incomplete and never auto-recovered", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "claimed.lock");
+    assert.ok(await try_acquire_local_file_lock(path, "owner-a"));
+    await writeFile(join(path, "owner.recovering"), "");
+    assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+    await assert.rejects(
+      recover_local_file_lock(path, "owner-a", true),
+      (error) => error instanceof LocalFileLockError && error.kind === "compromised",
+    );
+    assert.equal((await inspect_local_file_lock(path)).state, "incomplete");
+  });
+});
+
+test("parallel recovery admits exactly one destructive winner", async () => {
+  await withTempDir(async (root) => {
+    const path = join(root, "parallel.lock");
+    assert.ok(await try_acquire_local_file_lock(path, "owner-a"));
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 32 }, () => recover_local_file_lock(path, "owner-a", true)),
+    );
+    const wins = outcomes.filter((outcome) => outcome.status === "fulfilled" && outcome.value);
+    assert.equal(wins.length, 1, JSON.stringify(outcomes));
+    assert.equal((await inspect_local_file_lock(path)).state, "absent");
+  });
+});
