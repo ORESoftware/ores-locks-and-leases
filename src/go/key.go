@@ -50,6 +50,7 @@ func NewLockKeyFromComponents(components ...string) (LockKey, error) {
 	}
 	return NewLockKey(encoded.String())
 }
+
 // AdvisoryKey is the bigint a Postgres advisory-lock function receives.
 type AdvisoryKey = int64
 

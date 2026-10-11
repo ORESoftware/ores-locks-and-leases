@@ -30,7 +30,10 @@ fn lock_key_validation_matches_adversarial_corpus() {
         match case["expected"].as_str().expect("expected") {
             "accept" => assert!(result.is_ok(), "{id}: {result:?}"),
             "reject_empty" => {
-                assert!(matches!(result, Err(InvalidLockKey::Empty)), "{id}: {result:?}")
+                assert!(
+                    matches!(result, Err(InvalidLockKey::Empty)),
+                    "{id}: {result:?}"
+                )
             }
             "reject_whitespace_only" | "reject_ambiguous_whitespace" => assert!(
                 matches!(result, Err(InvalidLockKey::SurroundingWhitespace)),
@@ -64,5 +67,8 @@ fn lifecycle_component_encoding_matches_corpus() {
         .iter()
         .map(|value| value.as_str().expect("component"));
     let key = lock_key_from_components(components).expect("composed key");
-    assert_eq!(key.as_str(), case["expected_key"].as_str().expect("expected key"));
+    assert_eq!(
+        key.as_str(),
+        case["expected_key"].as_str().expect("expected key")
+    );
 }

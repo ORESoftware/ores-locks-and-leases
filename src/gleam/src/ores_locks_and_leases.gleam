@@ -87,6 +87,7 @@ pub fn lock_key_from_components(
   })
   |> lock_key
 }
+
 pub fn key_to_string(key: LockKey) -> String {
   let LockKey(s) = key
   s

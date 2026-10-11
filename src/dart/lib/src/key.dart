@@ -54,6 +54,7 @@ final class LockKey {
     }
     return LockKey(encoded.toString());
   }
+
   /// The Postgres `bigint` this key locks. See [advisoryKey].
   BigInt get advisory => advisoryKey(value);
 

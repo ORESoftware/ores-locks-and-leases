@@ -79,6 +79,7 @@ pub fn structured_lock_key_components_are_injective_test() {
   should.be_true(locks.key_to_string(key) != locks.key_to_string(other))
   let assert Error(_) = locks.lock_key_from_components([])
 }
+
 pub fn key_is_non_empty_and_length_bounded_test() {
   let assert Error(_) = locks.lock_key("")
   let assert Error(_) = locks.lock_key("   ")
