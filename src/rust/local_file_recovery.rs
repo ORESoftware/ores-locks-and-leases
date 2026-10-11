@@ -139,8 +139,7 @@ pub fn inspect_local_file_lock(
         }
         Err(error) => return Err(io_error(path, "inspect local lock owner token", error)),
     };
-    if !owner_metadata.is_file()
-        || metadata_is_alias(&owner_metadata) {
+    if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata) {
         return Ok(compromised(
             LocalFileLockInspectionReason::OwnerNotRegularFile,
             "owner token is not an unaliased regular file",
@@ -333,7 +332,8 @@ pub fn recover_local_file_lock(
 
     let owner_metadata = fs::symlink_metadata(&owner_path)
         .map_err(|err| io_error(path, "inspect owner after recovery claim", err))?;
-    if !owner_metadata.is_file() || metadata_is_alias(&owner_metadata)
+    if !owner_metadata.is_file()
+        || metadata_is_alias(&owner_metadata)
         || metadata_has_multiple_links(&owner_metadata)
         || owner_metadata.len() > OWNER_MAX_UTF8_BYTES as u64
     {

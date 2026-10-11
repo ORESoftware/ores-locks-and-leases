@@ -81,7 +81,10 @@ fn recovery_claim_with_published_owner_is_incomplete_and_not_destructive() {
     assert_eq!(inspection.state, LocalFileLockInspectionState::Incomplete);
     assert_eq!(inspection.owner, None);
     assert!(recover_local_file_lock(&path, "owner-a", true).is_err());
-    assert!(path.join("owner").exists(), "original owner must survive a claim conflict");
+    assert!(
+        path.join("owner").exists(),
+        "original owner must survive a claim conflict"
+    );
 
     fs::remove_file(path.join("owner.recovering")).expect("cleanup claim");
     fs::remove_file(path.join("owner")).expect("cleanup owner");

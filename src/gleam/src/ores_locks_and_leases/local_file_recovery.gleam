@@ -248,7 +248,8 @@ fn claim_and_remove_recovered(
   let owner_path = path <> "/" <> owner_file
   let recovering_path = path <> "/" <> owner_recovering_file
   case claim_recovery_status(owner_path, recovering_path) {
-    0 -> remove_recovered_claim(path, owner_path, recovering_path, expected_owner)
+    0 ->
+      remove_recovered_claim(path, owner_path, recovering_path, expected_owner)
     1 -> Ok(False)
     2 -> Ok(False)
     _ -> Error(io_error(path, "exclusively claim local lock recovery failed"))

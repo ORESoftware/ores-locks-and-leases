@@ -54,7 +54,8 @@ pub fn recovery_claim_with_owner_is_incomplete_and_not_destructive_test() {
     Some(local_file_recovery.OwnerMarkerMissing),
     _,
   )) = local_file_recovery.inspect(root, "install.lock")
-  let result = local_file_recovery.recover(root, "install.lock", "owner-a", True)
+  let result =
+    local_file_recovery.recover(root, "install.lock", "owner-a", True)
   let assert Error(_) = result
   let assert Ok(_) = simplifile.read(path <> "/owner")
   clean(root)
