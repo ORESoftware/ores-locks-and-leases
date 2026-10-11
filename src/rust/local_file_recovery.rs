@@ -343,7 +343,7 @@ pub fn recover_local_file_lock(
             "owner metadata changed after recovery claim",
         ));
     }
-    let mut file = File::open(&owner_path)
+    let file = File::open(&owner_path)
         .map_err(|err| io_error(path, "open owner after recovery claim", err))?;
     let opened = file
         .metadata()
